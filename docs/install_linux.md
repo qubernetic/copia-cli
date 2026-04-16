@@ -46,6 +46,20 @@ curl -LO https://github.com/qubernetic/copia-cli/releases/latest/download/copia-
 sudo dnf install -y copia-cli_*_linux_amd64.rpm
 ```
 
+### Snap
+
+```bash
+sudo snap install copia-cli --classic
+```
+
+### AUR (Arch Linux)
+
+```bash
+yay -S copia-cli-bin
+```
+
+Or with any other AUR helper. The package is [`copia-cli-bin`](https://aur.archlinux.org/packages/copia-cli-bin).
+
 ### Precompiled binaries
 
 [Copia CLI releases](https://github.com/qubernetic/copia-cli/releases/latest) contain precompiled binaries for `amd64`, `arm64`, `386`, and `armv6` architectures.
