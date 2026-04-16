@@ -1,19 +1,10 @@
 {
   "name": "Copia CLI",
-  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
-  "features": {
-    "ghcr.io/devcontainers/features/go:1": {
-      "version": "1.26.1",
-      "golangciLintVersion": "latest"
-    },
-    "ghcr.io/devcontainers/features/github-cli:1": {},
-    "ghcr.io/devcontainers/features/node:1": {
-      "version": "lts"
-    }
-  },
-  "mounts": [
-    "source=${localEnv:HOME}/.claude,target=/home/vscode/.claude,type=bind,consistency=cached"
-  ],
+  "dockerComposeFile": ["../docker-compose.yml", "../docker-compose.dev.yaml"],
+  "service": "go",
+  "workspaceFolder": "/app",
+  "postCreateCommand": "git config --global --add safe.directory /app && go mod download",
+  "forwardPorts": [],
   "customizations": {
     "vscode": {
       "extensions": [
@@ -24,9 +15,9 @@
         "go.toolsManagement.autoUpdate": true,
         "go.testOnSave": true,
         "go.lintTool": "golangci-lint",
-        "editor.formatOnSave": true
+        "editor.formatOnSave": true,
+        "security.workspace.trust.startupPrompt": "never"
       }
     }
-  },
-  "postCreateCommand": "npm install -g @anthropic-ai/claude-code && ([ -f go.sum ] && go mod download || true)"
+  }
 }

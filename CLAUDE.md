@@ -10,16 +10,24 @@ Copia CLI is a command-line interface for [Copia](https://copia.io) — the sour
 
 ## Development Environment
 
-Use the devcontainer for a fully configured environment. No local Go installation needed.
+Aurora-DX workstation with Docker Compose + justfile. No local Go installation needed.
 
 ```bash
-# VS Code / Cursor: "Reopen in Container"
+# First-time setup
+cp .envrc.example .envrc && direnv allow .
+just setup
 
-# CLI:
-devcontainer up --workspace-folder .
-devcontainer exec --workspace-folder . make build
-devcontainer exec --workspace-folder . make test
+# Daily workflow
+just dev          # Start the Go container
+just test         # Run tests (inside container)
+just build        # Build binary (inside container)
+just lint         # Run linter (inside container)
+just down         # Stop containers
+
+# VS Code / Cursor: "Reopen in Container" (uses docker-compose.dev.yaml)
 ```
+
+**Claude Code runs on the host** — never inside the devcontainer. Always launch from a host terminal.
 
 ## Architecture
 
@@ -39,7 +47,10 @@ copia-cli/
 │   ├── api/                # Gitea SDK wrapper
 │   └── httpmock/           # HTTP mock for testing
 ├── docs/                   # Developer documentation
-└── Makefile
+├── justfile                # Command runner (replaces Makefile)
+├── Dockerfile              # Go dev image
+├── docker-compose.yml      # Base compose config
+└── docker-compose.dev.yaml # Dev overlay (source mount + caches)
 ```
 
 **Command structure:** `copia-cli <command> <subcommand> [flags]` — mirrors `gh` CLI UX.
