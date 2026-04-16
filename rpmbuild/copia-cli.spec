@@ -1,7 +1,7 @@
 %global goipath github.com/qubernetic/copia-cli
 
 Name:           copia-cli
-Version:        %{version}
+Version:        0.0.0
 Release:        1%{?dist}
 Summary:        CLI for Copia — source control for industrial automation
 
