@@ -76,7 +76,7 @@ copia-cli/
 Phase 1 (MVP): auth, repo list/view/clone, issue CRUD, pr CRUD, label list/create — **DONE**
 Phase 2: release CRUD, repo create/delete/fork, pr review/diff/checkout, issue edit, Homebrew tap — **DONE**
 Phase 3: `copia-cli api` escape hatch, search, orgs, notifications, `-R` flag, completion, Jekyll manual, AGPL license — **DONE**
-Phase 4: winget, OS keyring, aliases, browse, status dashboard, ssh-key, pr checks, changelog, collaborators
+Phase 4: ~~winget~~, ~~COPR~~, ~~AUR~~, ~~Snap~~, OS keyring, aliases, browse, status dashboard, ssh-key, pr checks, changelog, collaborators
 
 **Out of scope:** workflow/run, codespace, copilot, project, cache, GUI
 

@@ -35,7 +35,12 @@
    - Uploads all artifacts to a GitHub Release (draft)
    - Updates the [Homebrew formula](https://github.com/qubernetic/homebrew-tap)
 
-7. Review and publish the draft release on GitHub
+7. Review and publish the draft release on GitHub. Publishing triggers:
+
+   - [WinGet](.github/workflows/winget.yml) — updates `Qubernetic.copia-cli` in winget-pkgs
+   - [COPR](.github/workflows/copr.yml) — builds and publishes RPM to Fedora COPR
+   - [AUR](.github/workflows/aur.yml) — updates `copia-cli-bin` on AUR
+   - [Snap](.github/workflows/snap.yml) — builds and publishes to the Snap Store
 
 8. Back-merge `main` into `develop`:
 
@@ -52,7 +57,7 @@ The release build is powered by [GoReleaser](https://goreleaser.com/). Configura
 To test the release locally without publishing:
 
 ```bash
-$ make snapshot
+$ just snapshot
 ```
 
 ## Pre-releases
