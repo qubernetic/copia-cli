@@ -26,17 +26,39 @@ curl -LO https://github.com/qubernetic/copia-cli/releases/latest/download/copia-
 sudo dpkg -i copia-cli_*_linux_amd64.deb
 ```
 
-### Fedora/RHEL (.rpm)
-
-Download the `.rpm` package from [GitHub Releases](https://github.com/qubernetic/copia-cli/releases/latest):
+### Fedora/RHEL (COPR)
 
 ```bash
-# Download the latest .rpm (amd64)
-curl -LO https://github.com/qubernetic/copia-cli/releases/latest/download/copia-cli_*_linux_amd64.rpm
+sudo dnf copr enable qubernetic/copia-cli
+sudo dnf install copia-cli
+```
 
-# Install
+To upgrade:
+
+```bash
+sudo dnf upgrade copia-cli
+```
+
+Alternatively, download the `.rpm` package directly from [GitHub Releases](https://github.com/qubernetic/copia-cli/releases/latest):
+
+```bash
+curl -LO https://github.com/qubernetic/copia-cli/releases/latest/download/copia-cli_*_linux_amd64.rpm
 sudo dnf install -y copia-cli_*_linux_amd64.rpm
 ```
+
+### Snap
+
+```bash
+sudo snap install copia-cli --classic
+```
+
+### AUR (Arch Linux)
+
+```bash
+yay -S copia-cli-bin
+```
+
+Or with any other AUR helper. The package is [`copia-cli-bin`](https://aur.archlinux.org/packages/copia-cli-bin).
 
 ### Precompiled binaries
 

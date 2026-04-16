@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-04-16
+
+### Added
+
+- WinGet automated publishing on release (#18, #190)
+- COPR package for Fedora/RHEL — `dnf copr enable qubernetic/copia-cli` (#164, #193)
+- AUR package for Arch Linux — `yay -S copia-cli-bin` (#161, #194)
+- Snap package for Ubuntu/Linux — `snap install copia-cli --classic` (#162, #195)
+- Scheduled weekly integration test with auto issue on failure (#134, #192)
+- Tag protection ruleset for `v*` release tags (#149)
+
+### Changed
+
+- Dev environment migrated to Aurora-DX: Docker Compose + justfile, Makefile removed (#184, #185)
+- Bump-go workflow now also updates Dockerfile (#188, #189)
+- Installation docs updated with all new package managers (#191, #198)
+- Maintainer email updated to info@qubernetic.com (#196, #197)
+
+### Fixed
+
+- AUR workflow: pkgbuild input expects file path, not inline content (#196)
+- COPR workflow: heredoc indentation broke INI parser (#196)
+- WinGet workflow: use ubuntu-slim per official docs (#196)
+- Bump-go workflow: add setup-go step for go mod tidy (#196)
+
+### Dependencies
+
+- Go 1.26.1 → 1.26.2 (#186, #187)
+- github.com/spf13/pflag 1.0.9 → 1.0.10 (#179)
+- actions/github-script 8 → 9 (#183)
+- actions/upload-pages-artifact 4 → 5 (#182)
+- codecov/codecov-action 5 → 6 (#180)
+
+---
+
 ## [1.0.0] - 2026-04-03
 
 ### Highlights

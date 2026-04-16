@@ -2,6 +2,12 @@
 
 ## Recommended _(Official)_
 
+### WinGet
+
+```pwsh
+winget install Qubernetic.copia-cli
+```
+
 ### Precompiled binaries
 
 [Copia CLI releases](https://github.com/qubernetic/copia-cli/releases/latest) contain precompiled `.zip` archives for `amd64`, `arm64`, and `386` architectures.
@@ -12,17 +18,6 @@
 
 > [!NOTE]
 > When using Windows Terminal, you will need to **open a new window** for PATH changes to take effect.
-
-## Community _(Unofficial)_
-
-### Scoop
-
-```pwsh
-scoop install copia-cli
-```
-
-> [!NOTE]
-> Scoop support is community-maintained and may lag behind official releases.
 
 ## Building from source
 

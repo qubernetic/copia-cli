@@ -17,6 +17,10 @@ jobs:
         with:
           ref: develop
 
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+
       - name: Check latest Go version
         id: check
         run: |
@@ -30,11 +34,12 @@ jobs:
             echo "needs_update=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Update go.mod
+      - name: Update Go version
         if: steps.check.outputs.needs_update == 'true'
         run: |
           go mod edit -go=${{ steps.check.outputs.latest }}
           go mod tidy
+          sed -i "s|^FROM golang:.*-alpine|FROM golang:${{ steps.check.outputs.latest }}-alpine|" Dockerfile
 
       - name: Create Pull Request
         if: steps.check.outputs.needs_update == 'true'
@@ -44,8 +49,9 @@ jobs:
           commit-message: "chore(deps): bump Go from ${{ steps.check.outputs.current }} to ${{ steps.check.outputs.latest }}"
           title: "chore(deps): bump Go from ${{ steps.check.outputs.current }} to ${{ steps.check.outputs.latest }}"
           body: |
-            Auto-generated PR to update Go version in go.mod.
+            Auto-generated PR to update Go version.
 
             - Current: `${{ steps.check.outputs.current }}`
             - Latest: `${{ steps.check.outputs.latest }}`
+            - Files: `go.mod`, `Dockerfile`
           base: develop

@@ -1,0 +1,14 @@
+services:
+  go:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - .:/app
+      - go-mod-cache:/go/pkg/mod
+      - go-build-cache:/root/.cache/go-build
+    command: ["sleep", "infinity"]
+
+volumes:
+  go-mod-cache:
+  go-build-cache:

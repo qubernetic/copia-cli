@@ -10,16 +10,24 @@ Copia CLI is a command-line interface for [Copia](https://copia.io) — the sour
 
 ## Development Environment
 
-Use the devcontainer for a fully configured environment. No local Go installation needed.
+Aurora-DX workstation with Docker Compose + justfile. No local Go installation needed.
 
 ```bash
-# VS Code / Cursor: "Reopen in Container"
+# First-time setup
+cp .envrc.example .envrc && direnv allow .
+just setup
 
-# CLI:
-devcontainer up --workspace-folder .
-devcontainer exec --workspace-folder . make build
-devcontainer exec --workspace-folder . make test
+# Daily workflow
+just dev          # Start the Go container
+just test         # Run tests (inside container)
+just build        # Build binary (inside container)
+just lint         # Run linter (inside container)
+just down         # Stop containers
+
+# VS Code / Cursor: "Reopen in Container" (uses docker-compose.dev.yaml)
 ```
+
+**Claude Code runs on the host** — never inside the devcontainer. Always launch from a host terminal.
 
 ## Architecture
 
@@ -39,7 +47,10 @@ copia-cli/
 │   ├── api/                # Gitea SDK wrapper
 │   └── httpmock/           # HTTP mock for testing
 ├── docs/                   # Developer documentation
-└── Makefile
+├── justfile                # Command runner (replaces Makefile)
+├── Dockerfile              # Go dev image
+├── docker-compose.yml      # Base compose config
+└── docker-compose.dev.yaml # Dev overlay (source mount + caches)
 ```
 
 **Command structure:** `copia-cli <command> <subcommand> [flags]` — mirrors `gh` CLI UX.
@@ -65,7 +76,7 @@ copia-cli/
 Phase 1 (MVP): auth, repo list/view/clone, issue CRUD, pr CRUD, label list/create — **DONE**
 Phase 2: release CRUD, repo create/delete/fork, pr review/diff/checkout, issue edit, Homebrew tap — **DONE**
 Phase 3: `copia-cli api` escape hatch, search, orgs, notifications, `-R` flag, completion, Jekyll manual, AGPL license — **DONE**
-Phase 4: winget, OS keyring, aliases, browse, status dashboard, ssh-key, pr checks, changelog, collaborators
+Phase 4: ~~winget~~, ~~COPR~~, ~~AUR~~, ~~Snap~~, OS keyring, aliases, browse, status dashboard, ssh-key, pr checks, changelog, collaborators
 
 **Out of scope:** workflow/run, codespace, copilot, project, cache, GUI
 

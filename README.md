@@ -33,12 +33,15 @@ If anything feels off, or if you feel that some functionality is missing, please
 ### [Linux](docs/install_linux.md)
 
 - [Homebrew](docs/install_linux.md#homebrew)
+- [Fedora/RHEL (COPR)](docs/install_linux.md#fedorarhel-copr)
 - [Debian/Ubuntu (.deb)](docs/install_linux.md#debianubuntu-deb)
-- [Fedora/RHEL (.rpm)](docs/install_linux.md#fedorarhel-rpm)
+- [Snap](docs/install_linux.md#snap)
+- [AUR (Arch Linux)](docs/install_linux.md#aur-arch-linux)
 - [Precompiled binaries](docs/install_linux.md#precompiled-binaries) on [releases page][]
 
 ### [Windows](docs/install_windows.md)
 
+- [WinGet](docs/install_windows.md#winget)
 - [Precompiled binaries](docs/install_windows.md#precompiled-binaries) on [releases page][]
 
 ### Build from source
@@ -73,7 +76,7 @@ Shell completion is available for Bash, Zsh, Fish, and PowerShell. See `copia-cl
 - **Phase 1 (MVP):** auth, repo list/view/clone, issue CRUD, pr CRUD, label list/create — **Done**
 - **Phase 2 (Workflow):** release CRUD, repo create/delete/fork, pr review/diff/checkout, issue edit, Homebrew tap — **Done**
 - **Phase 3 (Power Features):** `api` escape hatch, search, orgs, notifications, `-R`/`--repo` flag, completion, Jekyll manual, AGPL license — **Done**
-- **Phase 4 (Nice to Have):** winget, OS keyring, aliases, browse, status dashboard, ssh-key, pr checks, scheduled integration tests
+- **Phase 4 (Nice to Have):** ~~winget~~, ~~COPR~~, ~~AUR~~, ~~Snap~~, OS keyring, aliases, browse, status dashboard, ssh-key, pr checks, scheduled integration tests
 
 ## License
 

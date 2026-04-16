@@ -4,36 +4,28 @@ Thank you for your interest in improving Copia CLI.
 
 ## Prerequisites
 
-- **Docker** — required for devcontainer
-- **VS Code / Cursor** — or the [devcontainer CLI](https://github.com/devcontainers/cli)
+- **Docker** (or Podman) — required for the containerized dev environment
+- **[just](https://just.systems/)** — command runner (`brew install just`)
+- **[direnv](https://direnv.net/)** — per-directory env vars (`brew install direnv`)
+- **VS Code / Cursor** — optional, supports "Reopen in Container"
 - **GitHub CLI (`gh`)** — recommended for issue/PR management
 
 ## Quick Start
 
-The devcontainer provides a fully configured environment with Go 1.26+, gh CLI, and golangci-lint pre-installed. No local Go installation needed.
-
-**VS Code / Cursor:**
-
-1. Clone the repo and open it in your editor
-2. "Reopen in Container" when prompted
-3. All tools are pre-installed — start coding
-
-**CLI (without VS Code):**
+All Go tooling runs inside a Docker container. No local Go installation needed.
 
 ```bash
 git clone https://github.com/qubernetic/copia-cli.git
 cd copia-cli
 
-# Build and start the devcontainer
-npx @devcontainers/cli up --workspace-folder .
-
-# Run commands inside the container
-npx @devcontainers/cli exec --workspace-folder . make build
-npx @devcontainers/cli exec --workspace-folder . make test
-npx @devcontainers/cli exec --workspace-folder . ./bin/copia-cli --version
+cp .envrc.example .envrc && direnv allow .
+just setup        # Build image + download Go deps
+just dev          # Start the dev container
+just test         # Run tests
+just build        # Build binary
 ```
 
-> **Note:** `npx` runs the devcontainer CLI without global installation. Install globally with `npm install -g @devcontainers/cli` to use `devcontainer` directly.
+**VS Code / Cursor:** "Reopen in Container" uses the same Docker Compose stack.
 
 ## Development Workflow
 
@@ -48,7 +40,7 @@ This repo follows a strict Gitflow workflow. Every contribution goes through the
    git checkout -b <type>/<issue>-<slug>
 4. Make atomic commits using Conventional Commits format
 5. Run tests:
-   make test
+   just test
 6. Push and open a PR targeting develop:
    git push -u origin <type>/<issue>-<slug>
    gh pr create --base develop
@@ -88,16 +80,14 @@ Use imperative mood, lowercase after colon, no period.
 
 Before submitting a PR:
 
-1. **Unit tests:** `make test`
-2. **Build:** `make build`
-3. **Lint:** `golangci-lint run ./...` (if installed)
+1. **Unit tests:** `just test`
+2. **Build:** `just build`
+3. **Lint:** `just lint`
 
-Integration tests require a Copia API token and run separately:
+Integration tests require a Copia API token (set in `.envrc`) and run separately:
 
 ```bash
-export COPIA_TEST_TOKEN=your-token
-export COPIA_TEST_HOST=app.copia.io
-make integration
+just integration
 ```
 
 ## Project Structure

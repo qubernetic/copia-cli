@@ -79,9 +79,12 @@ copia-cli/
 │   └── httpmock/registry.go       # HTTP transport mock for testing
 ├── test/integration/              # Live API integration tests
 ├── .github/workflows/             # CI, CodeQL, release, govulncheck, bump-go
-├── .devcontainer/                 # Go 1.26.1, gh CLI, Claude Code
+├── .devcontainer/                 # Docker Compose-based dev environment
 ├── .goreleaser.yml                # Cross-platform release config
-└── Makefile                       # build, test, integration, clean
+├── justfile                       # Command runner (build, test, lint, dev)
+├── Dockerfile                     # Go 1.26.2 dev image
+├── docker-compose.yml             # Base compose config
+└── docker-compose.dev.yaml        # Dev overlay (source mount + caches)
 ```
 
 ## Module Guide
