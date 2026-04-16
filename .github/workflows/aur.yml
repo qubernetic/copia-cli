@@ -23,12 +23,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Generate PKGBUILD
+      - name: Generate PKGBUILD and .SRCINFO
         run: |
           VERSION=${{ steps.version.outputs.version }}
           SHA_X86=${{ steps.checksums.outputs.sha256_x86_64 }}
           SHA_ARM=${{ steps.checksums.outputs.sha256_aarch64 }}
-          cat > PKGBUILD <<PKGEOF
+
+          cat > PKGBUILD <<EOF
           # Maintainer: Qubernetic <info@qubernetic.com>
           pkgname=copia-cli-bin
           pkgver=${VERSION}
@@ -49,15 +50,42 @@ jobs:
               install -Dm755 copia-cli "\${pkgdir}/usr/bin/copia-cli"
               install -Dm644 LICENSE "\${pkgdir}/usr/share/licenses/\${pkgname}/LICENSE"
           }
-          PKGEOF
+          EOF
           sed -i 's/^          //' PKGBUILD
 
+          cat > .SRCINFO <<EOF
+          pkgbase = copia-cli-bin
+          	pkgdesc = CLI for Copia — source control for industrial automation
+          	pkgver = ${VERSION}
+          	pkgrel = 1
+          	url = https://github.com/qubernetic/copia-cli
+          	arch = x86_64
+          	arch = aarch64
+          	license = AGPL-3.0-only
+          	provides = copia-cli
+          	conflicts = copia-cli
+          	source_x86_64 = https://github.com/qubernetic/copia-cli/releases/download/v${VERSION}/copia-cli_${VERSION}_linux_amd64.tar.gz
+          	sha256sums_x86_64 = ${SHA_X86}
+          	source_aarch64 = https://github.com/qubernetic/copia-cli/releases/download/v${VERSION}/copia-cli_${VERSION}_linux_arm64.tar.gz
+          	sha256sums_aarch64 = ${SHA_ARM}
+
+          pkgname = copia-cli-bin
+          EOF
+          sed -i 's/^          //' .SRCINFO
+
       - name: Publish to AUR
-        uses: KSXGitHub/github-actions-deploy-aur@v3
-        with:
-          pkgname: copia-cli-bin
-          pkgbuild: ./PKGBUILD
-          commit_username: qubernetic
-          commit_email: info@qubernetic.com
-          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-          commit_message: "Update to ${{ steps.version.outputs.version }}"
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.AUR_SSH_PRIVATE_KEY }}" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+          ssh-keyscan -t ed25519 aur.archlinux.org >> ~/.ssh/known_hosts
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/aur"
+
+          git clone ssh://aur@aur.archlinux.org/copia-cli-bin.git aur-repo
+          cp PKGBUILD .SRCINFO aur-repo/
+          cd aur-repo
+          git config user.name "qubernetic"
+          git config user.email "info@qubernetic.com"
+          git add PKGBUILD .SRCINFO
+          git commit -m "Update to ${{ steps.version.outputs.version }}"
+          git push

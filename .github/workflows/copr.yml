@@ -30,12 +30,15 @@ jobs:
       - name: Build SRPM
         run: |
           VERSION=${{ steps.version.outputs.version }}
-          curl -sL "https://github.com/${{ github.repository }}/archive/v${VERSION}/${GITHUB_REPOSITORY##*/}-${VERSION}.tar.gz" \
-            -o rpmbuild/copia-cli-${VERSION}.tar.gz
+          sed -i "s/^Version:.*$/Version:        ${VERSION}/" rpmbuild/copia-cli.spec
+          gh release download "v${VERSION}" --pattern "copia-cli_${VERSION}_linux_amd64.tar.gz" --output rpmbuild/copia-cli_${VERSION}_linux_amd64.tar.gz
+          gh release download "v${VERSION}" --pattern "copia-cli_${VERSION}_linux_arm64.tar.gz" --output rpmbuild/copia-cli_${VERSION}_linux_arm64.tar.gz
           rpmbuild -bs rpmbuild/copia-cli.spec \
-            --define "version ${VERSION}" \
             --define "_sourcedir $(pwd)/rpmbuild" \
-            --define "_srcrpmdir $(pwd)/rpmbuild"
+            --define "_srcrpmdir $(pwd)/rpmbuild" \
+            --target x86_64
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Submit to COPR
         run: |
