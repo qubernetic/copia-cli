@@ -21,7 +21,7 @@ parts:
     source: .
     source-type: local
     build-snaps:
-      - go/1.26/stable
+      - go/latest/stable
     go-buildtags: []
     go-generate: []
     override-build: |
