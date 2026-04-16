@@ -2,6 +2,12 @@
 
 ## Recommended _(Official)_
 
+### WinGet
+
+```pwsh
+winget install Qubernetic.copia-cli
+```
+
 ### Precompiled binaries
 
 [Copia CLI releases](https://github.com/qubernetic/copia-cli/releases/latest) contain precompiled `.zip` archives for `amd64`, `arm64`, and `386` architectures.

@@ -39,6 +39,7 @@ If anything feels off, or if you feel that some functionality is missing, please
 
 ### [Windows](docs/install_windows.md)
 
+- [WinGet](docs/install_windows.md#winget)
 - [Precompiled binaries](docs/install_windows.md#precompiled-binaries) on [releases page][]
 
 ### Build from source
