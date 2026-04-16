@@ -77,7 +77,7 @@ nfpms:
     package_name: copia-cli
     vendor: Qubernetic
     homepage: "https://github.com/qubernetic/copia-cli"
-    maintainer: "Qubernetic <hello@qubernetic.io>"
+    maintainer: "Qubernetic <info@qubernetic.com>"
     description: "CLI for Copia — source control for industrial automation"
     license: AGPL-3.0
     formats:
