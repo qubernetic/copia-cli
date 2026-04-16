@@ -19,13 +19,9 @@ jobs:
       - name: Configure copr-cli
         run: |
           mkdir -p ~/.config
-          cat > ~/.config/copr <<EOF
-          [copr-cli]
-          login = ${{ secrets.COPR_LOGIN }}
-          username = ${{ secrets.COPR_USERNAME }}
-          token = ${{ secrets.COPR_TOKEN }}
-          copr_url = https://copr.fedorainfracloud.org
-          EOF
+          printf '[copr-cli]\nlogin = %s\nusername = %s\ntoken = %s\ncopr_url = https://copr.fedorainfracloud.org\n' \
+            "${{ secrets.COPR_LOGIN }}" "${{ secrets.COPR_USERNAME }}" "${{ secrets.COPR_TOKEN }}" \
+            > ~/.config/copr
 
       - name: Extract version
         id: version

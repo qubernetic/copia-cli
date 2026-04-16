@@ -17,6 +17,10 @@ jobs:
         with:
           ref: develop
 
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+
       - name: Check latest Go version
         id: check
         run: |
