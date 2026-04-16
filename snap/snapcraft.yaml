@@ -1,0 +1,32 @@
+name: copia-cli
+version: git
+summary: CLI for Copia — source control for industrial automation
+description: |
+  copia-cli brings Copia repositories, issues, pull requests, and other
+  concepts to the terminal next to where you are already working with
+  git and your code.
+
+base: core24
+grade: stable
+confinement: classic
+license: AGPL-3.0
+
+platforms:
+  amd64:
+  arm64:
+
+parts:
+  copia-cli:
+    plugin: go
+    source: .
+    source-type: local
+    build-snaps:
+      - go/1.26/stable
+    go-buildtags: []
+    go-generate: []
+    override-build: |
+      go build -ldflags "-s -w -X github.com/qubernetic/copia-cli/internal/build.Version=$(git describe --tags --always) -X github.com/qubernetic/copia-cli/internal/build.Date=$(date -u +%Y-%m-%d)" -o $CRAFT_PART_INSTALL/bin/copia-cli ./cmd/copia-cli
+
+apps:
+  copia-cli:
+    command: bin/copia-cli
