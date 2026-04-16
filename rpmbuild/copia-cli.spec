@@ -1,4 +1,5 @@
 %global goipath github.com/qubernetic/copia-cli
+%global debug_package %{nil}
 
 Name:           copia-cli
 Version:        0.0.0
