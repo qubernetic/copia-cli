@@ -1,0 +1,46 @@
+name: Publish to COPR
+
+on:
+  release:
+    types: [released]
+
+jobs:
+  copr:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install copr-cli
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-pip rpm
+          pip3 install copr-cli
+
+      - name: Configure copr-cli
+        run: |
+          mkdir -p ~/.config
+          cat > ~/.config/copr <<EOF
+          [copr-cli]
+          login = ${{ secrets.COPR_LOGIN }}
+          username = ${{ secrets.COPR_USERNAME }}
+          token = ${{ secrets.COPR_TOKEN }}
+          copr_url = https://copr.fedorainfracloud.org
+          EOF
+
+      - name: Extract version
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build SRPM
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          curl -sL "https://github.com/${{ github.repository }}/archive/v${VERSION}/${GITHUB_REPOSITORY##*/}-${VERSION}.tar.gz" \
+            -o rpmbuild/copia-cli-${VERSION}.tar.gz
+          rpmbuild -bs rpmbuild/copia-cli.spec \
+            --define "version ${VERSION}" \
+            --define "_sourcedir $(pwd)/rpmbuild" \
+            --define "_srcrpmdir $(pwd)/rpmbuild"
+
+      - name: Submit to COPR
+        run: |
+          copr-cli build copia-cli rpmbuild/copia-cli-*.src.rpm
