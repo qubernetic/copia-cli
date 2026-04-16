@@ -49,8 +49,11 @@ sudo dnf install -y copia-cli_*_linux_amd64.rpm
 ### Snap
 
 ```bash
-sudo snap install copia-cli --classic
+sudo snap install copia-cli
 ```
+
+> [!NOTE]
+> The Snap uses strict confinement — it can only access files in your home directory. If you work with git repositories outside `$HOME`, use a different installation method.
 
 ### AUR (Arch Linux)
 

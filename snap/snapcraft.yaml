@@ -8,7 +8,7 @@ description: |
 
 base: core24
 grade: stable
-confinement: classic
+confinement: strict
 license: AGPL-3.0
 
 platforms:
@@ -29,10 +29,9 @@ parts:
     override-build: |
       go build -ldflags "-s -w -X github.com/qubernetic/copia-cli/internal/build.Version=$(git describe --tags --always) -X github.com/qubernetic/copia-cli/internal/build.Date=$(date -u +%Y-%m-%d)" -o $CRAFT_PART_INSTALL/bin/copia-cli ./cmd/copia-cli
 
-lint:
-  ignore:
-    - classic
-
 apps:
   copia-cli:
     command: bin/copia-cli
+    plugs:
+      - network
+      - home
