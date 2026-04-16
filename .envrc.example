@@ -1,0 +1,5 @@
+export COMPOSE_PROJECT_NAME=copia-cli
+
+# Copia API credentials (for integration tests)
+# export COPIA_TOKEN=your-token-here
+# export COPIA_HOST=https://app.copia.io
