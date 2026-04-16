@@ -24,8 +24,14 @@ parts:
       - go/latest/stable
     go-buildtags: []
     go-generate: []
+    build-environment:
+      - CGO_ENABLED: "0"
     override-build: |
       go build -ldflags "-s -w -X github.com/qubernetic/copia-cli/internal/build.Version=$(git describe --tags --always) -X github.com/qubernetic/copia-cli/internal/build.Date=$(date -u +%Y-%m-%d)" -o $CRAFT_PART_INSTALL/bin/copia-cli ./cmd/copia-cli
+
+lint:
+  ignore:
+    - classic
 
 apps:
   copia-cli:
