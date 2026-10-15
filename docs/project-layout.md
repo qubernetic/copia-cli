@@ -62,6 +62,7 @@ copia-cli/
 ├── internal/
 │   ├── build/build.go             # Version/Date injection (ldflags)
 │   ├── config/config.go           # YAML config (~/.config/copia/config.yml)
+│   ├── docs/markdown.go           # Markdown manual generation (Jekyll)
 │   └── copiacmd/root.go           # Root command wiring, Main()
 ├── pkg/
 │   ├── api/client.go              # Gitea SDK wrapper
@@ -104,6 +105,12 @@ copia-cli/
 **Entry point:** `config.go`
 **Exports:** `Config`, `HostConfig`, `Load()`, `Save()`, `DefaultPath()`, `DefaultHost()`
 **Pattern:** XDG Base Dir, 0600 permissions, graceful empty-config on missing file
+
+### `internal/docs/`
+**Purpose:** Jekyll-compatible markdown generation for the Cobra command tree
+**Entry point:** `markdown.go`
+**Exports:** `GenMarkdownTreeCustom()`
+**Pattern:** Adapted from `github.com/cli/cli/v2/internal/docs`, driven by `script/gen-docs.go`
 
 ### `internal/copiacmd/`
 **Purpose:** Root command construction and `Main()` entrypoint
@@ -191,7 +198,6 @@ sequenceDiagram
 - **Auth commands use raw HTTP** — not the Gitea SDK, because `NewClient` tries to connect on init
 - **`f.BaseRepo` can be nil** — commands that don't need repo context (auth, repo create) must check before calling
 - **Gitea returns 403 (not 401) for invalid tokens** — integration tests use `Contains([]int{401, 403})`
-- **`splitOwnerRepo` duplicated** — exists in `repo/view`, `repo/delete`, `repo/fork` independently
 - **PR checkout doesn't use auth** — pure git shell-out, relies on git credential config
 
 ## Navigation Guide
