@@ -7,6 +7,7 @@ User documentation for `copia-cli` is available at
 
 ## Developer docs
 
+- [CI Credentials](ci.md) - GitHub App used by the bump-go workflow
 - [API Reference](api-reference.md) — Gitea API endpoint mapping
 - [Authentication](authentication.md) — Auth methods and config
 - [CLI Patterns](cli-patterns.md) — Command implementation patterns

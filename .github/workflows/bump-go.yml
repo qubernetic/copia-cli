@@ -6,18 +6,17 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
   bump-go:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: develop
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: stable
 
@@ -41,10 +40,25 @@ jobs:
           go mod tidy
           sed -i "s|^FROM golang:.*-alpine|FROM golang:${{ steps.check.outputs.latest }}-alpine|" Dockerfile
 
+      # A PR opened with GITHUB_TOKEN triggers no workflows; the App token
+      # makes ci.yml run on it. Setup: docs/ci.md.
+      - name: Create App token
+        id: app-token
+        if: steps.check.outputs.needs_update == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ secrets.BUMP_GO_APP_ID }}
+          private-key: ${{ secrets.BUMP_GO_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+
       - name: Create Pull Request
         if: steps.check.outputs.needs_update == 'true'
-        uses: peter-evans/create-pull-request@v8
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
+          token: ${{ steps.app-token.outputs.token }}
           branch: chore/bump-go-${{ steps.check.outputs.latest }}
           commit-message: "chore(deps): bump Go from ${{ steps.check.outputs.current }} to ${{ steps.check.outputs.latest }}"
           title: "chore(deps): bump Go from ${{ steps.check.outputs.current }} to ${{ steps.check.outputs.latest }}"
