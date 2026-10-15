@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - All workflows except bump-go read the Go version from `go.mod` instead of a hard-coded `1.26` (#228)
-- The unit-test HTTP mock rejects requests that send a token as `?token=` or `?access_token=`; a new integration test checks that Copia returns 401 for them. The docs now state that header auth is the only supported method on Copia since 2026-05-01 (#235)
+- The unit-test HTTP mock rejects requests that send a token as `?token=` or `?access_token=`; a new integration test checks that Copia refuses them with 403. The docs now state that header auth is the only supported method on Copia since 2026-05-01 (#235)
 
 ### Fixed
 

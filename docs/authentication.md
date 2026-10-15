@@ -23,7 +23,7 @@ curl -H "Authorization: token <your-token>" \
   https://app.copia.io/api/v1/user
 ```
 
-The `Authorization: token <your-token>` header is the only supported way to send a token on Copia since 2026-05-01. Query parameter tokens (`?token=` and `?access_token=`) are rejected with `401 Unauthorized`. copia-cli only uses the header.
+The `Authorization: token <your-token>` header is the only supported way to send a token on Copia since 2026-05-01. Query parameter tokens (`?token=` and `?access_token=`) are ignored, so the call is anonymous and Copia returns `403 Forbidden`. copia-cli only uses the header.
 
 ### Token Storage
 
