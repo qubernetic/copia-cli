@@ -92,3 +92,49 @@ func TestCreateRun_Labels_MixesRepoAndOrgLabels(t *testing.T) {
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"title":"Fix sensor mapping","labels":[1,90]}`, posted)
 }
+
+func TestCreateRun_Labels_RepoLabelWinsNameClash(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	reg.Register(httpmock.REST("GET", "/api/v1/repos/my-org/my-repo/labels"), httpmock.StringResponse(http.StatusOK, `[{"id":1,"name":"bug"}]`))
+	reg.Register(httpmock.REST("GET", "/api/v1/orgs/my-org/labels"), httpmock.StringResponse(http.StatusOK, `[{"id":90,"name":"bug"}]`))
+	var posted string
+	reg.Register(
+		httpmock.REST("POST", "/api/v1/repos/my-org/my-repo/issues"),
+		recordBody(&posted, httpmock.StringResponse(http.StatusCreated, createdIssue)),
+	)
+
+	err := CreateRun(labelOpts(reg, "bug"))
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"title":"Fix sensor mapping","labels":[1]}`, posted)
+}
+
+func TestCreateRun_Labels_UserOwnedRepoSkipsOrgLabels(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	reg.Register(httpmock.REST("GET", "/api/v1/repos/my-org/my-repo/labels"), httpmock.StringResponse(http.StatusOK, `[{"id":1,"name":"bug"}]`))
+	reg.Register(httpmock.REST("GET", "/api/v1/orgs/my-org/labels"), httpmock.StringResponse(http.StatusNotFound, `{"message":"GetOrgByName"}`))
+	var posted string
+	reg.Register(
+		httpmock.REST("POST", "/api/v1/repos/my-org/my-repo/issues"),
+		recordBody(&posted, httpmock.StringResponse(http.StatusCreated, createdIssue)),
+	)
+
+	err := CreateRun(labelOpts(reg, "bug"))
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"title":"Fix sensor mapping","labels":[1]}`, posted)
+}
+
+func TestCreateRun_Labels_UnknownLabel(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	reg.Register(httpmock.REST("GET", "/api/v1/repos/my-org/my-repo/labels"), httpmock.StringResponse(http.StatusOK, `[{"id":1,"name":"bug"}]`))
+	reg.Register(httpmock.REST("GET", "/api/v1/orgs/my-org/labels"), httpmock.StringResponse(http.StatusOK, `[{"id":90,"name":"priority/high"}]`))
+
+	err := CreateRun(labelOpts(reg, "bug", "x"))
+	require.EqualError(t, err, `label "x" not found in repository or organization`)
+	assert.Len(t, reg.Requests, 2, "no issue is created")
+}
