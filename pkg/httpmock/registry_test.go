@@ -90,3 +90,35 @@ func TestRegistry_MethodMismatch(t *testing.T) {
 	_, err := reg.RoundTrip(req)
 	assert.Error(t, err)
 }
+
+func TestRegistry_QueryParamToken_ReturnsError(t *testing.T) {
+	for _, param := range []string{"token", "access_token"} {
+		t.Run(param, func(t *testing.T) {
+			reg := &Registry{}
+			reg.Register(
+				REST("GET", "/api/v1/user"),
+				StringResponse(http.StatusOK, `{}`),
+			)
+
+			req, _ := http.NewRequest("GET", "https://app.copia.io/api/v1/user?"+param+"=x", nil)
+			_, err := reg.RoundTrip(req)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "query parameter")
+			assert.Contains(t, err.Error(), param)
+		})
+	}
+}
+
+func TestRegistry_HeaderToken_Served(t *testing.T) {
+	reg := &Registry{}
+	reg.Register(
+		REST("GET", "/api/v1/user"),
+		StringResponse(http.StatusOK, `{"login":"john"}`),
+	)
+
+	req, _ := http.NewRequest("GET", "https://app.copia.io/api/v1/user?page=1&limit=50", nil)
+	req.Header.Set("Authorization", "token x")
+	resp, err := reg.RoundTrip(req)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}

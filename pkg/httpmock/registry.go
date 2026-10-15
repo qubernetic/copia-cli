@@ -24,6 +24,9 @@ type stub struct {
 	called  bool
 }
 
+// queryTokenParams are the query parameters Copia no longer accepts for auth.
+var queryTokenParams = []string{"token", "access_token"}
+
 // Registry is an http.RoundTripper that returns stubbed responses.
 type Registry struct {
 	mu    sync.Mutex
@@ -39,6 +42,14 @@ func (r *Registry) Register(m Matcher, resp Responder) {
 
 // RoundTrip implements http.RoundTripper.
 func (r *Registry) RoundTrip(req *http.Request) (*http.Response, error) {
+	// Copia only accepts the Authorization header since 2026-05-01.
+	query := req.URL.Query()
+	for _, param := range queryTokenParams {
+		if query.Has(param) {
+			return nil, fmt.Errorf("httpmock: %s %s sends a token as query parameter %q; use the Authorization header", req.Method, req.URL.Path, param)
+		}
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
