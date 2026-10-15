@@ -3,7 +3,6 @@ package list
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"text/tabwriter"
 
@@ -87,6 +86,12 @@ Use --limit to control how many pull requests are returned (default 30).`,
 	return cmd
 }
 
+func decodePRs(body []byte) ([]prEntry, error) {
+	var prs []prEntry
+	err := json.Unmarshal(body, &prs)
+	return prs, err
+}
+
 func ListRun(opts *ListOptions) error {
 	if err := cmdutil.ValidateLimit(opts.Limit); err != nil {
 		return err
@@ -98,32 +103,11 @@ func ListRun(opts *ListOptions) error {
 		return fmt.Errorf("invalid state %q: valid values are {open|closed|merged|all}", opts.State)
 	}
 
-	url := fmt.Sprintf("https://%s/api/v1/repos/%s/%s/pulls?state=%s&limit=%d",
-		opts.Host, opts.Owner, opts.Repo, opts.State, opts.Limit)
+	u := fmt.Sprintf("https://%s/api/v1/repos/%s/%s/pulls?state=%s",
+		opts.Host, opts.Owner, opts.Repo, opts.State)
 
-	req, err := http.NewRequest("GET", url, nil)
+	prs, err := cmdutil.FetchPages(opts.HTTPClient, u, opts.Token, opts.Limit, decodePRs)
 	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "token "+opts.Token)
-
-	resp, err := opts.HTTPClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("connecting to %s: %w", opts.Host, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("API error (HTTP %d)", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-
-	var prs []prEntry
-	if err := json.Unmarshal(body, &prs); err != nil {
 		return err
 	}
 
