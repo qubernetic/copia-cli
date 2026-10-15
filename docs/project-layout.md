@@ -83,7 +83,7 @@ copia-cli/
 ├── .devcontainer/                 # Docker Compose-based dev environment
 ├── .goreleaser.yml                # Cross-platform release config
 ├── justfile                       # Command runner (build, test, lint, dev)
-├── Dockerfile                     # Go 1.26.2 dev image
+├── Dockerfile                     # Go 1.26.9 dev image
 ├── docker-compose.yml             # Base compose config
 └── docker-compose.dev.yaml        # Dev overlay (source mount + caches)
 ```
