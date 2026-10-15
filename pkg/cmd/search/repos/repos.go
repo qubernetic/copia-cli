@@ -3,7 +3,6 @@ package repos
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"text/tabwriter"
@@ -66,46 +65,32 @@ func NewCmdSearchRepos(f *cmdutil.Factory) *cobra.Command {
 	return cmd
 }
 
+// decodeSearch unwraps the repositories from one page of search results.
+func decodeSearch(body []byte) ([]repoEntry, error) {
+	var result searchResponse
+	err := json.Unmarshal(body, &result)
+	return result.Data, err
+}
+
 func SearchRun(opts *SearchOptions) error {
 	if err := cmdutil.ValidateLimit(opts.Limit); err != nil {
 		return err
 	}
 
-	u := fmt.Sprintf("https://%s/api/v1/repos/search?q=%s&limit=%d",
-		opts.Host, url.QueryEscape(opts.Query), opts.Limit)
+	u := fmt.Sprintf("https://%s/api/v1/repos/search?q=%s",
+		opts.Host, url.QueryEscape(opts.Query))
 
-	req, err := http.NewRequest("GET", u, nil)
+	repos, err := cmdutil.FetchPages(opts.HTTPClient, u, opts.Token, opts.Limit, decodeSearch)
 	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "token "+opts.Token)
-
-	resp, err := opts.HTTPClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("connecting to %s: %w", opts.Host, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("API error (HTTP %d)", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-
-	var result searchResponse
-	if err := json.Unmarshal(body, &result); err != nil {
 		return err
 	}
 
 	if opts.JSON.IsJSON() {
-		return cmdutil.PrintJSON(opts.IO.Out, result.Data)
+		return cmdutil.PrintJSON(opts.IO.Out, repos)
 	}
 
 	w := tabwriter.NewWriter(opts.IO.Out, 0, 0, 2, ' ', 0)
-	for _, r := range result.Data {
+	for _, r := range repos {
 		_, _ = fmt.Fprintf(w, "%s\t%s\n", r.FullName, r.Description)
 	}
 	return w.Flush()

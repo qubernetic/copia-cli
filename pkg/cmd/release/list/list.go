@@ -3,7 +3,6 @@ package list
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"text/tabwriter"
 
@@ -70,38 +69,23 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 	return cmd
 }
 
+func decodeReleases(body []byte) ([]releaseEntry, error) {
+	var releases []releaseEntry
+	err := json.Unmarshal(body, &releases)
+	return releases, err
+}
+
 func ListRun(opts *ListOptions) error {
 	if err := cmdutil.ValidateLimit(opts.Limit); err != nil {
 		return err
 	}
 
-	url := fmt.Sprintf("https://%s/api/v1/repos/%s/%s/releases?limit=%d",
-		opts.Host, opts.Owner, opts.Repo, opts.Limit)
+	u := fmt.Sprintf("https://%s/api/v1/repos/%s/%s/releases",
+		opts.Host, opts.Owner, opts.Repo)
 
-	req, err := http.NewRequest("GET", url, nil)
+	releases, err := cmdutil.FetchPages(opts.HTTPClient, u, opts.Token, opts.Limit, decodeReleases)
 	if err != nil {
 		return err
-	}
-	req.Header.Set("Authorization", "token "+opts.Token)
-
-	resp, err := opts.HTTPClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("connecting to %s: %w", opts.Host, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("API error (HTTP %d)", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-
-	var releases []releaseEntry
-	if err := json.Unmarshal(body, &releases); err != nil {
-		return fmt.Errorf("parsing response: %w", err)
 	}
 
 	if opts.JSON.IsJSON() {
