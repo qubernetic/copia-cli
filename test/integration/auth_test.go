@@ -3,7 +3,9 @@
 package integration
 
 import (
+	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -70,4 +72,28 @@ func TestAuth_StatusRun(t *testing.T) {
 	assert.Contains(t, stdout.String(), env.Host)
 	assert.Contains(t, stdout.String(), "Token valid")
 	t.Logf("Output: %s", stdout.String())
+}
+
+func TestAuth_QueryParamToken_Rejected(t *testing.T) {
+	env := loadTestEnv(t)
+
+	u := url.URL{
+		Scheme:   "https",
+		Host:     env.Host,
+		Path:     "/api/v1/user",
+		RawQuery: url.Values{"access_token": {env.Token}}.Encode(),
+	}
+	req, err := http.NewRequest(http.MethodGet, u.String(), nil)
+	require.NoError(t, err)
+
+	resp, err := testHTTPClient().Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	// Copia ignores the query token and treats the call as anonymous, which it
+	// answers with 403 rather than 401.
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+	assert.Contains(t, string(body), "Only signed in user is allowed to call APIs.")
 }

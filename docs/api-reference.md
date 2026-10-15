@@ -27,7 +27,7 @@ Content-Type: application/json
 {"name": "copia-cli"}
 ```
 
-**Deprecated (Gitea 1.23+):** Query parameter tokens (`?access_token=` and `?token=`) — use header auth instead.
+**Removed on Copia since 2026-05-01:** Query parameter tokens (`?access_token=` and `?token=`) are ignored: Copia treats the call as anonymous and returns `403 Forbidden` with `Only signed in user is allowed to call APIs.` Header auth is the only supported method, and copia-cli only sends the token in the `Authorization` header. The unit-test HTTP mock (`pkg/httpmock`) rejects any request with a `token` or `access_token` query parameter, and the integration test `TestAuth_QueryParamToken_Rejected` checks the live behaviour.
 
 ## Endpoint Overview
 
