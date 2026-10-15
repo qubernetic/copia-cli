@@ -203,6 +203,8 @@ Default limit varies by endpoint (typically 50). Response headers include:
 - `x-total-count` — total number of items
 - `Link` — RFC 5988 pagination links
 
+In the CLI, list commands page through results with `cmdutil.FetchPages`: it asks for `limit=min(remaining, 50)` on `page=1,2,...` and stops when `--limit` is reached, a page is empty, or the `Link` header has no `rel="next"` (without a `Link` header, on a page shorter than requested). Tests stub single pages with `httpmock.QueryMatcher` and set `Link` with `httpmock.WithHeader`.
+
 ### Error Responses
 
 | Status | Meaning |
