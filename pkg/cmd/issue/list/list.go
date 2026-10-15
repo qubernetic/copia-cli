@@ -3,7 +3,6 @@ package list
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"text/tabwriter"
@@ -85,6 +84,12 @@ Use --limit to control how many issues are returned (default 30).`,
 	return cmd
 }
 
+func decodeIssues(body []byte) ([]issueEntry, error) {
+	var issues []issueEntry
+	err := json.Unmarshal(body, &issues)
+	return issues, err
+}
+
 func ListRun(opts *ListOptions) error {
 	if err := cmdutil.ValidateLimit(opts.Limit); err != nil {
 		return err
@@ -96,36 +101,15 @@ func ListRun(opts *ListOptions) error {
 		return fmt.Errorf("invalid state %q: valid values are {open|closed|all}", opts.State)
 	}
 
-	u := fmt.Sprintf("https://%s/api/v1/repos/%s/%s/issues?state=%s&limit=%d&type=issues",
-		opts.Host, opts.Owner, opts.Repo, opts.State, opts.Limit)
+	u := fmt.Sprintf("https://%s/api/v1/repos/%s/%s/issues?state=%s&type=issues",
+		opts.Host, opts.Owner, opts.Repo, opts.State)
 	if len(opts.Labels) > 0 {
 		u += "&labels=" + strings.Join(opts.Labels, ",")
 	}
 
-	req, err := http.NewRequest("GET", u, nil)
+	issues, err := cmdutil.FetchPages(opts.HTTPClient, u, opts.Token, opts.Limit, decodeIssues)
 	if err != nil {
 		return err
-	}
-	req.Header.Set("Authorization", "token "+opts.Token)
-
-	resp, err := opts.HTTPClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("connecting to %s: %w", opts.Host, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("API error (HTTP %d)", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-
-	var issues []issueEntry
-	if err := json.Unmarshal(body, &issues); err != nil {
-		return fmt.Errorf("parsing response: %w", err)
 	}
 
 	if opts.JSON.IsJSON() {
