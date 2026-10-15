@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `issue edit --add-label` looks up label names on every page of the repository labels, so labels past the first 50 resolve instead of failing with "not found" (#246)
 - `issue list` pages through results, so `--limit` above 50 returns up to that many issues instead of stopping at the first page; `--state` and `--label` apply to every page (#215)
 - Linux install guide now points Fedora/RHEL users to the `cbiro/copia-cli` COPR project; `qubernetic/copia-cli` does not exist (#233)
 
