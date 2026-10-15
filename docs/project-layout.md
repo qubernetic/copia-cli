@@ -31,6 +31,11 @@ graph TB
         pr[pr: list/create/view/merge/close/review/diff/checkout]
         label[label: list/create]
         release[release: list/create/delete/upload]
+        apicmd[api: raw REST request]
+        search[search: issues/repos]
+        org[org: list/view]
+        notification[notification: list/read]
+        completion[completion: bash/zsh/fish/powershell]
     end
     subgraph API
         client[pkg/api/client.go]
@@ -46,11 +51,12 @@ graph TB
     copiacmd --> build
     copiacmd --> config
     factory --> iostreams
-    copiacmd --> auth & repo & issue & pr & label & release
-    auth & repo & issue & pr & label & release --> factory
-    auth & repo & issue & pr & label & release -.-> client
+    copiacmd --> auth & repo & issue & pr & label & release & apicmd & search & org & notification & completion
+    auth & repo & issue & pr & label & release & apicmd & search & org & notification --> factory
+    completion --> iostreams
+    auth & repo & issue & pr & label & release & apicmd & search & org & notification -.-> client
     client --> gitea
-    httpmock -.-> auth & repo & issue & pr & label & release
+    httpmock -.-> auth & repo & issue & pr & label & release & apicmd & search & org & notification
     integration --> gitea
 ```
 
@@ -72,7 +78,12 @@ copia-cli/
 │   │   ├── issue/                 # list, create, view, close, comment, edit
 │   │   ├── pr/                    # list, create, view, merge, close, review, diff, checkout
 │   │   ├── label/                 # list, create
-│   │   └── release/               # list, create, delete, upload
+│   │   ├── release/               # list, create, delete, upload
+│   │   ├── api/                   # single command: api <path>
+│   │   ├── search/                # issues, repos
+│   │   ├── org/                   # list, view
+│   │   ├── notification/          # list, read
+│   │   └── completion/            # single command: completion <shell> (bash, zsh, fish, powershell)
 │   ├── cmdutil/
 │   │   ├── factory.go             # Factory dependency injection
 │   │   └── json.go                # --json flag + PrintJSON
@@ -159,6 +170,11 @@ func xxxRun(opts *XxxOptions) error { ... }  // unexported, testable
 | `pr` | list, create, view, merge, close, review, diff, checkout | Raw HTTP + git exec |
 | `label` | list, create | Raw HTTP |
 | `release` | list, create, delete, upload | Raw HTTP + multipart |
+| `api` | none (single command `api <path>`) | Raw HTTP, any method (`-X`; GET default, POST when `-f` is set), path prefixed with `/api/v1` |
+| `search` | issues, repos | Raw HTTP |
+| `org` | list, view | Raw HTTP |
+| `notification` | list, read | Raw HTTP (read: PATCH one thread, PUT with `--all`) |
+| `completion` | none (single command `completion <shell>`: bash, zsh, fish, powershell) | No API call; Cobra script generation |
 
 ### `test/integration/`
 **Purpose:** Live API tests against Copia instance
