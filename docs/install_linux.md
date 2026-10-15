@@ -29,7 +29,7 @@ sudo dpkg -i copia-cli_*_linux_amd64.deb
 ### Fedora/RHEL (COPR)
 
 ```bash
-sudo dnf copr enable qubernetic/copia-cli
+sudo dnf copr enable cbiro/copia-cli
 sudo dnf install copia-cli
 ```
 

@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - All workflows except bump-go read the Go version from `go.mod` instead of a hard-coded `1.26` (#228)
 
+### Fixed
+
+- Linux install guide now points Fedora/RHEL users to the `cbiro/copia-cli` COPR project; `qubernetic/copia-cli` does not exist (#233)
+
 ## [1.1.0] - 2026-04-16
 
 ### Added
