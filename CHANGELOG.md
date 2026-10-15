@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `issue list` pages through results, so `--limit` above 50 returns up to that many issues instead of stopping at the first page; `--state` and `--label` apply to every page (#215)
+- `pr list`, `repo list` (user and `--org`), `release list`, `search issues` and `search repos` page through results the same way, so `--limit` above 50 returns up to that many items; filters and the search query apply to every page (#244)
 - Linux install guide now points Fedora/RHEL users to the `cbiro/copia-cli` COPR project; `qubernetic/copia-cli` does not exist (#233)
 
 ## [1.1.0] - 2026-04-16
