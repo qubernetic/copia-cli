@@ -173,6 +173,10 @@ func TestFetchPages_HTTPError(t *testing.T) {
 	_, err := FetchPages(&http.Client{Transport: reg}, pageURL, "test-token", 120, decodeItems)
 	require.Error(t, err)
 	assert.Equal(t, "API error (HTTP 404)", err.Error())
+
+	var httpErr *HTTPError
+	require.ErrorAs(t, err, &httpErr)
+	assert.Equal(t, http.StatusNotFound, httpErr.StatusCode)
 }
 
 func TestFetchPages_DecodeError(t *testing.T) {

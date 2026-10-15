@@ -12,6 +12,16 @@ import (
 // MaxPageSize is the largest page FetchPages asks the API for.
 const MaxPageSize = 50
 
+// HTTPError is returned by FetchPages when the API answers with a status
+// other than 200.
+type HTTPError struct {
+	StatusCode int
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("API error (HTTP %d)", e.StatusCode)
+}
+
 // PageDecoder decodes the body of one page into its items.
 type PageDecoder[T any] func(body []byte) ([]T, error)
 
@@ -83,7 +93,7 @@ func getPage(client *http.Client, pageURL, token string) ([]byte, http.Header, e
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, nil, fmt.Errorf("API error (HTTP %d)", resp.StatusCode)
+		return nil, nil, &HTTPError{StatusCode: resp.StatusCode}
 	}
 
 	body, err := io.ReadAll(resp.Body)
