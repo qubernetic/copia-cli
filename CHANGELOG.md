@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Go 1.26.2 → 1.26.9, fixes GO-2026-6599, GO-2026-6600, GO-2026-6603, GO-2026-6605, GO-2026-6607, GO-2026-6608, GO-2026-6610, GO-2026-6611, GO-2026-6612, GO-2026-6613 and GO-2026-6617 in the standard library (#228)
 - golang.org/x/crypto 0.49.0 → 0.52.0, fixes GO-2026-5018; also pulls golang.org/x/sys 0.42.0 → 0.45.0 (#228)
 
+### Changed
+
+- All workflows except bump-go read the Go version from `go.mod` instead of a hard-coded `1.26` (#228)
+
 ## [1.1.0] - 2026-04-16
 
 ### Added
