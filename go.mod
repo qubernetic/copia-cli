@@ -1,6 +1,6 @@
 module github.com/qubernetic/copia-cli
 
-go 1.26.2
+go 1.26.9
 
 require (
 	code.gitea.io/sdk/gitea v0.24.1
@@ -18,6 +18,6 @@ require (
 	github.com/hashicorp/go-version v1.8.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
-	golang.org/x/crypto v0.49.0 // indirect
-	golang.org/x/sys v0.42.0 // indirect
+	golang.org/x/crypto v0.52.0 // indirect
+	golang.org/x/sys v0.45.0 // indirect
 )
