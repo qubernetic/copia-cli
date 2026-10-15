@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/spf13/cobra"
+	"github.com/qubernetic/copia-cli/pkg/cmd/issue/shared"
 	"github.com/qubernetic/copia-cli/pkg/cmdutil"
 	"github.com/qubernetic/copia-cli/pkg/iostreams"
 )
@@ -28,7 +29,7 @@ type CreateOptions struct {
 type createRequest struct {
 	Title  string   `json:"title"`
 	Body   string   `json:"body,omitempty"`
-	Labels []string `json:"labels,omitempty"`
+	Labels []int64  `json:"labels,omitempty"`
 }
 
 type createResponse struct {
@@ -83,9 +84,16 @@ func CreateRun(opts *CreateOptions) error {
 	}
 
 	payload := createRequest{
-		Title:  opts.Title,
-		Body:   opts.Body,
-		Labels: opts.Labels,
+		Title: opts.Title,
+		Body:  opts.Body,
+	}
+	if len(opts.Labels) > 0 {
+		// The API takes label IDs, not names.
+		ids, err := shared.ResolveLabelIDs(opts.HTTPClient, opts.Host, opts.Token, opts.Owner, opts.Repo, opts.Labels)
+		if err != nil {
+			return err
+		}
+		payload.Labels = ids
 	}
 
 	body, err := json.Marshal(payload)
