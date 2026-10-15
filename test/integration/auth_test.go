@@ -3,6 +3,7 @@
 package integration
 
 import (
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -89,5 +90,10 @@ func TestAuth_QueryParamToken_Rejected(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
 
-	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+	// Copia ignores the query token and treats the call as anonymous, which it
+	// answers with 403 rather than 401.
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+	assert.Contains(t, string(body), "Only signed in user is allowed to call APIs.")
 }
