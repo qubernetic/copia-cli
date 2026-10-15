@@ -169,3 +169,24 @@ func TestRegistry_RecordsRequests(t *testing.T) {
 	assert.Equal(t, "1", reg.Requests[0].URL.Query().Get("page"))
 	assert.Equal(t, "2", reg.Requests[1].URL.Query().Get("page"))
 }
+
+func TestReplaceDefaultTransport_RoutesDefaultClient(t *testing.T) {
+	orig := http.DefaultTransport
+
+	t.Run("swap", func(t *testing.T) {
+		reg := &Registry{}
+		reg.Register(
+			REST("GET", "/api/v1/user"),
+			StringResponse(http.StatusOK, `{"login":"john"}`),
+		)
+		ReplaceDefaultTransport(t, reg)
+
+		resp, err := (&http.Client{}).Get("https://app.copia.io/api/v1/user")
+		require.NoError(t, err)
+		defer func() { _ = resp.Body.Close() }()
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		reg.Verify(t)
+	})
+
+	assert.Same(t, orig, http.DefaultTransport)
+}

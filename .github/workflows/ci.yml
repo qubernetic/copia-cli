@@ -22,7 +22,7 @@ jobs:
         run: go build -ldflags "-s -w" -o bin/copia-cli ./cmd/copia-cli
 
       - name: Test
-        run: go test -coverprofile=coverage.out ./...
+        run: go test -coverpkg=./... -coverprofile=coverage.out ./...
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v7
