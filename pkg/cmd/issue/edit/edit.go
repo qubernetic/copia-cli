@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/spf13/cobra"
+	"github.com/qubernetic/copia-cli/pkg/cmd/issue/shared"
 	"github.com/qubernetic/copia-cli/pkg/cmdutil"
 	"github.com/qubernetic/copia-cli/pkg/iostreams"
 )
@@ -150,7 +151,7 @@ func updateIssue(opts *EditOptions) error {
 
 func addLabels(opts *EditOptions) error {
 	// Gitea API expects label IDs, not names. Look up IDs first.
-	labelIDs, err := resolveLabelIDs(opts)
+	labelIDs, err := shared.ResolveLabelIDs(opts.HTTPClient, opts.Host, opts.Token, opts.Owner, opts.Repo, opts.AddLabels)
 	if err != nil {
 		return err
 	}
@@ -185,42 +186,4 @@ func addLabels(opts *EditOptions) error {
 	}
 
 	return nil
-}
-
-type labelEntry struct {
-	ID   int64  `json:"id"`
-	Name string `json:"name"`
-}
-
-func decodeLabels(body []byte) ([]labelEntry, error) {
-	var labels []labelEntry
-	err := json.Unmarshal(body, &labels)
-	return labels, err
-}
-
-func resolveLabelIDs(opts *EditOptions) ([]int64, error) {
-	url := fmt.Sprintf("https://%s/api/v1/repos/%s/%s/labels",
-		opts.Host, opts.Owner, opts.Repo)
-
-	// A limit of 0 reads every page, so names past the first page resolve.
-	allLabels, err := cmdutil.FetchPages(opts.HTTPClient, url, opts.Token, 0, decodeLabels)
-	if err != nil {
-		return nil, err
-	}
-
-	nameToID := map[string]int64{}
-	for _, l := range allLabels {
-		nameToID[l.Name] = l.ID
-	}
-
-	var ids []int64
-	for _, name := range opts.AddLabels {
-		id, ok := nameToID[name]
-		if !ok {
-			return nil, fmt.Errorf("label %q not found in repository", name)
-		}
-		ids = append(ids, id)
-	}
-
-	return ids, nil
 }
