@@ -12,7 +12,7 @@ that token. The App token does start `ci.yml`.
 
 | | |
 |---|---|
-| Name | `copia-cli-bump-go` |
+| Name | `qubernetic-bump-go` |
 | Owner | the `qubernetic` organisation |
 | Installed on | `qubernetic/copia-cli` only ("Only select repositories") |
 | Repository permissions | Contents: read and write; Pull requests: read and write; Metadata: read |
@@ -25,7 +25,7 @@ The App has no other permissions or installations.
 ### Creating the App
 
 1. Go to the `qubernetic` organisation's **Settings > Developer settings > GitHub Apps > New GitHub App**.
-2. Name: `copia-cli-bump-go`. Homepage URL: `https://github.com/qubernetic/copia-cli`.
+2. Name: `qubernetic-bump-go`. Homepage URL: `https://github.com/qubernetic/copia-cli`.
 3. Under **Webhook**, clear **Active**.
 4. Set the repository permissions from the table above. Leave everything else at "No access".
 5. **Where can this GitHub App be installed?** Only on this account.
@@ -45,10 +45,14 @@ Two repository secrets on `qubernetic/copia-cli`
 
 ```bash
 gh secret set BUMP_GO_APP_ID --repo qubernetic/copia-cli --body "<app id>"
-gh secret set BUMP_GO_APP_PRIVATE_KEY --repo qubernetic/copia-cli < copia-cli-bump-go.<date>.private-key.pem
+gh secret set BUMP_GO_APP_PRIVATE_KEY --repo qubernetic/copia-cli < qubernetic-bump-go.<date>.private-key.pem
 ```
 
 Delete the `.pem` file afterwards.
+
+To add another Go repository, add it on the App's **Install App** page and
+set the same two secrets (`BUMP_GO_APP_ID`, `BUMP_GO_APP_PRIVATE_KEY`) in
+that repository.
 
 Only `.github/workflows/bump-go.yml` reads these secrets, in its
 "Create App token" step (`actions/create-github-app-token`). That step asks
@@ -74,6 +78,6 @@ gh pr checks <number> --repo qubernetic/copia-cli
 ```
 
 `gh pr checks` lists `test` (and the rest of `CI`). The PR's author is
-`copia-cli-bump-go[bot]`, not `github-actions[bot]`. If the list is empty,
+`qubernetic-bump-go[bot]`, not `github-actions[bot]`. If the list is empty,
 the PR was opened with `GITHUB_TOKEN`: check that both secrets exist
 (`gh secret list --repo qubernetic/copia-cli`) and read the bump-go run log.
