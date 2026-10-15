@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -31,6 +33,9 @@ var queryTokenParams = []string{"token", "access_token"}
 type Registry struct {
 	mu    sync.Mutex
 	stubs []*stub
+
+	// Requests holds every request that reached the registry, in order.
+	Requests []*http.Request
 }
 
 // Register adds a matcher/responder pair.
@@ -53,6 +58,7 @@ func (r *Registry) RoundTrip(req *http.Request) (*http.Response, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	r.Requests = append(r.Requests, req)
 	for _, s := range r.stubs {
 		if s.matcher(req) {
 			s.called = true
@@ -79,6 +85,40 @@ func (r *Registry) Verify(t *testing.T) {
 func REST(method, pathSuffix string) Matcher {
 	return func(req *http.Request) bool {
 		return req.Method == method && strings.HasSuffix(req.URL.Path, pathSuffix)
+	}
+}
+
+// QueryMatcher returns a matcher like REST that also requires every listed
+// query parameter to have exactly the given values. Parameters not listed are
+// ignored.
+func QueryMatcher(method, pathSuffix string, query url.Values) Matcher {
+	rest := REST(method, pathSuffix)
+	return func(req *http.Request) bool {
+		if !rest(req) {
+			return false
+		}
+		actual := req.URL.Query()
+		for key, want := range query {
+			if !slices.Equal(actual[key], want) {
+				return false
+			}
+		}
+		return true
+	}
+}
+
+// WithHeader wraps a responder and sets a header on its response.
+func WithHeader(responder Responder, name, value string) Responder {
+	return func(req *http.Request) (*http.Response, error) {
+		resp, err := responder(req)
+		if err != nil {
+			return nil, err
+		}
+		if resp.Header == nil {
+			resp.Header = http.Header{}
+		}
+		resp.Header.Set(name, value)
+		return resp, nil
 	}
 }
 

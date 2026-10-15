@@ -3,6 +3,7 @@ package httpmock
 import (
 	"io"
 	"net/http"
+	"net/url"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -121,4 +122,50 @@ func TestRegistry_HeaderToken_Served(t *testing.T) {
 	resp, err := reg.RoundTrip(req)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+func TestQueryMatcher_MatchesListedParams(t *testing.T) {
+	m := QueryMatcher("GET", "/api/v1/repos/o/r/issues", url.Values{"page": {"2"}, "limit": {"50"}})
+
+	match, _ := http.NewRequest("GET", "https://app.copia.io/api/v1/repos/o/r/issues?state=open&page=2&limit=50", nil)
+	otherPage, _ := http.NewRequest("GET", "https://app.copia.io/api/v1/repos/o/r/issues?state=open&page=1&limit=50", nil)
+	missing, _ := http.NewRequest("GET", "https://app.copia.io/api/v1/repos/o/r/issues?limit=50", nil)
+	otherPath, _ := http.NewRequest("GET", "https://app.copia.io/api/v1/repos/o/r/pulls?page=2&limit=50", nil)
+
+	assert.True(t, m(match))
+	assert.False(t, m(otherPage))
+	assert.False(t, m(missing))
+	assert.False(t, m(otherPath))
+}
+
+func TestWithHeader_SetsResponseHeader(t *testing.T) {
+	reg := &Registry{}
+	reg.Register(
+		REST("GET", "/api/v1/user"),
+		WithHeader(StringResponse(http.StatusOK, `[]`), "Link", `<https://app.copia.io/api/v1/user?page=2>; rel="next"`),
+	)
+
+	req, _ := http.NewRequest("GET", "https://app.copia.io/api/v1/user", nil)
+	resp, err := reg.RoundTrip(req)
+	require.NoError(t, err)
+	assert.Equal(t, `<https://app.copia.io/api/v1/user?page=2>; rel="next"`, resp.Header.Get("Link"))
+	assert.Equal(t, "application/json", resp.Header.Get("Content-Type"))
+}
+
+func TestRegistry_RecordsRequests(t *testing.T) {
+	reg := &Registry{}
+	reg.Register(
+		REST("GET", "/api/v1/user"),
+		StringResponse(http.StatusOK, `{}`),
+	)
+
+	for _, page := range []string{"1", "2"} {
+		req, _ := http.NewRequest("GET", "https://app.copia.io/api/v1/user?page="+page, nil)
+		_, err := reg.RoundTrip(req)
+		require.NoError(t, err)
+	}
+
+	require.Len(t, reg.Requests, 2)
+	assert.Equal(t, "1", reg.Requests[0].URL.Query().Get("page"))
+	assert.Equal(t, "2", reg.Requests[1].URL.Query().Get("page"))
 }
