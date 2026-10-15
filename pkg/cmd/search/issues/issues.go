@@ -3,7 +3,6 @@ package issues
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"text/tabwriter"
@@ -75,6 +74,12 @@ via -R flag or git remote.`,
 	return cmd
 }
 
+func decodeIssues(body []byte) ([]issueEntry, error) {
+	var issues []issueEntry
+	err := json.Unmarshal(body, &issues)
+	return issues, err
+}
+
 func SearchRun(opts *SearchOptions) error {
 	if err := cmdutil.ValidateLimit(opts.Limit); err != nil {
 		return err
@@ -85,32 +90,11 @@ func SearchRun(opts *SearchOptions) error {
 		state = "all"
 	}
 
-	u := fmt.Sprintf("https://%s/api/v1/repos/%s/%s/issues?q=%s&limit=%d&type=issues&state=%s",
-		opts.Host, opts.Owner, opts.Repo, url.QueryEscape(opts.Query), opts.Limit, url.QueryEscape(state))
+	u := fmt.Sprintf("https://%s/api/v1/repos/%s/%s/issues?q=%s&type=issues&state=%s",
+		opts.Host, opts.Owner, opts.Repo, url.QueryEscape(opts.Query), url.QueryEscape(state))
 
-	req, err := http.NewRequest("GET", u, nil)
+	issues, err := cmdutil.FetchPages(opts.HTTPClient, u, opts.Token, opts.Limit, decodeIssues)
 	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "token "+opts.Token)
-
-	resp, err := opts.HTTPClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("connecting to %s: %w", opts.Host, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("API error (HTTP %d)", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-
-	var issues []issueEntry
-	if err := json.Unmarshal(body, &issues); err != nil {
 		return err
 	}
 
