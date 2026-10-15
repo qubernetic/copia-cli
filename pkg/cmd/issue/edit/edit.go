@@ -75,7 +75,7 @@ func NewCmdEdit(f *cmdutil.Factory) *cobra.Command {
 
 	cmd.Flags().StringVarP(&opts.Title, "title", "t", "", "Set title")
 	cmd.Flags().StringVarP(&opts.Body, "body", "b", "", "Set body")
-	cmd.Flags().StringSliceVar(&opts.AddLabels, "add-label", nil, "Add labels")
+	cmd.Flags().StringSliceVar(&opts.AddLabels, "add-label", nil, "Add labels by name (repository or organization labels)")
 	cmd.Flags().StringSliceVarP(&opts.Assignees, "assignee", "a", nil, "Set assignees")
 	cmd.Flags().Int64VarP(&opts.Milestone, "milestone", "m", 0, "Set milestone ID")
 

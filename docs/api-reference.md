@@ -122,6 +122,8 @@ PATCH  /repos/{owner}/{repo}/labels/{id}           # Update label
 DELETE /repos/{owner}/{repo}/labels/{id}           # Delete label
 ```
 
+Issue endpoints take label IDs, not names. `issue create --label` and `issue edit --add-label` read every page of both the repo labels and the org labels and map names to IDs; a repo label wins over an org label of the same name. For a user-owned repository `/orgs/{owner}/labels` answers 404 and only repo labels are used.
+
 ### Milestones
 
 ```

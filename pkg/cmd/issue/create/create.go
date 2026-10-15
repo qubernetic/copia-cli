@@ -73,7 +73,7 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 
 	cmd.Flags().StringVarP(&opts.Title, "title", "t", "", "Issue title (required)")
 	cmd.Flags().StringVarP(&opts.Body, "body", "b", "", "Issue body")
-	cmd.Flags().StringSliceVarP(&opts.Labels, "label", "l", nil, "Add labels")
+	cmd.Flags().StringSliceVarP(&opts.Labels, "label", "l", nil, "Add labels by name (repository or organization labels)")
 
 	return cmd
 }
