@@ -3,7 +3,6 @@ package list
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"text/tabwriter"
 
@@ -65,6 +64,12 @@ repositories for a specific organization instead.`,
 	return cmd
 }
 
+func decodeRepos(body []byte) ([]repoEntry, error) {
+	var repos []repoEntry
+	err := json.Unmarshal(body, &repos)
+	return repos, err
+}
+
 func ListRun(opts *ListOptions) error {
 	if err := cmdutil.ValidateLimit(opts.Limit); err != nil {
 		return err
@@ -75,31 +80,9 @@ func ListRun(opts *ListOptions) error {
 		endpoint = fmt.Sprintf("/api/v1/orgs/%s/repos", opts.Org)
 	}
 
-	url := fmt.Sprintf("https://%s%s?limit=%d", opts.Host, endpoint, opts.Limit)
-	req, err := http.NewRequest("GET", url, nil)
+	repos, err := cmdutil.FetchPages(opts.HTTPClient, "https://"+opts.Host+endpoint, opts.Token, opts.Limit, decodeRepos)
 	if err != nil {
 		return err
-	}
-	req.Header.Set("Authorization", "token "+opts.Token)
-
-	resp, err := opts.HTTPClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("connecting to %s: %w", opts.Host, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("API error (HTTP %d)", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-
-	var repos []repoEntry
-	if err := json.Unmarshal(body, &repos); err != nil {
-		return fmt.Errorf("parsing response: %w", err)
 	}
 
 	if opts.JSON.IsJSON() {
