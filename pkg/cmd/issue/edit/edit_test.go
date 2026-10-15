@@ -263,3 +263,48 @@ func TestEditRun_AddLabels_MixesRepoAndOrgLabels(t *testing.T) {
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"labels":[1,90]}`, posted)
 }
+
+func TestEditRun_AddLabels_RepoLabelWinsNameClash(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	reg.Register(httpmock.REST("GET", "/api/v1/repos/my-org/my-repo/labels"), httpmock.StringResponse(http.StatusOK, `[{"id":1,"name":"bug"}]`))
+	reg.Register(httpmock.REST("GET", "/api/v1/orgs/my-org/labels"), httpmock.StringResponse(http.StatusOK, `[{"id":90,"name":"bug"}]`))
+	var posted string
+	reg.Register(
+		httpmock.REST("POST", "/api/v1/repos/my-org/my-repo/issues/12/labels"),
+		recordBody(&posted, httpmock.StringResponse(http.StatusOK, `[]`)),
+	)
+
+	err := EditRun(labelOpts(reg, "bug"))
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"labels":[1]}`, posted)
+}
+
+func TestEditRun_AddLabels_UserOwnedRepoSkipsOrgLabels(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	reg.Register(httpmock.REST("GET", "/api/v1/repos/my-org/my-repo/labels"), httpmock.StringResponse(http.StatusOK, `[{"id":1,"name":"bug"}]`))
+	reg.Register(httpmock.REST("GET", "/api/v1/orgs/my-org/labels"), httpmock.StringResponse(http.StatusNotFound, `{"message":"GetOrgByName"}`))
+	var posted string
+	reg.Register(
+		httpmock.REST("POST", "/api/v1/repos/my-org/my-repo/issues/12/labels"),
+		recordBody(&posted, httpmock.StringResponse(http.StatusOK, `[]`)),
+	)
+
+	err := EditRun(labelOpts(reg, "bug"))
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"labels":[1]}`, posted)
+}
+
+func TestEditRun_AddLabels_OrgLabelsServerError(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	reg.Register(httpmock.REST("GET", "/api/v1/repos/my-org/my-repo/labels"), httpmock.StringResponse(http.StatusOK, `[{"id":1,"name":"bug"}]`))
+	reg.Register(httpmock.REST("GET", "/api/v1/orgs/my-org/labels"), httpmock.StringResponse(http.StatusInternalServerError, `{}`))
+
+	err := EditRun(labelOpts(reg, "bug"))
+	require.EqualError(t, err, "API error (HTTP 500)")
+}
