@@ -22,6 +22,7 @@ func TestOrgList_Run(t *testing.T) {
 		HTTPClient: &http.Client{},
 		Host:       env.Host,
 		Token:      env.Token,
+		Limit:      30,
 	}
 
 	err := orglist.ListRun(opts)

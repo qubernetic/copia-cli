@@ -20,6 +20,7 @@ func TestNotificationList_Run(t *testing.T) {
 		HTTPClient: &http.Client{},
 		Host:       env.Host,
 		Token:      env.Token,
+		Limit:      30,
 	}
 
 	err := notiflist.ListRun(opts)
@@ -37,6 +38,7 @@ func TestNotificationList_All(t *testing.T) {
 		Host:       env.Host,
 		Token:      env.Token,
 		All:        true,
+		Limit:      30,
 	}
 
 	err := notiflist.ListRun(opts)
