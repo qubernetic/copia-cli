@@ -90,6 +90,15 @@ Integration tests require a Copia API token (set in `.envrc`) and run separately
 just integration
 ```
 
+#### Coverage gate
+
+CI uploads coverage to Codecov, and `codecov.yml` sets two statuses on every PR:
+
+- **`codecov/project`** fails when the PR lowers total coverage by more than 1 percentage point against its base commit.
+- **`codecov/patch`** fails when less than 80% of the PR's new or changed lines are covered.
+
+Neither status is a required check in branch protection, so a red status does not block the merge on its own; treat it as a review finding. Dependabot PRs get no Codecov status at all, because Dependabot has no access to the `CODECOV_TOKEN` secret that the upload needs.
+
 ## Project Structure
 
 ```
