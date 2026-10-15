@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
 
@@ -193,29 +192,19 @@ type labelEntry struct {
 	Name string `json:"name"`
 }
 
+func decodeLabels(body []byte) ([]labelEntry, error) {
+	var labels []labelEntry
+	err := json.Unmarshal(body, &labels)
+	return labels, err
+}
+
 func resolveLabelIDs(opts *EditOptions) ([]int64, error) {
 	url := fmt.Sprintf("https://%s/api/v1/repos/%s/%s/labels",
 		opts.Host, opts.Owner, opts.Repo)
 
-	req, err := http.NewRequest("GET", url, nil)
+	// A limit of 0 reads every page, so names past the first page resolve.
+	allLabels, err := cmdutil.FetchPages(opts.HTTPClient, url, opts.Token, 0, decodeLabels)
 	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "token "+opts.Token)
-
-	resp, err := opts.HTTPClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	var allLabels []labelEntry
-	if err := json.Unmarshal(body, &allLabels); err != nil {
 		return nil, err
 	}
 
