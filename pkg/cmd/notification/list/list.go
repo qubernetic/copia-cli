@@ -3,7 +3,6 @@ package list
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"text/tabwriter"
 
@@ -18,6 +17,7 @@ type ListOptions struct {
 	Host       string
 	Token      string
 	All        bool
+	Limit      int
 	JSON       cmdutil.JSONFlags
 }
 
@@ -43,9 +43,13 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "list",
 		Short:   "List notifications",
-		Long:    "List notifications for the authenticated user. By default, only unread notifications are shown.",
+		Long: `List notifications for the authenticated user. By default, only unread notifications are shown.
+
+Use --all to include read notifications.
+Use --limit to control how many notifications are returned (default 30).`,
 		Aliases: []string{"ls"},
-		Example: "  $ copia-cli notification list",
+		Example: `  $ copia-cli notification list
+  $ copia-cli notification list --all --limit 100`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.IO = f.IOStreams
 			host, token, err := f.ResolveAuth()
@@ -60,38 +64,28 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&opts.All, "all", false, "Show read and unread notifications")
+	cmd.Flags().IntVarP(&opts.Limit, "limit", "L", 30, "Maximum number of notifications")
 	cmdutil.AddJSONFlags(cmd, &opts.JSON, []string{"id", "subject", "repository", "unread"})
 	return cmd
 }
 
-func ListRun(opts *ListOptions) error {
-	url := fmt.Sprintf("https://%s/api/v1/notifications?page=1", opts.Host)
-	if opts.All {
-		url += "&all=true"
-	}
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "token "+opts.Token)
-
-	resp, err := opts.HTTPClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("connecting to %s: %w", opts.Host, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("API error (HTTP %d)", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-
+func decodeNotifications(body []byte) ([]notification, error) {
 	var notifications []notification
-	if err := json.Unmarshal(body, &notifications); err != nil {
+	err := json.Unmarshal(body, &notifications)
+	return notifications, err
+}
+
+func ListRun(opts *ListOptions) error {
+	if err := cmdutil.ValidateLimit(opts.Limit); err != nil {
+		return err
+	}
+
+	u := fmt.Sprintf("https://%s/api/v1/notifications", opts.Host)
+	if opts.All {
+		u += "?all=true"
+	}
+	notifications, err := cmdutil.FetchPages(opts.HTTPClient, u, opts.Token, opts.Limit, decodeNotifications)
+	if err != nil {
 		return err
 	}
 

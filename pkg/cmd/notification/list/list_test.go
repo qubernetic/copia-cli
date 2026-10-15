@@ -1,9 +1,13 @@
 package list
 
 import (
+	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 	"testing"
 
+	"github.com/qubernetic/copia-cli/pkg/cmdutil"
 	"github.com/qubernetic/copia-cli/pkg/httpmock"
 	"github.com/qubernetic/copia-cli/pkg/iostreams"
 	"github.com/stretchr/testify/assert"
@@ -29,6 +33,7 @@ func TestListRun_Success(t *testing.T) {
 		HTTPClient: &http.Client{Transport: reg},
 		Host:       "app.copia.io",
 		Token:      "test-token",
+		Limit:      30,
 	}
 
 	err := ListRun(opts)
@@ -53,6 +58,7 @@ func TestListRun_Empty(t *testing.T) {
 		HTTPClient: &http.Client{Transport: reg},
 		Host:       "app.copia.io",
 		Token:      "test-token",
+		Limit:      30,
 	}
 
 	err := ListRun(opts)
@@ -79,9 +85,93 @@ func TestListRun_AllFlag(t *testing.T) {
 		Host:       "app.copia.io",
 		Token:      "test-token",
 		All:        true,
+		Limit:      30,
 	}
 
 	err := ListRun(opts)
 	require.NoError(t, err)
 	assert.Contains(t, stdout.String(), "Old PR")
+}
+
+func TestNewCmdList_LimitDefault(t *testing.T) {
+	cmd := NewCmdList(&cmdutil.Factory{})
+	flag := cmd.Flags().ShorthandLookup("L")
+	require.NotNil(t, flag)
+	assert.Equal(t, "limit", flag.Name)
+	assert.Equal(t, "30", flag.DefValue)
+}
+
+func TestListRun_InvalidLimit(t *testing.T) {
+	ios, _, _, _ := iostreams.Test()
+
+	err := ListRun(&ListOptions{IO: ios, Limit: 0})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid limit")
+}
+
+func notificationsJSON(first, count int) string {
+	items := make([]string, count)
+	for i := range items {
+		n := first + i
+		items[i] = fmt.Sprintf(`{"id":%d,"subject":{"title":"Notification %d","type":"Issue"},"repository":{"full_name":"my-org/plc"},"unread":true}`, n, n)
+	}
+	return "[" + strings.Join(items, ",") + "]"
+}
+
+func pageQuery(page, limit int) url.Values {
+	return url.Values{"page": {fmt.Sprint(page)}, "limit": {fmt.Sprint(limit)}}
+}
+
+func TestListRun_PaginatesPastPageCap(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	path := "/api/v1/notifications"
+	reg.Register(httpmock.QueryMatcher("GET", path, pageQuery(1, 50)), httpmock.StringResponse(http.StatusOK, notificationsJSON(1, 50)))
+	reg.Register(httpmock.QueryMatcher("GET", path, pageQuery(2, 30)), httpmock.StringResponse(http.StatusOK, notificationsJSON(51, 30)))
+
+	ios, _, stdout, _ := iostreams.Test()
+
+	opts := &ListOptions{
+		IO:         ios,
+		HTTPClient: &http.Client{Transport: reg},
+		Host:       "app.copia.io",
+		Token:      "test-token",
+		All:        true,
+		Limit:      80,
+	}
+
+	err := ListRun(opts)
+	require.NoError(t, err)
+	assert.Equal(t, 80, strings.Count(stdout.String(), "\n"))
+	assert.Contains(t, stdout.String(), "Notification 80")
+
+	require.Len(t, reg.Requests, 2)
+	for _, req := range reg.Requests {
+		assert.Equal(t, "true", req.URL.Query().Get("all"))
+	}
+}
+
+func TestListRun_DefaultLimitCapsOutput(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	reg.Register(
+		httpmock.QueryMatcher("GET", "/api/v1/notifications", pageQuery(1, 30)),
+		httpmock.StringResponse(http.StatusOK, notificationsJSON(1, 30)),
+	)
+
+	ios, _, stdout, _ := iostreams.Test()
+
+	opts := &ListOptions{
+		IO:         ios,
+		HTTPClient: &http.Client{Transport: reg},
+		Host:       "app.copia.io",
+		Token:      "test-token",
+		Limit:      30,
+	}
+
+	err := ListRun(opts)
+	require.NoError(t, err)
+	assert.Equal(t, 30, strings.Count(stdout.String(), "\n"))
+	require.Len(t, reg.Requests, 1)
+	assert.Empty(t, reg.Requests[0].URL.Query().Get("all"))
 }

@@ -66,6 +66,7 @@ func TestLabel_CreateAndList(t *testing.T) {
 		IO: listIO, HTTPClient: &http.Client{},
 		Host: env.Host, Token: env.Token,
 		Owner: env.Owner, Repo: env.Repo,
+		Limit: 100,
 	})
 	require.NoError(t, err)
 	assert.Contains(t, listOut.String(), "integration-test-label")
