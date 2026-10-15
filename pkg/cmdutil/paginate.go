@@ -24,7 +24,7 @@ func FetchPages[T any](client *http.Client, rawURL, token string, limit int, dec
 		return nil, err
 	}
 
-	var all []T
+	all := []T{}
 	for page := 1; ; page++ {
 		pageSize := MaxPageSize
 		if limit > 0 && limit-len(all) < pageSize {

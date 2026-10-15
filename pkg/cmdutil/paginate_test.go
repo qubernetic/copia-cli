@@ -183,3 +183,15 @@ func TestFetchPages_DecodeError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "parsing response")
 }
+
+func TestFetchPages_NoItemsReturnsEmptySlice(t *testing.T) {
+	// Callers print the result as JSON; an empty list must stay [] and not
+	// become null.
+	reg := &httpmock.Registry{}
+	reg.Register(httpmock.REST("GET", "/issues"), httpmock.StringResponse(http.StatusOK, `[]`))
+
+	items, err := FetchPages(&http.Client{Transport: reg}, pageURL, "test-token", 30, decodeItems)
+	require.NoError(t, err)
+	assert.NotNil(t, items)
+	assert.Empty(t, items)
+}
