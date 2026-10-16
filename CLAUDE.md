@@ -29,6 +29,8 @@ just down         # Stop containers
 
 **Claude Code runs on the host** — never inside the devcontainer. Always launch from a host terminal.
 
+**Horde sandbox:** `.devcontainer/compose.yaml` (service `dev`, image `.devcontainer/Dockerfile`) is the environment `horde-dev up` starts on the sandbox; run commands there with `horde-dev run go test ./...`, `horde-dev run golangci-lint run ./...`. It is separate from the local workflow above, which it does not change.
+
 ## Architecture
 
 Follows the `gh` CLI repository structure (`github.com/cli/cli`).

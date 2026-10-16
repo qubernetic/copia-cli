@@ -92,6 +92,8 @@ copia-cli/
 ├── test/integration/              # Live API integration tests
 ├── .github/workflows/             # CI, CodeQL, release, govulncheck, bump-go
 ├── .devcontainer/                 # Docker Compose-based dev environment
+│   ├── compose.yaml               # Sandbox dev service for horde-dev (runs as 1000:100)
+│   └── Dockerfile                 # Sandbox dev image with pinned golangci-lint
 ├── .goreleaser.yml                # Cross-platform release config
 ├── justfile                       # Command runner (build, test, lint, dev)
 ├── Dockerfile                     # Go 1.26.9 dev image
