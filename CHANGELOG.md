@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `.devcontainer/compose.yaml` adds a `dev` service for the Horde sandbox (`horde-dev`): it runs as `1000:100`, keeps the Go caches and `HOME` on named volumes, is limited to 2 GB of memory and ships golangci-lint v2.15.0. bump-go now also updates `.devcontainer/Dockerfile`. The local workflow (`docker-compose*.yml`, `devcontainer.json`, `justfile`) is unchanged (#257)
 - All workflows except bump-go read the Go version from `go.mod` instead of a hard-coded `1.26` (#228)
 - bump-go opens its pull requests with a GitHub App token, so CI runs on them; its actions are pinned by commit SHA and its `GITHUB_TOKEN` is read-only. Setup and key rotation are in `docs/ci.md` (#238)
 - CI measures coverage across packages (`go test -coverpkg=./...`), so code tested from another package counts; unit tests now run every command end to end, `repo clone` and `pr checkout` against a real local git repository, and test coverage is raised to 60% or more (#165)

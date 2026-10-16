@@ -38,7 +38,7 @@ jobs:
         run: |
           go mod edit -go=${{ steps.check.outputs.latest }}
           go mod tidy
-          sed -i "s|^FROM golang:.*-alpine|FROM golang:${{ steps.check.outputs.latest }}-alpine|" Dockerfile
+          sed -i "s|^FROM golang:.*-alpine|FROM golang:${{ steps.check.outputs.latest }}-alpine|" Dockerfile .devcontainer/Dockerfile
 
       # A PR opened with GITHUB_TOKEN triggers no workflows; the App token
       # makes ci.yml run on it. Setup: docs/ci.md.
@@ -67,5 +67,5 @@ jobs:
 
             - Current: `${{ steps.check.outputs.current }}`
             - Latest: `${{ steps.check.outputs.latest }}`
-            - Files: `go.mod`, `Dockerfile`
+            - Files: `go.mod`, `Dockerfile`, `.devcontainer/Dockerfile`
           base: develop
