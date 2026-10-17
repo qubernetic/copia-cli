@@ -92,7 +92,7 @@ just integration
 
 #### Coverage gate
 
-CI runs the unit tests through [gotestsum](https://github.com/gotestyourself/gotestsum) and uploads two files to Codecov: the coverage profile (`coverage.out`) and the JUnit test report (`unit.junit.xml`) for Codecov Test Analytics, which tracks failing and flaky tests. The repository is public, so the upload needs no token.
+CI runs the unit tests through [gotestsum](https://github.com/gotestyourself/gotestsum) and uploads two files to Codecov: the coverage profile (`coverage.out`) and the JUnit test report (`unit.junit.xml`) for Codecov Test Analytics, which tracks failing and flaky tests. The upload authenticates with GitHub OIDC (`use_oidc: true`, with `id-token: write` on the `test` job), so no Codecov token is stored in the repository. GitHub gives no OIDC token to workflows on fork or Dependabot PRs, so those PRs get no Codecov upload and no Codecov statuses.
 
 Every PR gets two Codecov statuses. Their targets come from the organisation's Codecov configuration; `codecov.yml` repeats the patch target and must not lower either gate:
 
