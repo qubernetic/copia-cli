@@ -11,6 +11,7 @@ docs/site/manual/copia-cli_*.md
 
 # IDE
 .idea/
+.claude/
 *.swp
 *.swo
 *~
