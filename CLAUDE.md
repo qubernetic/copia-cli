@@ -31,6 +31,8 @@ just down         # Stop containers
 
 **Horde sandbox:** `.devcontainer/compose.yaml` (service `dev`, image `.devcontainer/Dockerfile`) is the environment `horde-dev up` starts on the sandbox; run commands there with `horde-dev run go test ./...`, `horde-dev run golangci-lint run ./...`. It is separate from the local workflow above, which it does not change.
 
+**CI coverage:** `ci.yml` runs the unit tests through gotestsum and uploads `coverage.out` and `unit.junit.xml` (Test Analytics) to Codecov without a token. PRs get `codecov/patch` (80% of changed lines) and `codecov/project` (at most 1% drop); never soften them in `codecov.yml`. See `CONTRIBUTING.md`.
+
 ## Architecture
 
 Follows the `gh` CLI repository structure (`github.com/cli/cli`).
