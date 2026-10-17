@@ -12,6 +12,9 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -21,14 +24,25 @@ jobs:
       - name: Build
         run: go build -ldflags "-s -w" -o bin/copia-cli ./cmd/copia-cli
 
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@v1.13.0
+
       - name: Test
-        run: go test -coverpkg=./... -coverprofile=coverage.out ./...
+        run: gotestsum --junitfile unit.junit.xml -- -coverpkg=./... -coverprofile=coverage.out ./...
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v7
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: coverage.out
-          token: ${{ secrets.CODECOV_TOKEN }}
+          use_oidc: true
+
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          files: unit.junit.xml
+          report_type: test_results
+          use_oidc: true
 
       - name: Ensure go.mod is tidy
         run: |

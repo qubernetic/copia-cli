@@ -92,11 +92,16 @@ just integration
 
 #### Coverage gate
 
-CI uploads coverage to Codecov, and `codecov.yml` sets one status on every PR: **`codecov/patch`** fails when less than 80% of the PR's new or changed lines are covered.
+CI runs the unit tests through [gotestsum](https://github.com/gotestyourself/gotestsum) and uploads two files to Codecov: the coverage profile (`coverage.out`) and the JUnit test report (`unit.junit.xml`) for Codecov Test Analytics, which tracks failing and flaky tests. The upload authenticates with GitHub OIDC (`use_oidc: true`, with `id-token: write` on the `test` job), so no Codecov token is stored in the repository. GitHub gives no OIDC token to workflows on fork or Dependabot PRs, so those PRs get no Codecov upload and no Codecov statuses.
 
-There is no `codecov/project` status (a gate on total coverage): Codecov offers it only on the Pro plan, which this repository does not use.
+Every PR gets two Codecov statuses. Their targets come from the organisation's Codecov configuration; `codecov.yml` repeats the patch target and must not lower either gate:
 
-The status is not a required check in branch protection, so a red status does not block the merge on its own; treat it as a review finding. Dependabot PRs get no Codecov status at all, because Dependabot has no access to the `CODECOV_TOKEN` secret that the upload needs.
+- **`codecov/patch`** fails when less than 80% of the PR's new or changed lines are covered.
+- **`codecov/project`** fails when the PR lowers total coverage by more than 1% against the base branch.
+
+Code that cannot sensibly be tested may be excluded in `codecov.yml` `ignore:`, each entry with a comment that gives the reason.
+
+The statuses are not required checks in branch protection, so a red status does not block the merge on its own; treat it as a review finding.
 
 ## Project Structure
 

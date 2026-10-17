@@ -28,5 +28,6 @@ thumbs.db
 # Test
 *.test
 coverage.out
+unit.junit.xml
 AUDIT.md
 docs/superpowers/
