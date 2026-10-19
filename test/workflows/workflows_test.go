@@ -1,13 +1,15 @@
-// Package workflows checks the GitHub Actions workflows under .github/workflows
-// and the composite actions under .github/actions.
+// Package workflows checks the GitHub Actions workflows under .github/workflows,
+// the composite actions under .github/actions and every local action they use.
 package workflows
 
 import (
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -38,27 +40,52 @@ type defaults struct {
 	} `yaml:"run"`
 }
 
-// actionFile covers both a workflow (jobs) and a composite action (runs).
+// actionFile covers both a workflow (jobs) and an action (runs).
 type actionFile struct {
 	Defaults defaults `yaml:"defaults"`
 	Jobs     map[string]struct {
 		Defaults defaults `yaml:"defaults"`
+		Uses     string   `yaml:"uses"`
 		Steps    []step   `yaml:"steps"`
 	} `yaml:"jobs"`
 	Runs struct {
-		Steps []step `yaml:"steps"`
+		Using      string   `yaml:"using"`
+		Steps      []step   `yaml:"steps"`
+		Args       []string `yaml:"args"`
+		Entrypoint string   `yaml:"entrypoint"`
 	} `yaml:"runs"`
 }
 
-// scriptExpressions returns one message per step of a workflow or composite
-// action whose script source contains `${{`: a `run:` block, or the `script:`
-// input of actions/github-script.
-func scriptExpressions(file string, data []byte) ([]string, error) {
+func parseActionFile(file string, data []byte) (actionFile, error) {
 	var f actionFile
 	if err := yaml.Unmarshal(data, &f); err != nil {
-		return nil, fmt.Errorf("%s: %w", file, err)
+		return f, fmt.Errorf("%s: %w", file, err)
 	}
+	return f, nil
+}
 
+func sortedJobs(f actionFile) []string {
+	names := make([]string, 0, len(f.Jobs))
+	for name := range f.Jobs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// scriptExpressions returns one message per place in a workflow or action
+// whose script source contains `${{`: a `run:` block, the `script:` input of
+// actions/github-script, or a docker action's `runs.args` entry or
+// `runs.entrypoint`.
+func scriptExpressions(file string, data []byte) ([]string, error) {
+	f, err := parseActionFile(file, data)
+	if err != nil {
+		return nil, err
+	}
+	return expressions(file, f), nil
+}
+
+func expressions(file string, f actionFile) []string {
 	var offenders []string
 	check := func(where string, steps []step) {
 		for i, s := range steps {
@@ -71,56 +98,148 @@ func scriptExpressions(file string, data []byte) ([]string, error) {
 		}
 	}
 
-	jobNames := make([]string, 0, len(f.Jobs))
-	for name := range f.Jobs {
-		jobNames = append(jobNames, name)
-	}
-	sort.Strings(jobNames)
-	for _, name := range jobNames {
+	for _, name := range sortedJobs(f) {
 		check(fmt.Sprintf("job %q", name), f.Jobs[name].Steps)
 	}
 	check("runs", f.Runs.Steps)
-	return offenders, nil
+
+	if strings.EqualFold(f.Runs.Using, "docker") {
+		for i, arg := range f.Runs.Args {
+			if strings.Contains(arg, "${{") {
+				offenders = append(offenders, fmt.Sprintf("%s: runs.args entry %d contains ${{; pass the value through env", file, i+1))
+			}
+		}
+		if strings.Contains(f.Runs.Entrypoint, "${{") {
+			offenders = append(offenders, fmt.Sprintf("%s: runs.entrypoint contains ${{; pass the value through env", file))
+		}
+	}
+	return offenders
 }
 
 func isGitHubScript(uses string) bool {
 	return strings.HasPrefix(strings.ToLower(uses), "actions/github-script@")
 }
 
+// localUses returns every `uses: ./<path>` of a workflow or action: the steps
+// of its jobs and of `runs`, and reusable workflows called by a job.
+func localUses(f actionFile) []string {
+	var uses []string
+	add := func(u string) {
+		if strings.HasPrefix(u, "./") {
+			uses = append(uses, u)
+		}
+	}
+	for _, name := range sortedJobs(f) {
+		add(f.Jobs[name].Uses)
+		for _, s := range f.Jobs[name].Steps {
+			add(s.Uses)
+		}
+	}
+	for _, s := range f.Runs.Steps {
+		add(s.Uses)
+	}
+	return uses
+}
+
+// localTargets resolves `uses: ./<path>` to the files it runs, relative to the
+// repository root: the reusable workflow itself, or <path>/action.yml and
+// <path>/action.yaml, whichever exist. It returns a message instead when the
+// path leaves the repository or names no file.
+func localTargets(repo, file, uses string) ([]string, string) {
+	dir := path.Clean(uses)
+	if dir == ".." || strings.HasPrefix(dir, "../") {
+		return nil, fmt.Sprintf("%s: uses %s, which points outside the repository", file, uses)
+	}
+	exists := func(name string) bool {
+		_, err := os.Stat(filepath.Join(repo, filepath.FromSlash(name)))
+		return err == nil
+	}
+
+	if ext := path.Ext(dir); ext == ".yml" || ext == ".yaml" {
+		if !exists(dir) {
+			return nil, fmt.Sprintf("%s: uses %s, but %s does not exist", file, uses, dir)
+		}
+		return []string{dir}, ""
+	}
+
+	var targets []string
+	for _, name := range []string{"action.yml", "action.yaml"} {
+		if exists(path.Join(dir, name)) {
+			targets = append(targets, path.Join(dir, name))
+		}
+	}
+	if len(targets) == 0 {
+		return nil, fmt.Sprintf("%s: uses %s, but %s has no action.yml or action.yaml", file, uses, dir)
+	}
+	return targets, ""
+}
+
+// scanRepo checks every workflow under .github/workflows, every action under
+// .github/actions/* and every local action or reusable workflow they use,
+// following local actions that use local actions in turn. It returns one
+// message per expression in script source and per `uses: ./<path>` that names
+// no file.
+func scanRepo(repo string) ([]string, error) {
+	var queue []string
+	for _, pattern := range []string{".github/workflows/*.y*ml", ".github/actions/*/action.y*ml"} {
+		matches, err := filepath.Glob(filepath.Join(repo, filepath.FromSlash(pattern)))
+		if err != nil {
+			return nil, err
+		}
+		for _, m := range matches {
+			rel, err := filepath.Rel(repo, m)
+			if err != nil {
+				return nil, err
+			}
+			queue = append(queue, filepath.ToSlash(rel))
+		}
+	}
+	if len(queue) == 0 {
+		return nil, errors.New("no workflow files found")
+	}
+
+	seen := map[string]bool{}
+	var offenders []string
+	for len(queue) > 0 {
+		file := queue[0]
+		queue = queue[1:]
+		if seen[file] {
+			continue
+		}
+		seen[file] = true
+
+		data, err := os.ReadFile(filepath.Join(repo, filepath.FromSlash(file)))
+		if err != nil {
+			return nil, err
+		}
+		f, err := parseActionFile(file, data)
+		if err != nil {
+			return nil, err
+		}
+		offenders = append(offenders, expressions(file, f)...)
+		for _, uses := range localUses(f) {
+			targets, problem := localTargets(repo, file, uses)
+			if problem != "" {
+				offenders = append(offenders, problem)
+			}
+			queue = append(queue, targets...)
+		}
+	}
+	return offenders, nil
+}
+
 // TestScriptsHaveNoExpressions keeps values from outside the workflow file
 // out of script source: a `${{ }}` inside `run:` or a github-script `script:`
 // is pasted into the script before the shell or Node parses it. Pass the
 // value through the step's `env:` and read it from the environment instead.
+// The check covers every local action a workflow uses, at any depth.
 func TestScriptsHaveNoExpressions(t *testing.T) {
-	root := filepath.Join("..", "..", ".github")
-	workflows, err := filepath.Glob(filepath.Join(root, "workflows", "*.y*ml"))
+	offenders, err := scanRepo(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(workflows) == 0 {
-		t.Fatal("no workflow files found")
-	}
-	actions, err := filepath.Glob(filepath.Join(root, "actions", "*", "action.y*ml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	for _, file := range append(workflows, actions...) {
-		data, err := os.ReadFile(file)
-		if err != nil {
-			t.Fatal(err)
-		}
-		name, err := filepath.Rel(root, file)
-		if err != nil {
-			t.Fatal(err)
-		}
-		offenders, err := scriptExpressions(name, data)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, o := range offenders {
-			t.Error(o)
-		}
+	for _, o := range offenders {
+		t.Error(o)
 	}
 }
 
@@ -195,6 +314,30 @@ runs:
         VERSION: ${{ inputs.version }}
       run: echo "$VERSION"
 `, 0},
+		{"docker action args with expression", `
+runs:
+  using: docker
+  image: Dockerfile
+  args:
+    - --name
+    - ${{ inputs.name }}
+`, 1},
+		{"docker action entrypoint with expression", `
+runs:
+  using: docker
+  image: Dockerfile
+  entrypoint: ${{ inputs.entrypoint }}
+`, 1},
+		{"docker action without expression", `
+runs:
+  using: docker
+  image: Dockerfile
+  entrypoint: /entrypoint.sh
+  args:
+    - --name
+  env:
+    NAME: ${{ inputs.name }}
+`, 0},
 	}
 
 	for _, tt := range tests {
@@ -205,6 +348,128 @@ runs:
 			}
 			if len(got) != tt.want {
 				t.Errorf("scriptExpressions() = %q, want %d offenders", got, tt.want)
+			}
+		})
+	}
+}
+
+// writeRepo writes files (path relative to the repository root -> content)
+// into a temporary directory and returns its path.
+func writeRepo(t *testing.T, files map[string]string) string {
+	t.Helper()
+	repo := t.TempDir()
+	for name, content := range files {
+		path := filepath.Join(repo, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return repo
+}
+
+const usesNested = `
+jobs:
+  build:
+    steps:
+      - uses: ./nested/a/b
+`
+
+func TestScanRepo(t *testing.T) {
+	tests := []struct {
+		name  string
+		files map[string]string
+		want  []string
+	}{
+		{"nested local action with expression", map[string]string{
+			".github/workflows/ci.yml": usesNested,
+			"nested/a/b/action.yml": `
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: echo "${{ inputs.version }}"
+`,
+		}, []string{"nested/a/b/action.yml: runs step 1"}},
+		{"nested local action without expression", map[string]string{
+			".github/workflows/ci.yml": usesNested,
+			"nested/a/b/action.yaml": `
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: echo "$VERSION"
+`,
+		}, nil},
+		{"missing local action", map[string]string{
+			".github/workflows/ci.yml": usesNested,
+		}, []string{".github/workflows/ci.yml: uses ./nested/a/b, but nested/a/b has no action.yml or action.yaml"}},
+		{"local action that uses a local action", map[string]string{
+			".github/workflows/ci.yml": `
+jobs:
+  build:
+    steps:
+      - uses: ./.github/actions/outer
+`,
+			".github/actions/outer/action.yml": `
+runs:
+  using: composite
+  steps:
+    - uses: ./
+`,
+			"action.yml": `
+runs:
+  using: docker
+  image: Dockerfile
+  args:
+    - ${{ inputs.name }}
+`,
+		}, []string{"action.yml: runs.args entry 1"}},
+		{"local action outside the repository", map[string]string{
+			".github/workflows/ci.yml": `
+jobs:
+  build:
+    steps:
+      - uses: ./../other
+`,
+		}, []string{".github/workflows/ci.yml: uses ./../other, which points outside the repository"}},
+		{"reusable workflow", map[string]string{
+			".github/workflows/ci.yml": `
+jobs:
+  call:
+    uses: ./.github/workflows/reusable.yml
+  missing:
+    uses: ./.github/workflows/missing.yml
+`,
+			".github/workflows/reusable.yml": `
+jobs:
+  build:
+    steps:
+      - uses: ./nested/a/b
+`,
+		}, []string{
+			".github/workflows/ci.yml: uses ./.github/workflows/missing.yml, but .github/workflows/missing.yml does not exist",
+			".github/workflows/reusable.yml: uses ./nested/a/b, but nested/a/b has no action.yml",
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := scanRepo(writeRepo(t, tt.files))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("scanRepo() = %q, want %d offenders", got, len(tt.want))
+			}
+			for i, want := range tt.want {
+				if !strings.HasPrefix(got[i], want) {
+					t.Errorf("scanRepo()[%d] = %q, want prefix %q", i, got[i], want)
+				}
 			}
 		})
 	}
