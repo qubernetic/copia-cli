@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Go 1.26.2 → 1.26.9, fixes GO-2026-6599, GO-2026-6600, GO-2026-6603, GO-2026-6605, GO-2026-6607, GO-2026-6608, GO-2026-6610, GO-2026-6611, GO-2026-6612, GO-2026-6613 and GO-2026-6617 in the standard library (#228)
 - golang.org/x/crypto 0.49.0 → 0.52.0, fixes GO-2026-5018; also pulls golang.org/x/sys 0.42.0 → 0.45.0 (#228)
+- aur and copr fail when the version taken from the release tag does not match `^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$` (`script/check-release-version.sh`), and aur fails when a checksum from `checksums.txt` does not match `^[0-9a-f]{64}$` (`script/check-sha256.sh`), so a malformed tag or checksum never reaches `PKGBUILD`, `.SRCINFO` or the RPM spec. aur writes its SSH key under `umask 077` (#273)
+
+### Fixed
+
+- `script/check-go-version.sh` prints a rejected value with the workflow-command encoding (`%` as `%25`, CR as `%0D`, LF as `%0A`), so a value with a line break can no longer put a second workflow command into the runner log. It also rejects version components with a leading zero or more than four digits, such as `01.27` (#271)
 
 ### Changed
 
@@ -29,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Every workflow sets a read-only `GITHUB_TOKEN` at the top level and widens it per job only where a step needs it; every action is pinned by commit SHA with its tag in a comment (`winget-releaser` moves from `main` to the same commit as `v2`). The scheduled integration test no longer holds `issues: write`: a separate `report-failure` job, which checks out no code, opens the failure issue. The rule is in `CONTRIBUTING.md` (#266)
 - bump-go, aur and copr pass secrets, step outputs and `github.ref_name` to their `run:` steps through `env:` and quoted shell variables instead of `${{ }}` in the script. bump-go fails when the version read from go.dev does not match `^[0-9]+\.[0-9]+(\.[0-9]+)?$` (`script/check-go-version.sh`). `go test ./...` fails on a `${{` inside any `run:` block; the rule is in `CONTRIBUTING.md` (#268)
 - The workflow expression check also fails on a `${{` in the `script:` input of an `actions/github-script` step, and scans the steps of composite actions under `.github/actions/*/action.yml` (#270)
+- Only a repository admin can create a `v*` release tag (new `Release tag creation` ruleset); pushed `v*` tags stay undeletable and immovable for everyone. `docs/releasing.md` and `CONTRIBUTING.md` state the rule (#272)
 
 ### Fixed
 

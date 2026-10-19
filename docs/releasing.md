@@ -27,6 +27,8 @@
    $ git push origin vX.Y.Z
    ```
 
+   Only a repository admin can create a `v*` tag (ruleset `Release tag creation`, Repository admin bypass). Once pushed, a `v*` tag cannot be deleted or moved by anyone, admins included (ruleset `Protected release tags`). Check the commit before you push: a wrong tag means a new patch version.
+
 6. The tag push triggers the [Release workflow](.github/workflows/release.yml) which:
 
    - Builds binaries for Linux, macOS, and Windows
@@ -41,6 +43,8 @@
    - [COPR](.github/workflows/copr.yml) — builds and publishes RPM to Fedora COPR
    - [AUR](.github/workflows/aur.yml) — updates `copia-cli-bin` on AUR
    - [Snap](.github/workflows/snap.yml) — builds and publishes to the Snap Store
+
+   COPR and AUR stop before they publish anything unless the tag is `vX.Y.Z` or `vX.Y.Z-<pre-release>` (letters, digits and dots, for example `v1.2.3-rc.1`), and AUR also stops when a Linux checksum in `checksums.txt` is not a SHA-256 hex string.
 
 8. Back-merge `main` into `develop`:
 
