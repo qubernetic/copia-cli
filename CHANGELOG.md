@@ -16,12 +16,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Go 1.26.2 → 1.26.9, fixes GO-2026-6599, GO-2026-6600, GO-2026-6603, GO-2026-6605, GO-2026-6607, GO-2026-6608, GO-2026-6610, GO-2026-6611, GO-2026-6612, GO-2026-6613 and GO-2026-6617 in the standard library (#228)
 - golang.org/x/crypto 0.49.0 → 0.52.0, fixes GO-2026-5018; also pulls golang.org/x/sys 0.42.0 → 0.45.0 (#228)
 - aur and copr fail when the version taken from the release tag does not match `^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$` (`script/check-release-version.sh`), and aur fails when a checksum from `checksums.txt` does not match `^[0-9a-f]{64}$` (`script/check-sha256.sh`), so a malformed tag or checksum never reaches `PKGBUILD`, `.SRCINFO` or the RPM spec. aur writes its SSH key under `umask 077` (#273)
+- aur pushes to AUR only when the host presents the Ed25519 key pinned in `.github/aur_known_hosts` (`StrictHostKeyChecking=yes`), instead of trusting whatever key `ssh-keyscan` returned at run time; no workflow may use `ssh-keyscan` (#281)
 
 ### Fixed
 
 - `test/workflows` checks every local action a workflow uses, not only `.github/actions/*/action.yml`: it follows each `uses: ./<path>` (also from one local action to the next, and to reusable workflows), fails when the path has no `action.yml` or `action.yaml`, and flags `${{` in a docker action's `runs.args` and `runs.entrypoint` (#279)
 - `script/check-release-version.sh` accepts only `X.Y.Z`, so aur and copr reject a pre-release version such as `1.2.3-rc.1`, which makepkg and rpmbuild cannot package (#282)
 - `script/check-go-version.sh` prints a rejected value with the workflow-command encoding (`%` as `%25`, CR as `%0D`, LF as `%0A`), so a value with a line break can no longer put a second workflow command into the runner log. It also rejects version components with a leading zero or more than four digits, such as `01.27` (#271)
+- `script/check-sha256.sh` and `script/check-release-version.sh` print a rejected value with the same workflow-command encoding, so duplicate lines in `checksums.txt` can no longer put a second workflow command into the runner log. All three `script/check-*.sh` guards share the encoding in `script/lib/workflow-escape.sh` (#278)
 
 ### Changed
 

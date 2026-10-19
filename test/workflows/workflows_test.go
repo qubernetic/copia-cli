@@ -3,6 +3,8 @@
 package workflows
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
@@ -531,6 +533,28 @@ func TestCheckSHA256(t *testing.T) {
 			}
 		})
 	}
+
+	// Two matching lines in checksums.txt yield a value with a newline, which
+	// must not reach the runner log as a line of its own.
+	for _, tc := range []struct{ sum, printed string }{
+		{valid + "\n", `"` + valid + `%0A"`},
+		{valid + "\n" + valid, `"` + valid + `%0A` + valid + `"`},
+		{valid + "\n\n" + valid, `"` + valid + `%0A%0A` + valid + `"`},
+		{valid + "\n::add-mask::x", `"` + valid + `%0A::add-mask::x"`},
+		{valid + "\r", `"` + valid + `%0D"`},
+		{valid + "%0A", `"` + valid + `%250A"`},
+	} {
+		t.Run("escapes "+tc.sum, func(t *testing.T) {
+			out, err := exec.Command(script, tc.sum).CombinedOutput()
+			if err == nil {
+				t.Fatalf("check-sha256.sh %q succeeded, want failure", tc.sum)
+			}
+			want := "::error::not a sha256 checksum: " + tc.printed + "\n"
+			if string(out) != want {
+				t.Errorf("check-sha256.sh %q: output %q, want %q", tc.sum, out, want)
+			}
+		})
+	}
 }
 
 // TestChecksumsAreChecked keeps the checksums out of PKGBUILD and .SRCINFO
@@ -555,6 +579,72 @@ func TestAURKeyIsPrivate(t *testing.T) {
 	want := `(umask 077; printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur)`
 	if !strings.Contains(run, want) {
 		t.Errorf("aur.yml: Publish to AUR does not write the key with %s", want)
+	}
+}
+
+// TestNoKeyscan keeps workflows from trusting whatever host key answers at run
+// time; pin the key in a committed known_hosts file instead.
+func TestNoKeyscan(t *testing.T) {
+	files, err := filepath.Glob(filepath.Join("..", "..", ".github", "workflows", "*.y*ml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) == 0 {
+		t.Fatal("no workflow files found")
+	}
+
+	for _, file := range files {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), "ssh-keyscan") {
+			t.Errorf("%s: contains ssh-keyscan; pin the host key in a committed known_hosts file", filepath.Base(file))
+		}
+	}
+}
+
+// aurEd25519Fingerprint is the AUR host key fingerprint published on
+// https://aur.archlinux.org (home page, "SSH fingerprints").
+const aurEd25519Fingerprint = "SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4"
+
+// TestAURHostKeyIsPinned makes aur.yml push only to the host whose key is in
+// .github/aur_known_hosts, and keeps that key the one AUR publishes.
+func TestAURHostKeyIsPinned(t *testing.T) {
+	run := stepRun(t, "aur.yml", "Publish to AUR")
+	for _, want := range []string{
+		`-o UserKnownHostsFile=$GITHUB_WORKSPACE/.github/aur_known_hosts`,
+		`-o StrictHostKeyChecking=yes`,
+	} {
+		if !strings.Contains(run, want) {
+			t.Errorf("aur.yml: Publish to AUR does not pass %s to ssh", want)
+		}
+	}
+
+	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "aur_known_hosts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keys int
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 3 || fields[0] != "aur.archlinux.org" || fields[1] != "ssh-ed25519" {
+			t.Errorf("aur_known_hosts: line %q is not \"aur.archlinux.org ssh-ed25519 <key>\"", line)
+			continue
+		}
+		blob, err := base64.StdEncoding.DecodeString(fields[2])
+		if err != nil {
+			t.Errorf("aur_known_hosts: key is not base64: %v", err)
+			continue
+		}
+		sum := sha256.Sum256(blob)
+		if got := "SHA256:" + base64.RawStdEncoding.EncodeToString(sum[:]); got != aurEd25519Fingerprint {
+			t.Errorf("aur_known_hosts: key fingerprint %s, want %s", got, aurEd25519Fingerprint)
+		}
+		keys++
+	}
+	if keys != 1 {
+		t.Errorf("aur_known_hosts: %d valid keys, want 1", keys)
 	}
 }
 
@@ -609,6 +699,75 @@ func TestCheckGoVersion(t *testing.T) {
 	}
 }
 
+// TestWorkflowEscape pins the encoding of script/lib/workflow-escape.sh for
+// values with more than one line break, CR or %.
+func TestWorkflowEscape(t *testing.T) {
+	lib := filepath.Join("..", "..", "script", "lib", "workflow-escape.sh")
+
+	for _, tc := range []struct{ in, want string }{
+		{"a\n", "a\n"},
+		{"a\n\nb\n", "a%0A%0Ab\n"},
+		{"a\nb\nc\n", "a%0Ab%0Ac\n"},
+		{"a\r\nb\r\nc\n", "a%0D%0Ab%0D%0Ac\n"},
+		{"a\rb\rc\n", "a%0Db%0Dc\n"},
+		{"a%%b\n", "a%25%25b\n"},
+		{"\n\n\n", "%0A%0A\n"},
+	} {
+		t.Run(fmt.Sprintf("%q", tc.in), func(t *testing.T) {
+			cmd := exec.Command("sh", "-c", `. "$1"; workflow_escape`, "sh", lib)
+			cmd.Stdin = strings.NewReader(tc.in)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("workflow_escape %q: %v\n%s", tc.in, err, out)
+			}
+			if string(out) != tc.want {
+				t.Errorf("workflow_escape %q: output %q, want %q", tc.in, out, tc.want)
+			}
+		})
+	}
+}
+
+// TestCheckScriptsShareEscape keeps the workflow-command encoding in one
+// place: every script/check-*.sh sources script/lib/workflow-escape.sh and
+// does not carry its own copy. It also runs each guard on a value with every
+// line break and a %, so a new guard is checked without a table of its own.
+func TestCheckScriptsShareEscape(t *testing.T) {
+	scripts, err := filepath.Glob(filepath.Join("..", "..", "script", "check-*.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(scripts) == 0 {
+		t.Fatal("no script/check-*.sh found")
+	}
+	for _, script := range scripts {
+		data, err := os.ReadFile(script)
+		if err != nil {
+			t.Fatal(err)
+		}
+		src := string(data)
+		name := filepath.Base(script)
+		if !strings.Contains(src, `. "$(dirname "$0")/lib/workflow-escape.sh"`) {
+			t.Errorf("%s does not source lib/workflow-escape.sh", name)
+		}
+		if !strings.Contains(src, "| workflow_escape >&2") {
+			t.Errorf("%s does not print its error through workflow_escape", name)
+		}
+		if strings.Contains(src, "%0A") {
+			t.Errorf("%s carries its own copy of the encoding", name)
+		}
+
+		value := "1\n::add-mask::x\r::add-mask::y\r\n::add-mask::z%0A\n"
+		out, err := exec.Command(script, value).CombinedOutput()
+		if err == nil {
+			t.Errorf("%s %q succeeded, want failure", name, value)
+		}
+		if !strings.HasPrefix(string(out), "::error::") || strings.Count(string(out), "\n") != 1 ||
+			!strings.HasSuffix(string(out), "\n") || strings.Contains(string(out), "\r") {
+			t.Errorf("%s %q: output %q, want one ::error:: line", name, value, out)
+		}
+	}
+}
+
 // TestCheckReleaseVersion covers the guard aur.yml and copr.yml run on the
 // version taken from the release tag before it reaches GITHUB_OUTPUT, PKGBUILD
 // and the RPM spec. Only X.Y.Z passes: makepkg rejects a pkgver and rpmbuild a
@@ -633,6 +792,28 @@ func TestCheckReleaseVersion(t *testing.T) {
 			}
 			if !strings.Contains(string(out), "::error::not a release version") {
 				t.Errorf("check-release-version.sh %q: output %q does not name the error", version, out)
+			}
+		})
+	}
+
+	// The runner parses every log line as a possible workflow command, so a
+	// rejected value must not reach the log with a raw line break or %.
+	for _, tc := range []struct{ version, printed string }{
+		{"1.2.3\n", `"1.2.3%0A"`},
+		{"1.2.3\nx", `"1.2.3%0Ax"`},
+		{"1.2.3\n\nx", `"1.2.3%0A%0Ax"`},
+		{"1.2.3\n::add-mask::x", `"1.2.3%0A::add-mask::x"`},
+		{"1.2.3\r", `"1.2.3%0D"`},
+		{"1.2.3%0A", `"1.2.3%250A"`},
+	} {
+		t.Run("escapes "+tc.version, func(t *testing.T) {
+			out, err := exec.Command(script, tc.version).CombinedOutput()
+			if err == nil {
+				t.Fatalf("check-release-version.sh %q succeeded, want failure", tc.version)
+			}
+			want := "::error::not a release version: " + tc.printed + "\n"
+			if string(out) != want {
+				t.Errorf("check-release-version.sh %q: output %q, want %q", tc.version, out, want)
 			}
 		})
 	}
