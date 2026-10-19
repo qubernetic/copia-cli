@@ -16,8 +16,8 @@ jobs:
       - name: Install copr-cli
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3-pip rpm
-          pip3 install copr-cli
+          sudo apt-get install -y python3-pip python3-setuptools python3-wheel rpm
+          pip3 install --require-hashes --no-build-isolation -r rpmbuild/requirements.txt
 
       - name: Configure copr-cli
         env:
