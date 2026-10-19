@@ -95,6 +95,47 @@ func TestReleaseVersionIsChecked(t *testing.T) {
 	}
 }
 
+// TestCheckSHA256 covers the guard aur.yml runs on each checksum read from
+// checksums.txt before it reaches GITHUB_OUTPUT and PKGBUILD.
+func TestCheckSHA256(t *testing.T) {
+	script := filepath.Join("..", "..", "script", "check-sha256.sh")
+	valid := strings.Repeat("0123456789abcdef", 4)
+
+	t.Run("accepts a sha256", func(t *testing.T) {
+		out, err := exec.Command(script, valid).CombinedOutput()
+		if err != nil {
+			t.Errorf("check-sha256.sh %q: %v\n%s", valid, err, out)
+		}
+	})
+
+	for _, sum := range []string{"", valid[:63], valid + "0", strings.ToUpper(valid), valid[:63] + "g", valid[:62] + "')", valid + "\n", valid + "\n" + valid} {
+		t.Run("rejects "+sum, func(t *testing.T) {
+			out, err := exec.Command(script, sum).CombinedOutput()
+			if err == nil {
+				t.Fatalf("check-sha256.sh %q succeeded, want failure", sum)
+			}
+			if !strings.Contains(string(out), "::error::not a sha256 checksum") {
+				t.Errorf("check-sha256.sh %q: output %q does not name the error", sum, out)
+			}
+		})
+	}
+}
+
+// TestChecksumsAreChecked keeps the checksums out of PKGBUILD and .SRCINFO
+// unless they passed script/check-sha256.sh.
+func TestChecksumsAreChecked(t *testing.T) {
+	run := stepRun(t, "aur.yml", "Get checksums")
+	for _, v := range []string{"SHA_X86", "SHA_ARM"} {
+		guard := strings.Index(run, `script/check-sha256.sh "$`+v+`"`)
+		output := strings.Index(run, `=$`+v+`" >> "$GITHUB_OUTPUT"`)
+		if guard < 0 {
+			t.Errorf("aur.yml: Get checksums does not run script/check-sha256.sh \"$%s\"", v)
+		} else if output < guard {
+			t.Errorf("aur.yml: Get checksums does not write $%s to GITHUB_OUTPUT after the guard", v)
+		}
+	}
+}
+
 // TestCheckGoVersion covers the guard bump-go.yml runs on the version it reads
 // from go.dev before writing it to GITHUB_OUTPUT.
 func TestCheckGoVersion(t *testing.T) {
