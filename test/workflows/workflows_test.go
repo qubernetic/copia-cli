@@ -3,6 +3,8 @@
 package workflows
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"os/exec"
@@ -311,6 +313,72 @@ func TestAURKeyIsPrivate(t *testing.T) {
 	want := `(umask 077; printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur)`
 	if !strings.Contains(run, want) {
 		t.Errorf("aur.yml: Publish to AUR does not write the key with %s", want)
+	}
+}
+
+// TestNoKeyscan keeps workflows from trusting whatever host key answers at run
+// time; pin the key in a committed known_hosts file instead.
+func TestNoKeyscan(t *testing.T) {
+	files, err := filepath.Glob(filepath.Join("..", "..", ".github", "workflows", "*.y*ml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) == 0 {
+		t.Fatal("no workflow files found")
+	}
+
+	for _, file := range files {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), "ssh-keyscan") {
+			t.Errorf("%s: contains ssh-keyscan; pin the host key in a committed known_hosts file", filepath.Base(file))
+		}
+	}
+}
+
+// aurEd25519Fingerprint is the AUR host key fingerprint published on
+// https://aur.archlinux.org (home page, "SSH fingerprints").
+const aurEd25519Fingerprint = "SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4"
+
+// TestAURHostKeyIsPinned makes aur.yml push only to the host whose key is in
+// .github/aur_known_hosts, and keeps that key the one AUR publishes.
+func TestAURHostKeyIsPinned(t *testing.T) {
+	run := stepRun(t, "aur.yml", "Publish to AUR")
+	for _, want := range []string{
+		`-o UserKnownHostsFile=$GITHUB_WORKSPACE/.github/aur_known_hosts`,
+		`-o StrictHostKeyChecking=yes`,
+	} {
+		if !strings.Contains(run, want) {
+			t.Errorf("aur.yml: Publish to AUR does not pass %s to ssh", want)
+		}
+	}
+
+	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "aur_known_hosts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keys int
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 3 || fields[0] != "aur.archlinux.org" || fields[1] != "ssh-ed25519" {
+			t.Errorf("aur_known_hosts: line %q is not \"aur.archlinux.org ssh-ed25519 <key>\"", line)
+			continue
+		}
+		blob, err := base64.StdEncoding.DecodeString(fields[2])
+		if err != nil {
+			t.Errorf("aur_known_hosts: key is not base64: %v", err)
+			continue
+		}
+		sum := sha256.Sum256(blob)
+		if got := "SHA256:" + base64.RawStdEncoding.EncodeToString(sum[:]); got != aurEd25519Fingerprint {
+			t.Errorf("aur_known_hosts: key fingerprint %s, want %s", got, aurEd25519Fingerprint)
+		}
+		keys++
+	}
+	if keys != 1 {
+		t.Errorf("aur_known_hosts: %d valid keys, want 1", keys)
 	}
 }
 
