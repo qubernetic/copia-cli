@@ -719,6 +719,59 @@ func TestDependabotUpdatesCoprRequirements(t *testing.T) {
 	t.Errorf("dependabot.yml has no pip entry for %s", dir)
 }
 
+// TestCoprInstallRunsInCI keeps the hash-pinned copr-cli install exercised on
+// every pull request: ci.yml runs the same Install copr-cli step as copr.yml,
+// which only runs on a release.
+func TestCoprInstallRunsInCI(t *testing.T) {
+	ci, copr := stepRun(t, "ci.yml", "Install copr-cli"), stepRun(t, "copr.yml", "Install copr-cli")
+	if ci != copr {
+		t.Errorf("ci.yml Install copr-cli run block differs from copr.yml:\n%s\nwant:\n%s", ci, copr)
+	}
+}
+
+// TestCoprInstallHasNoSecrets keeps the copr-install job of ci.yml, which runs
+// PyPI code on pull requests, away from every secret and from the GITHUB_TOKEN
+// in the git credential store.
+func TestCoprInstallHasNoSecrets(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "ci.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wf struct {
+		Jobs map[string]struct {
+			Env   any `yaml:"env"`
+			Steps []struct {
+				Uses string `yaml:"uses"`
+				Run  any    `yaml:"run"`
+				With any    `yaml:"with"`
+				Env  any    `yaml:"env"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(data, &wf); err != nil {
+		t.Fatal(err)
+	}
+	job, ok := wf.Jobs["copr-install"]
+	if !ok {
+		t.Fatal("ci.yml has no copr-install job")
+	}
+	if strings.Contains(fmt.Sprint(job.Env), "secrets.") {
+		t.Error("ci.yml: job copr-install env mentions secrets.")
+	}
+	for i, s := range job.Steps {
+		for field, v := range map[string]any{"run": s.Run, "with": s.With, "env": s.Env} {
+			if strings.Contains(fmt.Sprint(v), "secrets.") {
+				t.Errorf("ci.yml: job copr-install step %d: %s mentions secrets.", i+1, field)
+			}
+		}
+	}
+	for i, s := range loadWorkflow(t, "ci.yml").Jobs["copr-install"].Steps {
+		if p := s.With.PersistCredentials; isCheckout(s) && (p == nil || *p) {
+			t.Errorf("ci.yml: job copr-install step %d: actions/checkout does not set persist-credentials: false", i+1)
+		}
+	}
+}
+
 // TestCheckSHA256 covers the guard aur.yml runs on each checksum read from
 // checksums.txt before it reaches GITHUB_OUTPUT and PKGBUILD.
 func TestCheckSHA256(t *testing.T) {
