@@ -71,6 +71,26 @@ jobs:
       - name: Go vulnerability check
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
+  # copr.yml runs only on a release; this job runs its hash-pinned copr-cli
+  # install on every pull request. Keep the run block identical to copr.yml.
+  copr-install:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install copr-cli
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-pip python3-setuptools python3-wheel rpm
+          pip3 install --require-hashes --no-build-isolation -r rpmbuild/requirements.txt
+
+      - name: Run copr-cli
+        run: copr-cli --help
+
   integration:
     runs-on: ubuntu-latest
     needs: test
