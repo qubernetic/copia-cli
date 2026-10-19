@@ -1123,6 +1123,27 @@ func TestRunBlocksPinTools(t *testing.T) {
 	}
 }
 
+// TestNoStepUsesLatestVersion keeps every tool an action installs from its
+// `with.version` input on a fixed version: `latest` runs whatever was
+// published last, and Dependabot does not track the input.
+func TestNoStepUsesLatestVersion(t *testing.T) {
+	files, err := filepath.Glob(filepath.Join("..", "..", ".github", "workflows", "*.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range files {
+		name := filepath.Base(file)
+		wf := loadWorkflow(t, name)
+		for _, job := range sortedJobs(wf) {
+			for i, s := range wf.Jobs[job].Steps {
+				if strings.EqualFold(strings.TrimSpace(s.With.Version), "latest") {
+					t.Errorf("%s: job %q step %d (%q): with.version is latest, pin the exact version", name, job, i+1, s.Name)
+				}
+			}
+		}
+	}
+}
+
 // TestCheckSHA256 covers the guard aur.yml runs on each checksum read from
 // checksums.txt before it reaches GITHUB_OUTPUT and PKGBUILD.
 func TestCheckSHA256(t *testing.T) {
