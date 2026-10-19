@@ -5,6 +5,9 @@ on:
     - cron: "0 0 * * 1" # Every Monday at midnight UTC
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   govulncheck:
     runs-on: ubuntu-latest
@@ -12,8 +15,8 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
 
@@ -22,7 +25,7 @@ jobs:
           go run golang.org/x/vuln/cmd/govulncheck@latest -format sarif ./... > govulncheck.sarif 2>&1 || true
 
       - name: Upload SARIF to GitHub Security
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
         with:
           sarif_file: govulncheck.sarif
           category: govulncheck
