@@ -705,3 +705,78 @@ func TestReleaseVersion(t *testing.T) {
 		}
 	})
 }
+
+// TestReleaseChecksums covers the script the Get checksums step of aur.yml
+// runs: it selects both archive checksums from checksums.txt with
+// script/select-checksum.sh, checks each with script/check-sha256.sh and
+// writes them to GITHUB_OUTPUT only if both passed.
+func TestReleaseChecksums(t *testing.T) {
+	script := filepath.Join("..", "..", "script", "release-checksums.sh")
+	amd := "copia-cli_1.2.3_linux_amd64.tar.gz"
+	arm := "copia-cli_1.2.3_linux_arm64.tar.gz"
+	sumA := strings.Repeat("0123456789abcdef", 4)
+	sumB := strings.Repeat("fedcba9876543210", 4)
+	sumC := strings.Repeat("c", 64)
+	goreleaser := sumC + "  copia-cli_1.2.3_darwin_amd64.tar.gz\n" +
+		sumA + "  " + amd + "\n" +
+		sumB + "  " + arm + "\n" +
+		sumC + "  copia-cli_1.2.3_windows_amd64.zip\n"
+
+	run := func(t *testing.T, checksums, version string) (string, string, error) {
+		t.Helper()
+		file := filepath.Join(t.TempDir(), "checksums.txt")
+		if err := os.WriteFile(file, []byte(checksums), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return runWithOutput(t, script, nil, file, version)
+	}
+
+	t.Run("writes both checksums", func(t *testing.T) {
+		out, written, err := run(t, goreleaser, "1.2.3")
+		if err != nil {
+			t.Fatalf("release-checksums.sh: %v\n%s", err, out)
+		}
+		want := "sha256_x86_64=" + sumA + "\nsha256_aarch64=" + sumB + "\n"
+		if written != want {
+			t.Errorf("release-checksums.sh wrote %q, want %q", written, want)
+		}
+	})
+
+	for _, tc := range []struct{ name, checksums, version, err string }{
+		{"a missing amd64 line", sumB + "  " + arm + "\n", "1.2.3", "expected exactly one checksum line"},
+		{"a missing arm64 line", sumA + "  " + amd + "\n", "1.2.3", "expected exactly one checksum line"},
+		{"a duplicated amd64 line", goreleaser + sumA + "  " + amd + "\n", "1.2.3", "expected exactly one checksum line"},
+		{"a duplicated arm64 line", goreleaser + sumB + "  " + arm + "\n", "1.2.3", "expected exactly one checksum line"},
+		{"a short amd64 hash", sumA[:63] + "  " + amd + "\n" + sumB + "  " + arm + "\n", "1.2.3", "not a sha256 checksum"},
+		{"an uppercase arm64 hash", sumA + "  " + amd + "\n" + strings.ToUpper(sumB) + "  " + arm + "\n", "1.2.3", "not a sha256 checksum"},
+		{"a non-hex arm64 hash", sumA + "  " + amd + "\n" + sumB[:63] + "g  " + arm + "\n", "1.2.3", "not a sha256 checksum"},
+		{"another version", goreleaser, "1.2.4", "expected exactly one checksum line"},
+		{"an empty file", "", "1.2.3", "expected exactly one checksum line"},
+	} {
+		t.Run("rejects "+tc.name, func(t *testing.T) {
+			out, written, err := run(t, tc.checksums, tc.version)
+			if err == nil {
+				t.Fatalf("release-checksums.sh succeeded, want failure")
+			}
+			if written != "" {
+				t.Errorf("release-checksums.sh wrote %q, want nothing", written)
+			}
+			if !strings.Contains(out, "::error::"+tc.err) {
+				t.Errorf("release-checksums.sh: output %q does not contain %q", out, "::error::"+tc.err)
+			}
+		})
+	}
+
+	t.Run("rejects a missing file", func(t *testing.T) {
+		out, written, err := runWithOutput(t, script, nil, filepath.Join(t.TempDir(), "absent.txt"), "1.2.3")
+		if err == nil {
+			t.Fatalf("release-checksums.sh succeeded, want failure")
+		}
+		if written != "" {
+			t.Errorf("release-checksums.sh wrote %q, want nothing", written)
+		}
+		if !strings.Contains(out, "::error::expected exactly one checksum line") {
+			t.Errorf("release-checksums.sh: output %q does not name the error", out)
+		}
+	})
+}
