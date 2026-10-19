@@ -132,6 +132,7 @@ test/integration/   Integration tests against live Copia API
 - **Issue-driven workflow** — every branch traces to a GitHub Issue
 - **TDD** — write failing tests first, then implement
 - **Semantic Versioning** for releases
+- **Release tags** - only a repository admin can create a `v*` tag, and a pushed `v*` tag cannot be deleted or moved by anyone, so a wrong tag means a new patch version (see [docs/releasing.md](docs/releasing.md))
 
 ### Code Style
 

@@ -27,6 +27,8 @@
    $ git push origin vX.Y.Z
    ```
 
+   Only a repository admin can create a `v*` tag (ruleset `Release tag creation`, Repository admin bypass). Once pushed, a `v*` tag cannot be deleted or moved by anyone, admins included (ruleset `Protected release tags`). Check the commit before you push: a wrong tag means a new patch version.
+
 6. The tag push triggers the [Release workflow](.github/workflows/release.yml) which:
 
    - Builds binaries for Linux, macOS, and Windows
