@@ -9,8 +9,12 @@ set -eu
 
 version="${1-}"
 
+. "$(dirname "$0")/lib/workflow-escape.sh"
+
+# The closing quote keeps a trailing newline in the value visible to
+# workflow_escape.
 reject() {
-  printf '::error::not a release version: "%s"\n' "$version" >&2
+  printf '::error::not a release version: "%s"\n' "$version" | workflow_escape >&2
   exit 1
 }
 
