@@ -218,6 +218,36 @@ func TestCheckGoVersion(t *testing.T) {
 	}
 }
 
+// TestCheckScriptsShareEscape keeps the workflow-command encoding in one
+// place: every script/check-*.sh sources script/lib/workflow-escape.sh and
+// does not carry its own copy.
+func TestCheckScriptsShareEscape(t *testing.T) {
+	scripts, err := filepath.Glob(filepath.Join("..", "..", "script", "check-*.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(scripts) == 0 {
+		t.Fatal("no script/check-*.sh found")
+	}
+	for _, script := range scripts {
+		data, err := os.ReadFile(script)
+		if err != nil {
+			t.Fatal(err)
+		}
+		src := string(data)
+		name := filepath.Base(script)
+		if !strings.Contains(src, `. "$(dirname "$0")/lib/workflow-escape.sh"`) {
+			t.Errorf("%s does not source lib/workflow-escape.sh", name)
+		}
+		if !strings.Contains(src, "| workflow_escape >&2") {
+			t.Errorf("%s does not print its error through workflow_escape", name)
+		}
+		if strings.Contains(src, "%0A") {
+			t.Errorf("%s carries its own copy of the encoding", name)
+		}
+	}
+}
+
 // TestCheckReleaseVersion covers the guard aur.yml and copr.yml run on the
 // version taken from the release tag before it reaches GITHUB_OUTPUT, PKGBUILD
 // and the RPM spec.
