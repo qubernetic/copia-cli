@@ -272,6 +272,7 @@ func TestCheckSHA256(t *testing.T) {
 	for _, tc := range []struct{ sum, printed string }{
 		{valid + "\n", `"` + valid + `%0A"`},
 		{valid + "\n" + valid, `"` + valid + `%0A` + valid + `"`},
+		{valid + "\n\n" + valid, `"` + valid + `%0A%0A` + valid + `"`},
 		{valid + "\n::add-mask::x", `"` + valid + `%0A::add-mask::x"`},
 		{valid + "\r", `"` + valid + `%0D"`},
 		{valid + "%0A", `"` + valid + `%250A"`},
@@ -365,9 +366,38 @@ func TestCheckGoVersion(t *testing.T) {
 	}
 }
 
+// TestWorkflowEscape pins the encoding of script/lib/workflow-escape.sh for
+// values with more than one line break, CR or %.
+func TestWorkflowEscape(t *testing.T) {
+	lib := filepath.Join("..", "..", "script", "lib", "workflow-escape.sh")
+
+	for _, tc := range []struct{ in, want string }{
+		{"a\n", "a\n"},
+		{"a\n\nb\n", "a%0A%0Ab\n"},
+		{"a\nb\nc\n", "a%0Ab%0Ac\n"},
+		{"a\r\nb\r\nc\n", "a%0D%0Ab%0D%0Ac\n"},
+		{"a\rb\rc\n", "a%0Db%0Dc\n"},
+		{"a%%b\n", "a%25%25b\n"},
+		{"\n\n\n", "%0A%0A\n"},
+	} {
+		t.Run(fmt.Sprintf("%q", tc.in), func(t *testing.T) {
+			cmd := exec.Command("sh", "-c", `. "$1"; workflow_escape`, "sh", lib)
+			cmd.Stdin = strings.NewReader(tc.in)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("workflow_escape %q: %v\n%s", tc.in, err, out)
+			}
+			if string(out) != tc.want {
+				t.Errorf("workflow_escape %q: output %q, want %q", tc.in, out, tc.want)
+			}
+		})
+	}
+}
+
 // TestCheckScriptsShareEscape keeps the workflow-command encoding in one
 // place: every script/check-*.sh sources script/lib/workflow-escape.sh and
-// does not carry its own copy.
+// does not carry its own copy. It also runs each guard on a value with every
+// line break and a %, so a new guard is checked without a table of its own.
 func TestCheckScriptsShareEscape(t *testing.T) {
 	scripts, err := filepath.Glob(filepath.Join("..", "..", "script", "check-*.sh"))
 	if err != nil {
@@ -391,6 +421,16 @@ func TestCheckScriptsShareEscape(t *testing.T) {
 		}
 		if strings.Contains(src, "%0A") {
 			t.Errorf("%s carries its own copy of the encoding", name)
+		}
+
+		value := "1\n::add-mask::x\r::add-mask::y\r\n::add-mask::z%0A\n"
+		out, err := exec.Command(script, value).CombinedOutput()
+		if err == nil {
+			t.Errorf("%s %q succeeded, want failure", name, value)
+		}
+		if !strings.HasPrefix(string(out), "::error::") || strings.Count(string(out), "\n") != 1 ||
+			!strings.HasSuffix(string(out), "\n") || strings.Contains(string(out), "\r") {
+			t.Errorf("%s %q: output %q, want one ::error:: line", name, value, out)
 		}
 	}
 }
@@ -427,6 +467,7 @@ func TestCheckReleaseVersion(t *testing.T) {
 	for _, tc := range []struct{ version, printed string }{
 		{"1.2.3\n", `"1.2.3%0A"`},
 		{"1.2.3\nx", `"1.2.3%0Ax"`},
+		{"1.2.3\n\nx", `"1.2.3%0A%0Ax"`},
 		{"1.2.3\n::add-mask::x", `"1.2.3%0A::add-mask::x"`},
 		{"1.2.3\r", `"1.2.3%0D"`},
 		{"1.2.3%0A", `"1.2.3%250A"`},
