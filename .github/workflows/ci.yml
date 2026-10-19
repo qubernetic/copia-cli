@@ -30,6 +30,16 @@ jobs:
       - name: Test
         run: gotestsum --junitfile unit.junit.xml -- -coverpkg=./... -coverprofile=coverage.out ./...
 
+      # The Test step also runs test/workflows, which fails on a ${{ inside
+      # any run: block; this step shows the bump-go version guard on its own.
+      - name: Go version guard rejects a bad string
+        run: |
+          if script/check-go-version.sh '1.27; echo x'; then
+            echo "::error::script/check-go-version.sh accepted '1.27; echo x'"
+            exit 1
+          fi
+          script/check-go-version.sh 1.27
+
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:

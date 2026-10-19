@@ -20,18 +20,18 @@ jobs:
       - name: Get checksums
         id: checksums
         run: |
-          gh release download "${{ github.ref_name }}" --pattern "checksums.txt" --output checksums.txt
+          gh release download "$GITHUB_REF_NAME" --pattern "checksums.txt" --output checksums.txt
           echo "sha256_x86_64=$(grep 'linux_amd64.tar.gz' checksums.txt | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
           echo "sha256_aarch64=$(grep 'linux_arm64.tar.gz' checksums.txt | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Generate PKGBUILD and .SRCINFO
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          SHA_X86: ${{ steps.checksums.outputs.sha256_x86_64 }}
+          SHA_ARM: ${{ steps.checksums.outputs.sha256_aarch64 }}
         run: |
-          VERSION=${{ steps.version.outputs.version }}
-          SHA_X86=${{ steps.checksums.outputs.sha256_x86_64 }}
-          SHA_ARM=${{ steps.checksums.outputs.sha256_aarch64 }}
-
           cat > PKGBUILD <<EOF
           # Maintainer: Qubernetic <info@qubernetic.com>
           pkgname=copia-cli-bin
@@ -77,9 +77,12 @@ jobs:
           sed -i 's/^          //' .SRCINFO
 
       - name: Publish to AUR
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.AUR_SSH_PRIVATE_KEY }}" > ~/.ssh/aur
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur
           chmod 600 ~/.ssh/aur
           ssh-keyscan -t ed25519 aur.archlinux.org >> ~/.ssh/known_hosts
           export GIT_SSH_COMMAND="ssh -i ~/.ssh/aur"
@@ -90,5 +93,5 @@ jobs:
           git config user.name "qubernetic"
           git config user.email "info@qubernetic.com"
           git add PKGBUILD .SRCINFO
-          git commit -m "Update to ${{ steps.version.outputs.version }}"
+          git commit -m "Update to $VERSION"
           git push
