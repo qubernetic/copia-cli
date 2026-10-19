@@ -632,3 +632,76 @@ func TestCheckReleaseVersion(t *testing.T) {
 		})
 	}
 }
+
+// runWithOutput runs script with args and env in addition to a fresh, empty
+// GITHUB_OUTPUT file, and returns the combined output and the file content.
+func runWithOutput(t *testing.T, script string, env []string, args ...string) (out, written string, err error) {
+	t.Helper()
+	file := filepath.Join(t.TempDir(), "github_output")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(script, args...)
+	cmd.Env = append(append(os.Environ(), "GITHUB_OUTPUT="+file), env...)
+	b, err := cmd.CombinedOutput()
+	data, readErr := os.ReadFile(file)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	return string(b), string(data), err
+}
+
+// TestReleaseVersion covers the script the Extract version steps of aur.yml
+// and copr.yml run: it takes the version from the release tag, checks it with
+// script/check-release-version.sh and writes it to GITHUB_OUTPUT only if the
+// check passed.
+func TestReleaseVersion(t *testing.T) {
+	script := filepath.Join("..", "..", "script", "release-version.sh")
+
+	for _, tc := range []struct{ ref, want string }{
+		{"v1.2.3", "version=1.2.3\n"},
+		{"v10.0.12", "version=10.0.12\n"},
+	} {
+		t.Run("writes "+tc.ref, func(t *testing.T) {
+			out, written, err := runWithOutput(t, script, []string{"GITHUB_REF_NAME=" + tc.ref})
+			if err != nil {
+				t.Fatalf("release-version.sh with %q: %v\n%s", tc.ref, err, out)
+			}
+			if written != tc.want {
+				t.Errorf("release-version.sh with %q wrote %q, want %q", tc.ref, written, tc.want)
+			}
+		})
+	}
+
+	// Every value check-release-version.sh rejects, with the tag prefix.
+	for _, ref := range []string{
+		"", "v", "vv1.2.3", "v1.2.3/x", "v1.2.3$(id)", "v1.2.3'", "v1.2.3\n", "v1.2.3\nx",
+		"v1.2", "v1.2.3-", "v1.2.3-rc 1", "v1.2.3-rc.1", "v1.2.3-beta.1", "v10.0.12-beta2",
+		"v1.2.3\nversion=9.9.9",
+	} {
+		t.Run(fmt.Sprintf("rejects %q", ref), func(t *testing.T) {
+			out, written, err := runWithOutput(t, script, []string{"GITHUB_REF_NAME=" + ref})
+			if err == nil {
+				t.Fatalf("release-version.sh with %q succeeded, want failure", ref)
+			}
+			if written != "" {
+				t.Errorf("release-version.sh with %q wrote %q, want nothing", ref, written)
+			}
+			if !strings.Contains(out, "::error::not a release version") {
+				t.Errorf("release-version.sh with %q: output %q does not name the error", ref, out)
+			}
+		})
+	}
+
+	t.Run("rejects an unset GITHUB_REF_NAME", func(t *testing.T) {
+		cmd := exec.Command(script)
+		file := filepath.Join(t.TempDir(), "github_output")
+		cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "GITHUB_OUTPUT=" + file}
+		if out, err := cmd.CombinedOutput(); err == nil {
+			t.Fatalf("release-version.sh without GITHUB_REF_NAME succeeded: %s", out)
+		}
+		if data, _ := os.ReadFile(file); len(data) != 0 {
+			t.Errorf("release-version.sh without GITHUB_REF_NAME wrote %q, want nothing", data)
+		}
+	})
+}
