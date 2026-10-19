@@ -140,6 +140,13 @@ test/integration/   Integration tests against live Copia API
 - Follow existing patterns (Options struct + NewCmd + Run function)
 - Add `--json` support to every list/view command
 
+### Workflows
+
+Every file under `.github/workflows/` follows two rules:
+
+- **Least-privilege token.** The workflow sets `permissions: contents: read` at the top level. A job that needs more widens it in its own `permissions:` block and grants only what its steps use (for example `issues: write` on the job that opens an issue, `security-events: write` on the job that uploads SARIF). A job-level block replaces the top-level one, so repeat `contents: read` there when the job checks out code. Steps that hold secrets and run repository code do not share a job with a widened token.
+- **Actions pinned by commit SHA.** Every `uses:` line names the full 40-character commit SHA with the release tag in a trailing comment, for example `actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1`. Resolve the SHA with `gh api repos/<owner>/<action>/commits/<tag> --jq .sha`, which returns the commit even for an annotated tag. Dependabot (`github-actions` ecosystem) updates the SHA and the comment together.
+
 ## Reporting Bugs
 
 Please open an issue with:
