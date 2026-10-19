@@ -694,6 +694,31 @@ func TestReleaseCheckoutsDropCredentials(t *testing.T) {
 	}
 }
 
+// TestDependabotUpdatesCoprRequirements keeps the hash-pinned copr-cli
+// requirements from going stale: Dependabot watches their directory.
+func TestDependabotUpdatesCoprRequirements(t *testing.T) {
+	dir := "/" + path.Dir(coprRequirements(t))
+	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "dependabot.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		Updates []struct {
+			Ecosystem string `yaml:"package-ecosystem"`
+			Directory string `yaml:"directory"`
+		} `yaml:"updates"`
+	}
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range cfg.Updates {
+		if u.Ecosystem == "pip" && path.Clean(u.Directory) == dir {
+			return
+		}
+	}
+	t.Errorf("dependabot.yml has no pip entry for %s", dir)
+}
+
 // TestCheckSHA256 covers the guard aur.yml runs on each checksum read from
 // checksums.txt before it reaches GITHUB_OUTPUT and PKGBUILD.
 func TestCheckSHA256(t *testing.T) {
