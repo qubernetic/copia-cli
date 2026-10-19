@@ -199,11 +199,12 @@ func TestCheckGoVersion(t *testing.T) {
 
 // TestCheckReleaseVersion covers the guard aur.yml and copr.yml run on the
 // version taken from the release tag before it reaches GITHUB_OUTPUT, PKGBUILD
-// and the RPM spec.
+// and the RPM spec. Only X.Y.Z passes: makepkg rejects a pkgver and rpmbuild a
+// Version with a hyphen, so a pre-release version cannot be packaged.
 func TestCheckReleaseVersion(t *testing.T) {
 	script := filepath.Join("..", "..", "script", "check-release-version.sh")
 
-	for _, version := range []string{"1.2.3", "1.2.3-rc.1", "10.0.12-beta2"} {
+	for _, version := range []string{"1.2.3", "10.0.12"} {
 		t.Run("accepts "+version, func(t *testing.T) {
 			out, err := exec.Command(script, version).CombinedOutput()
 			if err != nil {
@@ -212,7 +213,7 @@ func TestCheckReleaseVersion(t *testing.T) {
 		})
 	}
 
-	for _, version := range []string{"", "1.2.3/x", "1.2.3$(id)", "1.2.3'", "1.2.3\n", "1.2.3\nx", "v1.2.3", "1.2", "1.2.3-", "1.2.3-rc 1"} {
+	for _, version := range []string{"", "1.2.3/x", "1.2.3$(id)", "1.2.3'", "1.2.3\n", "1.2.3\nx", "v1.2.3", "1.2", "1.2.3-", "1.2.3-rc 1", "1.2.3-rc.1", "1.2.3-beta.1", "10.0.12-beta2"} {
 		t.Run("rejects "+version, func(t *testing.T) {
 			out, err := exec.Command(script, version).CombinedOutput()
 			if err == nil {
