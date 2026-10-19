@@ -44,7 +44,7 @@
    - [AUR](.github/workflows/aur.yml) — updates `copia-cli-bin` on AUR
    - [Snap](.github/workflows/snap.yml) — builds and publishes to the Snap Store
 
-   COPR and AUR stop before they publish anything unless the tag is `vX.Y.Z` (digits only, for example `v1.2.3`), and AUR also stops when a Linux checksum in `checksums.txt` is not a SHA-256 hex string.
+   COPR and AUR stop before they publish anything unless the tag is `vX.Y.Z` (digits only, for example `v1.2.3`), and AUR also stops when `checksums.txt` does not have exactly one line for each Linux archive (`copia-cli_X.Y.Z_linux_amd64.tar.gz`, `copia-cli_X.Y.Z_linux_arm64.tar.gz`) or a checksum there is not a SHA-256 hex string.
 
    AUR's SSH host key is pinned in [`.github/aur_known_hosts`](../.github/aur_known_hosts) and the workflow pushes with `StrictHostKeyChecking=yes`, so it refuses any other key. If AUR rotates its key, the AUR job fails at `git clone` with a host key error: take the new Ed25519 fingerprint from the "SSH fingerprints" section of the [AUR home page](https://aur.archlinux.org), replace the line in `.github/aur_known_hosts` with a key whose `ssh-keygen -lf` fingerprint matches it, and update `aurEd25519Fingerprint` in `test/workflows/workflows_test.go`. Check the fingerprint against the page, never against a fresh `ssh-keyscan` alone.
 
