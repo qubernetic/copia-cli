@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI uploads coverage to Codecov with GitHub OIDC instead of a token. The upload uses `codecov/codecov-action` v7.1.1 pinned by commit SHA. Tests run through gotestsum, and a second upload sends the JUnit report to Codecov Test Analytics. PRs now also get a `codecov/project` status from the organisation's Codecov configuration: it fails when total coverage drops by more than 1% (#262)
 - The unit-test HTTP mock rejects requests that send a token as `?token=` or `?access_token=`; a new integration test checks that Copia refuses them with 403. The docs now state that header auth is the only supported method on Copia since 2026-05-01 (#235)
 - The organisation's canonical `close-issues-on-merge.yml` replaces `close-linked-issues.yml`: a PR merged into `develop` closes the issues named in its body's `Closes #N` lines with the comment `Fixed in develop by <sha> (PR #<n>).`; merges into other branches close nothing. The action is pinned by commit SHA and the token defaults to read-only (#264)
+- Every workflow sets a read-only `GITHUB_TOKEN` at the top level and widens it per job only where a step needs it; every action is pinned by commit SHA with its tag in a comment (`winget-releaser` moves from `main` to the same commit as `v2`). The scheduled integration test no longer holds `issues: write`: a separate `report-failure` job, which checks out no code, opens the failure issue. The rule is in `CONTRIBUTING.md` (#266)
 
 ### Fixed
 
