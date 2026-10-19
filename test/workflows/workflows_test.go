@@ -26,6 +26,7 @@ type step struct {
 	With struct {
 		Script             string `yaml:"script"`
 		PersistCredentials *bool  `yaml:"persist-credentials"`
+		Version            string `yaml:"version"`
 	} `yaml:"with"`
 }
 
@@ -989,6 +990,37 @@ jobs:
 	}
 	if _, err := goCacheViolations("test.yml", []byte("jobs: [")); err == nil {
 		t.Error("goCacheViolations() succeeded on invalid YAML, want error")
+	}
+}
+
+// TestGolangciLintIsPinned keeps the golangci-lint the test job of ci.yml runs,
+// and so the Go cache it saves, on the version of .devcontainer/Dockerfile:
+// Dependabot tracks neither, so one bump moves both.
+func TestGolangciLintIsPinned(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", ".devcontainer", "Dockerfile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want string
+	for _, line := range strings.Split(string(data), "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "ARG GOLANGCI_LINT_VERSION="); ok {
+			want = v
+		}
+	}
+	if want == "" {
+		t.Fatal(".devcontainer/Dockerfile: no ARG GOLANGCI_LINT_VERSION=")
+	}
+	found := false
+	for _, s := range loadWorkflow(t, "ci.yml").Jobs["test"].Steps {
+		if strings.HasPrefix(s.Uses, "golangci/golangci-lint-action@") {
+			found = true
+			if s.With.Version != want {
+				t.Errorf("ci.yml: job test: golangci-lint-action version %q, want %q (.devcontainer/Dockerfile)", s.With.Version, want)
+			}
+		}
+	}
+	if !found {
+		t.Error("ci.yml: job test has no golangci/golangci-lint-action step")
 	}
 }
 
