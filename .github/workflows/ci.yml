@@ -69,7 +69,7 @@ jobs:
           version: v2.15.0
 
       - name: Go vulnerability check
-        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
   # copr.yml runs only on a release; this job runs its hash-pinned copr-cli
   # install on every pull request. Keep the run block identical to copr.yml.

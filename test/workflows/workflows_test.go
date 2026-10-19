@@ -1024,6 +1024,26 @@ func TestGolangciLintIsPinned(t *testing.T) {
 	}
 }
 
+// TestRunBlocksPinTools keeps every go run and go install in a workflow on a
+// fixed version: a tool fetched @latest runs whatever was published last.
+func TestRunBlocksPinTools(t *testing.T) {
+	files, err := filepath.Glob(filepath.Join("..", "..", ".github", "workflows", "*.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range files {
+		name := filepath.Base(file)
+		wf := loadWorkflow(t, name)
+		for _, job := range sortedJobs(wf) {
+			for i, s := range wf.Jobs[job].Steps {
+				if strings.Contains(s.Run, "@latest") {
+					t.Errorf("%s: job %q step %d: run block uses @latest", name, job, i+1)
+				}
+			}
+		}
+	}
+}
+
 // TestCheckSHA256 covers the guard aur.yml runs on each checksum read from
 // checksums.txt before it reaches GITHUB_OUTPUT and PKGBUILD.
 func TestCheckSHA256(t *testing.T) {
