@@ -136,6 +136,16 @@ func TestChecksumsAreChecked(t *testing.T) {
 	}
 }
 
+// TestAURKeyIsPrivate keeps the AUR SSH key from existing with the default
+// umask, even for the moment before chmod 600.
+func TestAURKeyIsPrivate(t *testing.T) {
+	run := stepRun(t, "aur.yml", "Publish to AUR")
+	want := `(umask 077; printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur)`
+	if !strings.Contains(run, want) {
+		t.Errorf("aur.yml: Publish to AUR does not write the key with %s", want)
+	}
+}
+
 // TestCheckGoVersion covers the guard bump-go.yml runs on the version it reads
 // from go.dev before writing it to GITHUB_OUTPUT.
 func TestCheckGoVersion(t *testing.T) {
