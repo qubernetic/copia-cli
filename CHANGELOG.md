@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - golang.org/x/crypto 0.49.0 → 0.52.0, fixes GO-2026-5018; also pulls golang.org/x/sys 0.42.0 → 0.45.0 (#228)
 - aur and copr fail when the version taken from the release tag does not match `^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$` (`script/check-release-version.sh`), and aur fails when a checksum from `checksums.txt` does not match `^[0-9a-f]{64}$` (`script/check-sha256.sh`), so a malformed tag or checksum never reaches `PKGBUILD`, `.SRCINFO` or the RPM spec. aur writes its SSH key under `umask 077` (#273)
 - aur pushes to AUR only when the host presents the Ed25519 key pinned in `.github/aur_known_hosts` (`StrictHostKeyChecking=yes`), instead of trusting whatever key `ssh-keyscan` returned at run time; no workflow may use `ssh-keyscan` (#281)
+- aur and copr take the release version with `script/release-version.sh`, and aur the two checksums with `script/release-checksums.sh`; each runs its guard and writes `GITHUB_OUTPUT` only when the guard passed, and `test/workflows` checks what they write. The `Extract version` and `Get checksums` steps are one script call each: `test/workflows` fails on any other line in them, on `shell:`, `continue-on-error:` or `if:` on them, on a `defaults.run.shell`, and on a step that reads `VERSION`, `SHA_X86` or `SHA_ARM` from anything but the matching step output. aur downloads `checksums.txt` in a separate `Download checksums` step (#289)
 
 ### Fixed
 
