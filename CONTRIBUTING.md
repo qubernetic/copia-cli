@@ -157,6 +157,8 @@ uv pip compile --generate-hashes --python-version 3.12 --python-platform x86_64-
 
 (`pip-compile --generate-hashes requirements.in` from pip-tools, run under Python 3.12, works too.) `test/workflows` fails `go test ./...` when copr.yml names a package on a `pip install` line, installs without `--require-hashes -r <file>`, or the file has a requirement without `==` and `--hash=sha256:`; when the version step does not follow the checkout; when a release checkout keeps its credentials; and when `.github/dependabot.yml` has no `pip` entry for the file's directory.
 
+copr.yml runs only on a release, so the `copr-install` job of `ci.yml` runs the same `Install copr-cli` step, then `copr-cli --help`, on every pull request and push to `main` and `develop`. A Dependabot or manual refresh of `rpmbuild/requirements.txt` that drops, adds or mis-hashes a package therefore fails on its own PR instead of in the next release. The job holds no secrets and checks out with `persist-credentials: false`. `test/workflows` fails `go test ./...` when the `Install copr-cli` run blocks of `ci.yml` and `copr.yml` differ, so change both together, and when a step of `copr-install` mentions `secrets.` in `run`, `with` or `env`.
+
 ## Reporting Bugs
 
 Please open an issue with:
