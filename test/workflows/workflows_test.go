@@ -26,6 +26,7 @@ type step struct {
 	With struct {
 		Script             string `yaml:"script"`
 		PersistCredentials *bool  `yaml:"persist-credentials"`
+		Version            string `yaml:"version"`
 	} `yaml:"with"`
 }
 
@@ -776,6 +777,7 @@ func TestCoprInstallHasNoSecrets(t *testing.T) {
 type cacheWorkflow struct {
 	Permissions any `yaml:"permissions"`
 	Jobs        map[string]struct {
+		Needs       any `yaml:"needs"`
 		Permissions any `yaml:"permissions"`
 		Env         any `yaml:"env"`
 		Steps       []struct {
@@ -803,29 +805,63 @@ func writesToken(p any) bool {
 	return false
 }
 
+// jobNeeds returns the job names of a needs: value, a string or a list.
+func jobNeeds(needs any) []string {
+	switch n := needs.(type) {
+	case string:
+		return []string{n}
+	case []any:
+		names := make([]string, 0, len(n))
+		for _, v := range n {
+			names = append(names, fmt.Sprint(v))
+		}
+		return names
+	}
+	return nil
+}
+
 // goCacheViolations lists every actions/setup-go step that leaves the Go cache
-// on in a job that holds a secret or a write token. A job without its own
-// permissions block inherits the workflow's.
+// on in a job that holds a secret or a write token, or that such a job depends
+// on through needs: at any depth, since the privileged job uses its output. A
+// job without its own permissions block inherits the workflow's.
 func goCacheViolations(file string, data []byte) ([]string, error) {
 	var wf cacheWorkflow
 	if err := yaml.Unmarshal(data, &wf); err != nil {
 		return nil, fmt.Errorf("%s: %w", file, err)
 	}
-	var out []string
+	privileged := map[string]bool{}
+	var pending []string
 	for name, job := range wf.Jobs {
 		perms := job.Permissions
 		if perms == nil {
 			perms = wf.Permissions
 		}
-		privileged := writesToken(perms) || strings.Contains(fmt.Sprint(job.Env), "secrets.")
+		holds := writesToken(perms) || strings.Contains(fmt.Sprint(job.Env), "secrets.")
 		for _, s := range job.Steps {
 			for _, v := range []any{s.Run, s.With, s.Env} {
 				if strings.Contains(fmt.Sprint(v), "secrets.") {
-					privileged = true
+					holds = true
 				}
 			}
 		}
-		if !privileged {
+		if holds {
+			privileged[name] = true
+			pending = append(pending, name)
+		}
+	}
+	for len(pending) > 0 {
+		name := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		for _, dep := range jobNeeds(wf.Jobs[name].Needs) {
+			if !privileged[dep] {
+				privileged[dep] = true
+				pending = append(pending, dep)
+			}
+		}
+	}
+	var out []string
+	for name, job := range wf.Jobs {
+		if !privileged[name] {
 			continue
 		}
 		for i, s := range job.Steps {
@@ -975,6 +1011,50 @@ jobs:
         env:
           T: ${{ secrets.T }}
 `, 0},
+		{"privileged job needs the build", `
+jobs:
+  build:
+    steps:
+      - uses: actions/setup-go@x
+  deploy:
+    needs: build
+    permissions:
+      pages: write
+      id-token: write
+    steps:
+      - uses: actions/deploy-pages@x
+`, 1},
+		{"privileged job needs a chain", `
+jobs:
+  a:
+    steps:
+      - uses: actions/setup-go@x
+  b:
+    needs: [a]
+    steps:
+      - run: go test
+  c:
+    needs: [b]
+    permissions:
+      contents: write
+    steps:
+      - run: echo
+`, 1},
+		{"privileged job needs a job without setup-go", `
+jobs:
+  a:
+    steps:
+      - run: echo
+  b:
+    steps:
+      - uses: actions/setup-go@x
+  c:
+    needs: a
+    permissions:
+      contents: write
+    steps:
+      - run: echo
+`, 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -989,6 +1069,57 @@ jobs:
 	}
 	if _, err := goCacheViolations("test.yml", []byte("jobs: [")); err == nil {
 		t.Error("goCacheViolations() succeeded on invalid YAML, want error")
+	}
+}
+
+// TestGolangciLintIsPinned keeps the golangci-lint the test job of ci.yml runs,
+// and so the Go cache it saves, on the version of .devcontainer/Dockerfile:
+// Dependabot tracks neither, so one bump moves both.
+func TestGolangciLintIsPinned(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", ".devcontainer", "Dockerfile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want string
+	for _, line := range strings.Split(string(data), "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "ARG GOLANGCI_LINT_VERSION="); ok {
+			want = v
+		}
+	}
+	if want == "" {
+		t.Fatal(".devcontainer/Dockerfile: no ARG GOLANGCI_LINT_VERSION=")
+	}
+	found := false
+	for _, s := range loadWorkflow(t, "ci.yml").Jobs["test"].Steps {
+		if strings.HasPrefix(s.Uses, "golangci/golangci-lint-action@") {
+			found = true
+			if s.With.Version != want {
+				t.Errorf("ci.yml: job test: golangci-lint-action version %q, want %q (.devcontainer/Dockerfile)", s.With.Version, want)
+			}
+		}
+	}
+	if !found {
+		t.Error("ci.yml: job test has no golangci/golangci-lint-action step")
+	}
+}
+
+// TestRunBlocksPinTools keeps every go run and go install in a workflow on a
+// fixed version: a tool fetched @latest runs whatever was published last.
+func TestRunBlocksPinTools(t *testing.T) {
+	files, err := filepath.Glob(filepath.Join("..", "..", ".github", "workflows", "*.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range files {
+		name := filepath.Base(file)
+		wf := loadWorkflow(t, name)
+		for _, job := range sortedJobs(wf) {
+			for i, s := range wf.Jobs[job].Steps {
+				if strings.Contains(s.Run, "@latest") {
+					t.Errorf("%s: job %q step %d: run block uses @latest", name, job, i+1)
+				}
+			}
+		}
 	}
 }
 
