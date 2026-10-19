@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - aur reads each Linux checksum from `checksums.txt` with `script/select-checksum.sh`, which takes only the one line whose name equals `copia-cli_<version>_linux_<arch>.tar.gz` and fails on a missing or duplicated line. A line for another version, a longer name such as `...tar.gz.sbom.json`, or a line containing both archive names can no longer put a wrong checksum into `PKGBUILD` (#283)
+- `script/check-release-version.sh` accepts only `X.Y.Z`, so aur and copr reject a pre-release version such as `1.2.3-rc.1`, which makepkg and rpmbuild cannot package (#282)
 - `script/check-go-version.sh` prints a rejected value with the workflow-command encoding (`%` as `%25`, CR as `%0D`, LF as `%0A`), so a value with a line break can no longer put a second workflow command into the runner log. It also rejects version components with a leading zero or more than four digits, such as `01.27` (#271)
 
 ### Changed
@@ -34,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The organisation's canonical `close-issues-on-merge.yml` replaces `close-linked-issues.yml`: a PR merged into `develop` closes the issues named in its body's `Closes #N` lines with the comment `Fixed in develop by <sha> (PR #<n>).`; merges into other branches close nothing. The action is pinned by commit SHA and the token defaults to read-only (#264)
 - Every workflow sets a read-only `GITHUB_TOKEN` at the top level and widens it per job only where a step needs it; every action is pinned by commit SHA with its tag in a comment (`winget-releaser` moves from `main` to the same commit as `v2`). The scheduled integration test no longer holds `issues: write`: a separate `report-failure` job, which checks out no code, opens the failure issue. The rule is in `CONTRIBUTING.md` (#266)
 - bump-go, aur and copr pass secrets, step outputs and `github.ref_name` to their `run:` steps through `env:` and quoted shell variables instead of `${{ }}` in the script. bump-go fails when the version read from go.dev does not match `^[0-9]+\.[0-9]+(\.[0-9]+)?$` (`script/check-go-version.sh`). `go test ./...` fails on a `${{` inside any `run:` block; the rule is in `CONTRIBUTING.md` (#268)
+- The workflow expression check also fails on a `${{` in the `script:` input of an `actions/github-script` step, and scans the steps of composite actions under `.github/actions/*/action.yml` (#270)
 - Only a repository admin can create a `v*` release tag (new `Release tag creation` ruleset); pushed `v*` tags stay undeletable and immovable for everyone. `docs/releasing.md` and `CONTRIBUTING.md` state the rule (#272)
 
 ### Fixed
