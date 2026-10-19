@@ -3,6 +3,7 @@ package workflows
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -51,3 +52,29 @@ func TestRunBlocksHaveNoExpressions(t *testing.T) {
 	}
 }
 
+// TestCheckGoVersion covers the guard bump-go.yml runs on the version it reads
+// from go.dev before writing it to GITHUB_OUTPUT.
+func TestCheckGoVersion(t *testing.T) {
+	script := filepath.Join("..", "..", "script", "check-go-version.sh")
+
+	for _, version := range []string{"1.27", "1.26.9", "10.0.12"} {
+		t.Run("accepts "+version, func(t *testing.T) {
+			out, err := exec.Command(script, version).CombinedOutput()
+			if err != nil {
+				t.Errorf("check-go-version.sh %q: %v\n%s", version, err, out)
+			}
+		})
+	}
+
+	for _, version := range []string{"", "1.27; echo x", "go1.27", "1", "1.27rc1", "1.27.0.1", "1.27\n", "$(id)"} {
+		t.Run("rejects "+version, func(t *testing.T) {
+			out, err := exec.Command(script, version).CombinedOutput()
+			if err == nil {
+				t.Fatalf("check-go-version.sh %q succeeded, want failure", version)
+			}
+			if !strings.Contains(string(out), "::error::not a Go version") {
+				t.Errorf("check-go-version.sh %q: output %q does not name the error", version, out)
+			}
+		})
+	}
+}

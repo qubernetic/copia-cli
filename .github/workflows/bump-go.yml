@@ -25,6 +25,7 @@ jobs:
         run: |
           LATEST=$(curl -sL 'https://go.dev/dl/?mode=json' | jq -r '.[0].version' | sed 's/go//')
           CURRENT=$(grep '^go ' go.mod | awk '{print $2}')
+          script/check-go-version.sh "$LATEST"
           echo "latest=$LATEST" >> "$GITHUB_OUTPUT"
           echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
           if [ "$LATEST" != "$CURRENT" ]; then
