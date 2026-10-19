@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `test/workflows` checks every local action a workflow uses, not only `.github/actions/*/action.yml`: it follows each `uses: ./<path>` (also from one local action to the next, and to reusable workflows), fails when the path has no `action.yml` or `action.yaml`, and flags `${{` in a docker action's `runs.args` and `runs.entrypoint` (#279)
 - `script/check-go-version.sh` prints a rejected value with the workflow-command encoding (`%` as `%25`, CR as `%0D`, LF as `%0A`), so a value with a line break can no longer put a second workflow command into the runner log. It also rejects version components with a leading zero or more than four digits, such as `01.27` (#271)
 
 ### Changed
