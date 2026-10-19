@@ -19,11 +19,13 @@ import (
 )
 
 type step struct {
+	ID   string `yaml:"id"`
 	Name string `yaml:"name"`
 	Uses string `yaml:"uses"`
 	Run  string `yaml:"run"`
 	With struct {
-		Script string `yaml:"script"`
+		Script             string `yaml:"script"`
+		PersistCredentials *bool  `yaml:"persist-credentials"`
 	} `yaml:"with"`
 }
 
@@ -507,6 +509,214 @@ func TestReleaseVersionIsChecked(t *testing.T) {
 			t.Errorf("%s: Extract version writes GITHUB_OUTPUT before it runs the guard", file)
 		}
 	}
+}
+
+// pipInstalls returns every line of a workflow that runs pip install, trimmed.
+func pipInstalls(t *testing.T, file string) []string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", file))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lines []string
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.Contains(line, "pip install") || strings.Contains(line, "pip3 install") {
+			lines = append(lines, strings.TrimSpace(line))
+		}
+	}
+	return lines
+}
+
+// requirementsFile returns the file a `pip3 install --require-hashes -r
+// <file>` line installs, or a message when the line names a package or does
+// not require hashes.
+func requirementsFile(line string) (string, string) {
+	fields := strings.Fields(line)
+	i := 0
+	for i < len(fields) && fields[i] != "install" {
+		i++
+	}
+	var file string
+	hashes := false
+	for i++; i < len(fields); i++ {
+		switch {
+		case fields[i] == "--require-hashes":
+			hashes = true
+		case fields[i] == "-r" && i+1 < len(fields):
+			i++
+			file = fields[i]
+		case strings.HasPrefix(fields[i], "-"):
+		default:
+			return "", fmt.Sprintf("%q names the package %s; install it from a requirements file with hashes", line, fields[i])
+		}
+	}
+	if file == "" || !hashes {
+		return "", fmt.Sprintf("%q does not install with --require-hashes -r <file>", line)
+	}
+	return file, ""
+}
+
+// unhashedRequirements returns every requirement of a pip requirements file
+// that is not pinned with == or carries no --hash=sha256: entry.
+func unhashedRequirements(data string) []string {
+	var bad []string
+	for _, req := range strings.Split(strings.ReplaceAll(data, "\\\n", " "), "\n") {
+		if i := strings.Index(req, "#"); i >= 0 && !strings.Contains(req[:i], "--hash") {
+			req = req[:i]
+		}
+		req = strings.TrimSpace(req)
+		if req == "" {
+			continue
+		}
+		if !strings.Contains(strings.Fields(req)[0], "==") || !strings.Contains(req, "--hash=sha256:") {
+			bad = append(bad, strings.Fields(req)[0])
+		}
+	}
+	return bad
+}
+
+// coprRequirements returns the requirements file copr.yml installs copr-cli
+// from, relative to the repository root.
+func coprRequirements(t *testing.T) string {
+	t.Helper()
+	lines := pipInstalls(t, "copr.yml")
+	if len(lines) != 1 {
+		t.Fatalf("copr.yml: %d pip install lines, want 1: %q", len(lines), lines)
+	}
+	file, problem := requirementsFile(lines[0])
+	if problem != "" {
+		t.Fatalf("copr.yml: %s", problem)
+	}
+	return file
+}
+
+// TestCoprCLIIsPinnedByHash keeps copr.yml from installing a package PyPI can
+// change under it: copr-cli and its dependencies run in the job that holds
+// COPR_TOKEN, so each one is pinned to a version and its sha256 hashes.
+func TestCoprCLIIsPinnedByHash(t *testing.T) {
+	file := coprRequirements(t)
+	data, err := os.ReadFile(filepath.Join("..", "..", filepath.FromSlash(file)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "copr-cli==") {
+		t.Errorf("%s does not pin copr-cli", file)
+	}
+	for _, req := range unhashedRequirements(string(data)) {
+		t.Errorf("%s: %s is not pinned with == and --hash=sha256:", file, req)
+	}
+}
+
+func TestRequirementsFile(t *testing.T) {
+	for _, tc := range []struct{ line, file string }{
+		{"pip3 install --require-hashes -r rpmbuild/requirements.txt", "rpmbuild/requirements.txt"},
+		{"pip3 install --require-hashes --no-build-isolation -r a.txt", "a.txt"},
+		{"pip install -r a.txt --require-hashes", "a.txt"},
+	} {
+		if file, problem := requirementsFile(tc.line); file != tc.file || problem != "" {
+			t.Errorf("requirementsFile(%q) = %q, %q, want %q", tc.line, file, problem, tc.file)
+		}
+	}
+	for _, line := range []string{
+		"pip3 install copr-cli",
+		"pip3 install -r a.txt",
+		"pip3 install --require-hashes -r a.txt copr-cli",
+		"pip3 install --require-hashes",
+	} {
+		if file, problem := requirementsFile(line); problem == "" {
+			t.Errorf("requirementsFile(%q) = %q, want a problem", line, file)
+		}
+	}
+}
+
+func TestUnhashedRequirements(t *testing.T) {
+	data := `# comment
+a==1.0 \
+    --hash=sha256:00 \
+    --hash=sha256:11
+    # via b
+b==2.0 --hash=sha256:22  # via c
+c>=1.0 --hash=sha256:33
+d==1.0
+e
+`
+	got := unhashedRequirements(data)
+	want := []string{"c>=1.0", "d==1.0", "e"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("unhashedRequirements() = %q, want %q", got, want)
+	}
+}
+
+// isCheckout reports whether a step uses actions/checkout.
+func isCheckout(s step) bool {
+	return strings.HasPrefix(strings.ToLower(s.Uses), "actions/checkout@")
+}
+
+// TestVersionGateRunsFirst keeps every step that installs or configures
+// anything in the release jobs behind the version gate: the step with id
+// version comes right after actions/checkout.
+func TestVersionGateRunsFirst(t *testing.T) {
+	for _, file := range []string{"aur.yml", "copr.yml"} {
+		for name, job := range loadWorkflow(t, file).Jobs {
+			checkout := -1
+			for i, s := range job.Steps {
+				if isCheckout(s) {
+					checkout = i
+					break
+				}
+			}
+			if checkout < 0 {
+				t.Errorf("%s: job %q has no actions/checkout step", file, name)
+				continue
+			}
+			if next := checkout + 1; next >= len(job.Steps) || job.Steps[next].ID != "version" {
+				t.Errorf("%s: job %q: the step after actions/checkout is not the one with id version", file, name)
+			}
+		}
+	}
+}
+
+// TestReleaseCheckoutsDropCredentials keeps the GITHUB_TOKEN out of the git
+// credential store in the release jobs: neither runs authenticated git against
+// GitHub, and gh reads its own GH_TOKEN.
+func TestReleaseCheckoutsDropCredentials(t *testing.T) {
+	for _, file := range []string{"aur.yml", "copr.yml"} {
+		for name, job := range loadWorkflow(t, file).Jobs {
+			for i, s := range job.Steps {
+				if !isCheckout(s) {
+					continue
+				}
+				if p := s.With.PersistCredentials; p == nil || *p {
+					t.Errorf("%s: job %q step %d: actions/checkout does not set persist-credentials: false", file, name, i+1)
+				}
+			}
+		}
+	}
+}
+
+// TestDependabotUpdatesCoprRequirements keeps the hash-pinned copr-cli
+// requirements from going stale: Dependabot watches their directory.
+func TestDependabotUpdatesCoprRequirements(t *testing.T) {
+	dir := "/" + path.Dir(coprRequirements(t))
+	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "dependabot.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		Updates []struct {
+			Ecosystem string `yaml:"package-ecosystem"`
+			Directory string `yaml:"directory"`
+		} `yaml:"updates"`
+	}
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range cfg.Updates {
+		if u.Ecosystem == "pip" && path.Clean(u.Directory) == dir {
+			return
+		}
+	}
+	t.Errorf("dependabot.yml has no pip entry for %s", dir)
 }
 
 // TestCheckSHA256 covers the guard aur.yml runs on each checksum read from

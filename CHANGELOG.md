@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - golang.org/x/crypto 0.49.0 → 0.52.0, fixes GO-2026-5018; also pulls golang.org/x/sys 0.42.0 → 0.45.0 (#228)
 - aur and copr fail when the version taken from the release tag does not match `^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$` (`script/check-release-version.sh`), and aur fails when a checksum from `checksums.txt` does not match `^[0-9a-f]{64}$` (`script/check-sha256.sh`), so a malformed tag or checksum never reaches `PKGBUILD`, `.SRCINFO` or the RPM spec. aur writes its SSH key under `umask 077` (#273)
 - aur pushes to AUR only when the host presents the Ed25519 key pinned in `.github/aur_known_hosts` (`StrictHostKeyChecking=yes`), instead of trusting whatever key `ssh-keyscan` returned at run time; no workflow may use `ssh-keyscan` (#281)
+- copr installs copr-cli from `rpmbuild/requirements.txt`, which pins copr-cli and every package of its dependency tree to one version with the sha256 hash of each distribution (`pip3 install --require-hashes --no-build-isolation`), instead of whatever `pip3 install copr-cli` resolved at run time in the job that holds `COPR_TOKEN`. Dependabot (`pip`, `/rpmbuild`) keeps the file current. copr runs the version gate right after the checkout, before it installs anything, and the aur and copr checkouts set `persist-credentials: false`, so the `GITHUB_TOKEN` is not left in the git credential store (#293)
 
 ### Fixed
 
