@@ -77,4 +77,25 @@ func TestCheckGoVersion(t *testing.T) {
 			}
 		})
 	}
+
+	// The runner parses every log line as a possible workflow command, so a
+	// rejected value must not reach the log with a raw line break or %.
+	for _, tc := range []struct{ version, printed string }{
+		{"1.27\n", `"1.27%0A"`},
+		{"1.27\nx", `"1.27%0Ax"`},
+		{"1.27\n::add-mask::x", `"1.27%0A::add-mask::x"`},
+		{"1.27\r", `"1.27%0D"`},
+		{"1.27%0A", `"1.27%250A"`},
+	} {
+		t.Run("escapes "+tc.version, func(t *testing.T) {
+			out, err := exec.Command(script, tc.version).CombinedOutput()
+			if err == nil {
+				t.Fatalf("check-go-version.sh %q succeeded, want failure", tc.version)
+			}
+			want := "::error::not a Go version: " + tc.printed + "\n"
+			if string(out) != want {
+				t.Errorf("check-go-version.sh %q: output %q, want %q", tc.version, out, want)
+			}
+		})
+	}
 }
