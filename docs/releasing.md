@@ -44,7 +44,7 @@
    - [AUR](.github/workflows/aur.yml) — updates `copia-cli-bin` on AUR
    - [Snap](.github/workflows/snap.yml) — builds and publishes to the Snap Store
 
-   COPR and AUR stop before they publish anything unless the tag is `vX.Y.Z` or `vX.Y.Z-<pre-release>` (letters, digits and dots, for example `v1.2.3-rc.1`), and AUR also stops when a Linux checksum in `checksums.txt` is not a SHA-256 hex string.
+   COPR and AUR stop before they publish anything unless the tag is `vX.Y.Z` (digits only, for example `v1.2.3`), and AUR also stops when a Linux checksum in `checksums.txt` is not a SHA-256 hex string.
 
 8. Back-merge `main` into `develop`:
 
@@ -67,5 +67,7 @@ $ just snapshot
 ## Pre-releases
 
 Pre-releases use the `vX.Y.Z-rc.N` or `vX.Y.Z-beta.N` tag format. GoReleaser detects the pre-release tag and marks the GitHub Release accordingly.
+
+Pre-releases are not published to AUR or COPR: both workflows run only on a published full release, and `script/check-release-version.sh` rejects a pre-release version because makepkg and rpmbuild do not accept a hyphen in the package version.
 
 Version progression: `beta.1` → `rc.1` → `rc.2` → stable.
