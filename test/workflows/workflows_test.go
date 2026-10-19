@@ -772,6 +772,226 @@ func TestCoprInstallHasNoSecrets(t *testing.T) {
 	}
 }
 
+// cacheWorkflow is the part of a workflow goCacheViolations reads.
+type cacheWorkflow struct {
+	Permissions any `yaml:"permissions"`
+	Jobs        map[string]struct {
+		Permissions any `yaml:"permissions"`
+		Env         any `yaml:"env"`
+		Steps       []struct {
+			Uses string         `yaml:"uses"`
+			Run  any            `yaml:"run"`
+			With map[string]any `yaml:"with"`
+			Env  any            `yaml:"env"`
+		} `yaml:"steps"`
+	} `yaml:"jobs"`
+}
+
+// writesToken reports whether a permissions block grants write on any scope
+// other than id-token, or is write-all.
+func writesToken(p any) bool {
+	switch p := p.(type) {
+	case string:
+		return p == "write-all"
+	case map[string]any:
+		for scope, access := range p {
+			if scope != "id-token" && fmt.Sprint(access) == "write" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// goCacheViolations lists every actions/setup-go step that leaves the Go cache
+// on in a job that holds a secret or a write token. A job without its own
+// permissions block inherits the workflow's.
+func goCacheViolations(file string, data []byte) ([]string, error) {
+	var wf cacheWorkflow
+	if err := yaml.Unmarshal(data, &wf); err != nil {
+		return nil, fmt.Errorf("%s: %w", file, err)
+	}
+	var out []string
+	for name, job := range wf.Jobs {
+		perms := job.Permissions
+		if perms == nil {
+			perms = wf.Permissions
+		}
+		privileged := writesToken(perms) || strings.Contains(fmt.Sprint(job.Env), "secrets.")
+		for _, s := range job.Steps {
+			for _, v := range []any{s.Run, s.With, s.Env} {
+				if strings.Contains(fmt.Sprint(v), "secrets.") {
+					privileged = true
+				}
+			}
+		}
+		if !privileged {
+			continue
+		}
+		for i, s := range job.Steps {
+			if strings.HasPrefix(strings.ToLower(s.Uses), "actions/setup-go@") && fmt.Sprint(s.With["cache"]) != "false" {
+				out = append(out, fmt.Sprintf("%s: job %q step %d: actions/setup-go does not set cache: false", file, name, i+1))
+			}
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// TestGoCacheOnlyInUnprivilegedJobs keeps the shared Go module and build cache
+// out of every job that holds a secret or a write token: the cache is written
+// by jobs that run unpinned tools (golangci-lint, govulncheck@latest), and a
+// release or integration run restores it.
+func TestGoCacheOnlyInUnprivilegedJobs(t *testing.T) {
+	files, err := filepath.Glob(filepath.Join("..", "..", ".github", "workflows", "*.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range files {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		offenders, err := goCacheViolations(filepath.Base(file), data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, o := range offenders {
+			t.Error(o)
+		}
+	}
+}
+
+func TestGoCacheViolations(t *testing.T) {
+	tests := []struct {
+		name string
+		yaml string
+		want int
+	}{
+		{"no secret, read token, cache on", `
+permissions:
+  contents: read
+jobs:
+  a:
+    steps:
+      - uses: actions/setup-go@x
+`, 0},
+		{"id-token write only, cache on", `
+jobs:
+  a:
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-go@x
+`, 0},
+		{"secret in step env, cache on", `
+jobs:
+  a:
+    steps:
+      - uses: actions/setup-go@x
+      - run: go test
+        env:
+          T: ${{ secrets.T }}
+`, 1},
+		{"secret in step env, cache off", `
+jobs:
+  a:
+    steps:
+      - uses: actions/setup-go@x
+        with:
+          cache: false
+      - run: go test
+        env:
+          T: ${{ secrets.T }}
+`, 0},
+		{"secret in job env", `
+jobs:
+  a:
+    env:
+      T: ${{ secrets.T }}
+    steps:
+      - uses: actions/setup-go@x
+`, 1},
+		{"secret in with", `
+jobs:
+  a:
+    steps:
+      - uses: actions/setup-go@x
+      - uses: some/action@x
+        with:
+          key: ${{ secrets.K }}
+`, 1},
+		{"secret in run", `
+jobs:
+  a:
+    steps:
+      - uses: actions/setup-go@x
+      - run: echo ${{ secrets.K }}
+`, 1},
+		{"job write token", `
+jobs:
+  a:
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/setup-go@x
+        with:
+          cache: true
+`, 1},
+		{"inherited write token", `
+permissions:
+  contents: write
+jobs:
+  a:
+    steps:
+      - uses: actions/setup-go@x
+`, 1},
+		{"job block replaces workflow block", `
+permissions:
+  contents: write
+jobs:
+  a:
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/setup-go@x
+`, 0},
+		{"write-all", `
+permissions: write-all
+jobs:
+  a:
+    steps:
+      - uses: Actions/Setup-Go@x
+`, 1},
+		{"other job holds the secret", `
+jobs:
+  a:
+    steps:
+      - uses: actions/setup-go@x
+  b:
+    steps:
+      - run: go test
+        env:
+          T: ${{ secrets.T }}
+`, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := goCacheViolations("test.yml", []byte(tt.yaml))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != tt.want {
+				t.Errorf("goCacheViolations() = %q, want %d offenders", got, tt.want)
+			}
+		})
+	}
+	if _, err := goCacheViolations("test.yml", []byte("jobs: [")); err == nil {
+		t.Error("goCacheViolations() succeeded on invalid YAML, want error")
+	}
+}
+
 // TestCheckSHA256 covers the guard aur.yml runs on each checksum read from
 // checksums.txt before it reaches GITHUB_OUTPUT and PKGBUILD.
 func TestCheckSHA256(t *testing.T) {
