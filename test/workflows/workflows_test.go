@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -136,6 +137,26 @@ func TestChecksumsAreChecked(t *testing.T) {
 	}
 }
 
+// TestGoVersionsAreChecked keeps every version bump-go.yml writes to
+// GITHUB_OUTPUT, the one from go.dev and the one from go.mod, out of the
+// branch name and the PR unless it passed script/check-go-version.sh.
+func TestGoVersionsAreChecked(t *testing.T) {
+	run := stepRun(t, "bump-go.yml", "Check latest Go version")
+	vars := regexp.MustCompile(`=\$([A-Z_]+)" >> "\$GITHUB_OUTPUT"`).FindAllStringSubmatch(run, -1)
+	if len(vars) == 0 {
+		t.Fatal("bump-go.yml: Check latest Go version writes no shell variable to GITHUB_OUTPUT")
+	}
+	output := strings.Index(run, "GITHUB_OUTPUT")
+	for _, m := range vars {
+		guard := strings.Index(run, `script/check-go-version.sh "$`+m[1]+`"`)
+		if guard < 0 {
+			t.Errorf("bump-go.yml: Check latest Go version does not run script/check-go-version.sh \"$%s\"", m[1])
+		} else if output < guard {
+			t.Errorf("bump-go.yml: Check latest Go version writes GITHUB_OUTPUT before it checks $%s", m[1])
+		}
+	}
+}
+
 // TestAURKeyIsPrivate keeps the AUR SSH key from existing with the default
 // umask, even for the moment before chmod 600.
 func TestAURKeyIsPrivate(t *testing.T) {
@@ -146,8 +167,8 @@ func TestAURKeyIsPrivate(t *testing.T) {
 	}
 }
 
-// TestCheckGoVersion covers the guard bump-go.yml runs on the version it reads
-// from go.dev before writing it to GITHUB_OUTPUT.
+// TestCheckGoVersion covers the guard bump-go.yml runs on the versions it reads
+// from go.dev and go.mod before writing them to GITHUB_OUTPUT.
 func TestCheckGoVersion(t *testing.T) {
 	script := filepath.Join("..", "..", "script", "check-go-version.sh")
 
