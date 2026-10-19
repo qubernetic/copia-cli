@@ -52,6 +52,49 @@ func TestRunBlocksHaveNoExpressions(t *testing.T) {
 	}
 }
 
+// loadWorkflow parses one file under .github/workflows.
+func loadWorkflow(t *testing.T, name string) workflow {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wf workflow
+	if err := yaml.Unmarshal(data, &wf); err != nil {
+		t.Fatalf("%s: %v", name, err)
+	}
+	return wf
+}
+
+// stepRun returns the run block of the step with the given name.
+func stepRun(t *testing.T, file, step string) string {
+	t.Helper()
+	for _, job := range loadWorkflow(t, file).Jobs {
+		for _, s := range job.Steps {
+			if s.Name == step {
+				return s.Run
+			}
+		}
+	}
+	t.Fatalf("%s: no step named %q", file, step)
+	return ""
+}
+
+// TestReleaseVersionIsChecked keeps the release tag out of PKGBUILD, .SRCINFO
+// and the RPM spec unless it passed script/check-release-version.sh.
+func TestReleaseVersionIsChecked(t *testing.T) {
+	for _, file := range []string{"aur.yml", "copr.yml"} {
+		run := stepRun(t, file, "Extract version")
+		guard := strings.Index(run, `script/check-release-version.sh "$VERSION"`)
+		output := strings.Index(run, "GITHUB_OUTPUT")
+		if guard < 0 {
+			t.Errorf("%s: Extract version does not run script/check-release-version.sh \"$VERSION\"", file)
+		} else if output < guard {
+			t.Errorf("%s: Extract version writes GITHUB_OUTPUT before it runs the guard", file)
+		}
+	}
+}
+
 // TestCheckGoVersion covers the guard bump-go.yml runs on the version it reads
 // from go.dev before writing it to GITHUB_OUTPUT.
 func TestCheckGoVersion(t *testing.T) {
@@ -74,6 +117,34 @@ func TestCheckGoVersion(t *testing.T) {
 			}
 			if !strings.Contains(string(out), "::error::not a Go version") {
 				t.Errorf("check-go-version.sh %q: output %q does not name the error", version, out)
+			}
+		})
+	}
+}
+
+// TestCheckReleaseVersion covers the guard aur.yml and copr.yml run on the
+// version taken from the release tag before it reaches GITHUB_OUTPUT, PKGBUILD
+// and the RPM spec.
+func TestCheckReleaseVersion(t *testing.T) {
+	script := filepath.Join("..", "..", "script", "check-release-version.sh")
+
+	for _, version := range []string{"1.2.3", "1.2.3-rc.1", "10.0.12-beta2"} {
+		t.Run("accepts "+version, func(t *testing.T) {
+			out, err := exec.Command(script, version).CombinedOutput()
+			if err != nil {
+				t.Errorf("check-release-version.sh %q: %v\n%s", version, err, out)
+			}
+		})
+	}
+
+	for _, version := range []string{"", "1.2.3/x", "1.2.3$(id)", "1.2.3'", "1.2.3\n", "1.2.3\nx", "v1.2.3", "1.2", "1.2.3-", "1.2.3-rc 1"} {
+		t.Run("rejects "+version, func(t *testing.T) {
+			out, err := exec.Command(script, version).CombinedOutput()
+			if err == nil {
+				t.Fatalf("check-release-version.sh %q succeeded, want failure", version)
+			}
+			if !strings.Contains(string(out), "::error::not a release version") {
+				t.Errorf("check-release-version.sh %q: output %q does not name the error", version, out)
 			}
 		})
 	}
