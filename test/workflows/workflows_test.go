@@ -119,6 +119,27 @@ func TestCheckSHA256(t *testing.T) {
 			}
 		})
 	}
+
+	// Two matching lines in checksums.txt yield a value with a newline, which
+	// must not reach the runner log as a line of its own.
+	for _, tc := range []struct{ sum, printed string }{
+		{valid + "\n", `"` + valid + `%0A"`},
+		{valid + "\n" + valid, `"` + valid + `%0A` + valid + `"`},
+		{valid + "\n::add-mask::x", `"` + valid + `%0A::add-mask::x"`},
+		{valid + "\r", `"` + valid + `%0D"`},
+		{valid + "%0A", `"` + valid + `%250A"`},
+	} {
+		t.Run("escapes "+tc.sum, func(t *testing.T) {
+			out, err := exec.Command(script, tc.sum).CombinedOutput()
+			if err == nil {
+				t.Fatalf("check-sha256.sh %q succeeded, want failure", tc.sum)
+			}
+			want := "::error::not a sha256 checksum: " + tc.printed + "\n"
+			if string(out) != want {
+				t.Errorf("check-sha256.sh %q: output %q, want %q", tc.sum, out, want)
+			}
+		})
+	}
 }
 
 // TestChecksumsAreChecked keeps the checksums out of PKGBUILD and .SRCINFO
@@ -220,6 +241,27 @@ func TestCheckReleaseVersion(t *testing.T) {
 			}
 			if !strings.Contains(string(out), "::error::not a release version") {
 				t.Errorf("check-release-version.sh %q: output %q does not name the error", version, out)
+			}
+		})
+	}
+
+	// The runner parses every log line as a possible workflow command, so a
+	// rejected value must not reach the log with a raw line break or %.
+	for _, tc := range []struct{ version, printed string }{
+		{"1.2.3\n", `"1.2.3%0A"`},
+		{"1.2.3\nx", `"1.2.3%0Ax"`},
+		{"1.2.3\n::add-mask::x", `"1.2.3%0A::add-mask::x"`},
+		{"1.2.3\r", `"1.2.3%0D"`},
+		{"1.2.3%0A", `"1.2.3%250A"`},
+	} {
+		t.Run("escapes "+tc.version, func(t *testing.T) {
+			out, err := exec.Command(script, tc.version).CombinedOutput()
+			if err == nil {
+				t.Fatalf("check-release-version.sh %q succeeded, want failure", tc.version)
+			}
+			want := "::error::not a release version: " + tc.printed + "\n"
+			if string(out) != want {
+				t.Errorf("check-release-version.sh %q: output %q, want %q", tc.version, out, want)
 			}
 		})
 	}
