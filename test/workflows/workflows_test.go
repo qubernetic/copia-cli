@@ -647,6 +647,35 @@ e
 	}
 }
 
+// isCheckout reports whether a step uses actions/checkout.
+func isCheckout(s step) bool {
+	return strings.HasPrefix(strings.ToLower(s.Uses), "actions/checkout@")
+}
+
+// TestVersionGateRunsFirst keeps every step that installs or configures
+// anything in the release jobs behind the version gate: the step with id
+// version comes right after actions/checkout.
+func TestVersionGateRunsFirst(t *testing.T) {
+	for _, file := range []string{"aur.yml", "copr.yml"} {
+		for name, job := range loadWorkflow(t, file).Jobs {
+			checkout := -1
+			for i, s := range job.Steps {
+				if isCheckout(s) {
+					checkout = i
+					break
+				}
+			}
+			if checkout < 0 {
+				t.Errorf("%s: job %q has no actions/checkout step", file, name)
+				continue
+			}
+			if next := checkout + 1; next >= len(job.Steps) || job.Steps[next].ID != "version" {
+				t.Errorf("%s: job %q: the step after actions/checkout is not the one with id version", file, name)
+			}
+		}
+	}
+}
+
 // TestCheckSHA256 covers the guard aur.yml runs on each checksum read from
 // checksums.txt before it reaches GITHUB_OUTPUT and PKGBUILD.
 func TestCheckSHA256(t *testing.T) {
