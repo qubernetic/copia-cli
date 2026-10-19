@@ -676,6 +676,24 @@ func TestVersionGateRunsFirst(t *testing.T) {
 	}
 }
 
+// TestReleaseCheckoutsDropCredentials keeps the GITHUB_TOKEN out of the git
+// credential store in the release jobs: neither runs authenticated git against
+// GitHub, and gh reads its own GH_TOKEN.
+func TestReleaseCheckoutsDropCredentials(t *testing.T) {
+	for _, file := range []string{"aur.yml", "copr.yml"} {
+		for name, job := range loadWorkflow(t, file).Jobs {
+			for i, s := range job.Steps {
+				if !isCheckout(s) {
+					continue
+				}
+				if p := s.With.PersistCredentials; p == nil || *p {
+					t.Errorf("%s: job %q step %d: actions/checkout does not set persist-credentials: false", file, name, i+1)
+				}
+			}
+		}
+	}
+}
+
 // TestCheckSHA256 covers the guard aur.yml runs on each checksum read from
 // checksums.txt before it reaches GITHUB_OUTPUT and PKGBUILD.
 func TestCheckSHA256(t *testing.T) {
