@@ -44,7 +44,7 @@
    - [AUR](.github/workflows/aur.yml) — updates `copia-cli-bin` on AUR
    - [Snap](.github/workflows/snap.yml) — builds and publishes to the Snap Store
 
-   COPR and AUR stop before they publish anything unless the tag is `vX.Y.Z` or `vX.Y.Z-<pre-release>` (letters, digits and dots, for example `v1.2.3-rc.1`), and AUR also stops when a Linux checksum in `checksums.txt` is not a SHA-256 hex string.
+   COPR and AUR stop before they publish anything unless the tag is `vX.Y.Z` or `vX.Y.Z-<pre-release>` (letters, digits and dots, for example `v1.2.3-rc.1`), and AUR also stops when `checksums.txt` does not have exactly one line for each Linux archive (`copia-cli_X.Y.Z_linux_amd64.tar.gz`, `copia-cli_X.Y.Z_linux_arm64.tar.gz`) or a checksum there is not a SHA-256 hex string.
 
 8. Back-merge `main` into `develop`:
 

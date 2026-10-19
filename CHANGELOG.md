@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- aur reads each Linux checksum from `checksums.txt` with `script/select-checksum.sh`, which takes only the one line whose name equals `copia-cli_<version>_linux_<arch>.tar.gz` and fails on a missing or duplicated line. A line for another version, a longer name such as `...tar.gz.sbom.json`, or a line containing both archive names can no longer put a wrong checksum into `PKGBUILD` (#283)
 - `script/check-go-version.sh` prints a rejected value with the workflow-command encoding (`%` as `%25`, CR as `%0D`, LF as `%0A`), so a value with a line break can no longer put a second workflow command into the runner log. It also rejects version components with a leading zero or more than four digits, such as `01.27` (#271)
 
 ### Changed
