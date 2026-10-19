@@ -121,6 +121,85 @@ func TestCheckSHA256(t *testing.T) {
 	}
 }
 
+// TestSelectChecksum covers the script aur.yml uses to read each archive's
+// checksum from checksums.txt: only a line whose name equals the asset name
+// counts, and anything but exactly one such line fails.
+func TestSelectChecksum(t *testing.T) {
+	script := filepath.Join("..", "..", "script", "select-checksum.sh")
+	amd := "copia-cli_1.2.3_linux_amd64.tar.gz"
+	arm := "copia-cli_1.2.3_linux_arm64.tar.gz"
+	sumA := strings.Repeat("a", 64)
+	sumB := strings.Repeat("b", 64)
+	sumC := strings.Repeat("c", 64)
+	goreleaser := sumC + "  copia-cli_1.2.3_darwin_amd64.tar.gz\n" +
+		sumA + "  " + amd + "\n" +
+		sumB + "  " + arm + "\n"
+
+	run := func(t *testing.T, checksums, asset string) (string, error) {
+		t.Helper()
+		file := filepath.Join(t.TempDir(), "checksums.txt")
+		if err := os.WriteFile(file, []byte(checksums), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		out, err := exec.Command(script, file, asset).CombinedOutput()
+		return string(out), err
+	}
+
+	for _, tc := range []struct{ asset, want string }{{amd, sumA}, {arm, sumB}} {
+		t.Run("selects "+tc.asset, func(t *testing.T) {
+			out, err := run(t, goreleaser, tc.asset)
+			if err != nil {
+				t.Fatalf("select-checksum.sh %s: %v\n%s", tc.asset, err, out)
+			}
+			if out != tc.want+"\n" {
+				t.Errorf("select-checksum.sh %s: output %q, want %q", tc.asset, out, tc.want+"\n")
+			}
+		})
+	}
+
+	for _, tc := range []struct{ name, checksums string }{
+		{"a missing line", sumB + "  " + arm + "\n"},
+		{"a duplicated line", goreleaser + sumA + "  " + amd + "\n"},
+		{"a line naming both archives", sumC + "  " + amd + "." + arm + "\n" + sumB + "  " + arm + "\n"},
+		{"a superset name", sumC + "  " + amd + ".sbom.json\n" + sumB + "  " + arm + "\n"},
+		{"another version", sumC + "  copia-cli_1.2.4_linux_amd64.tar.gz\n" + sumB + "  " + arm + "\n"},
+		{"a regex match", sumC + "  copia-cli_1.2.3_linux_amd64xtarxgz\n"},
+		{"an empty file", ""},
+	} {
+		t.Run("rejects "+tc.name, func(t *testing.T) {
+			out, err := run(t, tc.checksums, amd)
+			if err == nil {
+				t.Fatalf("select-checksum.sh succeeded with output %q, want failure", out)
+			}
+			want := "::error::expected exactly one checksum line for \"" + amd + "\"\n"
+			if out != want {
+				t.Errorf("select-checksum.sh: output %q, want %q", out, want)
+			}
+		})
+	}
+}
+
+// TestChecksumsAreSelectedByName keeps aur.yml from reading a checksum any
+// other way than through script/select-checksum.sh with the exact asset name.
+func TestChecksumsAreSelectedByName(t *testing.T) {
+	run := stepRun(t, "aur.yml", "Get checksums")
+	for v, arch := range map[string]string{"SHA_X86": "amd64", "SHA_ARM": "arm64"} {
+		want := v + `="$(script/select-checksum.sh checksums.txt "copia-cli_${VERSION}_linux_` + arch + `.tar.gz")"`
+		if !strings.Contains(run, want) {
+			t.Errorf("aur.yml: Get checksums does not set %s with %s", v, want)
+		}
+	}
+	for _, line := range strings.Split(run, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "gh release download") {
+			continue
+		}
+		if strings.Contains(line, "checksums.txt") && !strings.Contains(line, "script/select-checksum.sh checksums.txt ") {
+			t.Errorf("aur.yml: Get checksums reads checksums.txt outside script/select-checksum.sh: %s", line)
+		}
+	}
+}
+
 // TestChecksumsAreChecked keeps the checksums out of PKGBUILD and .SRCINFO
 // unless they passed script/check-sha256.sh.
 func TestChecksumsAreChecked(t *testing.T) {
