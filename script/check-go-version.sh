@@ -1,5 +1,6 @@
 #!/bin/sh
-# Fails unless $1 is a Go release version such as 1.27 or 1.26.9.
+# Fails unless $1 is a Go release version such as 1.27 or 1.26.9: two or
+# three components, each 0 or up to four digits without a leading zero.
 # bump-go.yml runs it on the version read from go.dev before the value
 # reaches GITHUB_OUTPUT, where it later names a branch and a PR.
 set -eu
@@ -23,4 +24,5 @@ case "$version" in
 '*) reject ;;
 esac
 
-printf '%s\n' "$version" | grep -Eqx '[0-9]+\.[0-9]+(\.[0-9]+)?' || reject
+n='(0|[1-9][0-9]{0,3})'
+printf '%s\n' "$version" | grep -Eqx "$n\.$n(\.$n)?" || reject

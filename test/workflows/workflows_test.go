@@ -66,7 +66,10 @@ func TestCheckGoVersion(t *testing.T) {
 		})
 	}
 
-	for _, version := range []string{"", "1.27; echo x", "go1.27", "1", "1.27rc1", "1.27.0.1", "1.27\n", "$(id)"} {
+	for _, version := range []string{
+		"", "1.27; echo x", "go1.27", "1", "1.27rc1", "1.27.0.1", "1.27\n", "$(id)",
+		"01.27", "1.027", "1.27.00", "00000000000000000000000000000001.0", "1.10000",
+	} {
 		t.Run("rejects "+version, func(t *testing.T) {
 			out, err := exec.Command(script, version).CombinedOutput()
 			if err == nil {
