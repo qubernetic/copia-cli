@@ -91,8 +91,7 @@ jobs:
           mkdir -p ~/.ssh
           (umask 077; printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur)
           chmod 600 ~/.ssh/aur
-          ssh-keyscan -t ed25519 aur.archlinux.org >> ~/.ssh/known_hosts
-          export GIT_SSH_COMMAND="ssh -i ~/.ssh/aur"
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/aur -o UserKnownHostsFile=$GITHUB_WORKSPACE/.github/aur_known_hosts -o StrictHostKeyChecking=yes"
 
           git clone ssh://aur@aur.archlinux.org/copia-cli-bin.git aur-repo
           cp PKGBUILD .SRCINFO aur-repo/
