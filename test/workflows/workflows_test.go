@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -17,18 +18,32 @@ import (
 )
 
 type step struct {
-	Name string `yaml:"name"`
-	Uses string `yaml:"uses"`
-	Run  string `yaml:"run"`
-	With struct {
+	Name            string            `yaml:"name"`
+	ID              string            `yaml:"id"`
+	If              string            `yaml:"if"`
+	Uses            string            `yaml:"uses"`
+	Run             string            `yaml:"run"`
+	Shell           string            `yaml:"shell"`
+	ContinueOnError any               `yaml:"continue-on-error"`
+	Env             map[string]string `yaml:"env"`
+	With            struct {
 		Script string `yaml:"script"`
 	} `yaml:"with"`
 }
 
+// defaults is the defaults: key of a workflow or a job.
+type defaults struct {
+	Run struct {
+		Shell string `yaml:"shell"`
+	} `yaml:"run"`
+}
+
 // actionFile covers both a workflow (jobs) and a composite action (runs).
 type actionFile struct {
-	Jobs map[string]struct {
-		Steps []step `yaml:"steps"`
+	Defaults defaults `yaml:"defaults"`
+	Jobs     map[string]struct {
+		Defaults defaults `yaml:"defaults"`
+		Steps    []step   `yaml:"steps"`
 	} `yaml:"jobs"`
 	Runs struct {
 		Steps []step `yaml:"steps"`
@@ -229,21 +244,6 @@ func stepRun(t *testing.T, file, step string) string {
 	return ""
 }
 
-// TestReleaseVersionIsChecked keeps the release tag out of PKGBUILD, .SRCINFO
-// and the RPM spec unless it passed script/check-release-version.sh.
-func TestReleaseVersionIsChecked(t *testing.T) {
-	for _, file := range []string{"aur.yml", "copr.yml"} {
-		run := stepRun(t, file, "Extract version")
-		guard := strings.Index(run, `script/check-release-version.sh "$VERSION"`)
-		output := strings.Index(run, "GITHUB_OUTPUT")
-		if guard < 0 {
-			t.Errorf("%s: Extract version does not run script/check-release-version.sh \"$VERSION\"", file)
-		} else if output < guard {
-			t.Errorf("%s: Extract version writes GITHUB_OUTPUT before it runs the guard", file)
-		}
-	}
-}
-
 // TestCheckSHA256 covers the guard aur.yml runs on each checksum read from
 // checksums.txt before it reaches GITHUB_OUTPUT and PKGBUILD.
 func TestCheckSHA256(t *testing.T) {
@@ -347,42 +347,6 @@ func TestSelectChecksum(t *testing.T) {
 				t.Errorf("select-checksum.sh: output %q, want %q", out, want)
 			}
 		})
-	}
-}
-
-// TestChecksumsAreSelectedByName keeps aur.yml from reading a checksum any
-// other way than through script/select-checksum.sh with the exact asset name.
-func TestChecksumsAreSelectedByName(t *testing.T) {
-	run := stepRun(t, "aur.yml", "Get checksums")
-	for v, arch := range map[string]string{"SHA_X86": "amd64", "SHA_ARM": "arm64"} {
-		want := v + `="$(script/select-checksum.sh checksums.txt "copia-cli_${VERSION}_linux_` + arch + `.tar.gz")"`
-		if !strings.Contains(run, want) {
-			t.Errorf("aur.yml: Get checksums does not set %s with %s", v, want)
-		}
-	}
-	for _, line := range strings.Split(run, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "gh release download") {
-			continue
-		}
-		if strings.Contains(line, "checksums.txt") && !strings.Contains(line, "script/select-checksum.sh checksums.txt ") {
-			t.Errorf("aur.yml: Get checksums reads checksums.txt outside script/select-checksum.sh: %s", line)
-		}
-	}
-}
-
-// TestChecksumsAreChecked keeps the checksums out of PKGBUILD and .SRCINFO
-// unless they passed script/check-sha256.sh.
-func TestChecksumsAreChecked(t *testing.T) {
-	run := stepRun(t, "aur.yml", "Get checksums")
-	for _, v := range []string{"SHA_X86", "SHA_ARM"} {
-		guard := strings.Index(run, `script/check-sha256.sh "$`+v+`"`)
-		output := strings.Index(run, `=$`+v+`" >> "$GITHUB_OUTPUT"`)
-		if guard < 0 {
-			t.Errorf("aur.yml: Get checksums does not run script/check-sha256.sh \"$%s\"", v)
-		} else if output < guard {
-			t.Errorf("aur.yml: Get checksums does not write $%s to GITHUB_OUTPUT after the guard", v)
-		}
 	}
 }
 
@@ -779,4 +743,265 @@ func TestReleaseChecksums(t *testing.T) {
 			t.Errorf("release-checksums.sh: output %q does not name the error", out)
 		}
 	})
+}
+
+// releaseGate is a step that checks a value and writes it to GITHUB_OUTPUT.
+// Its run block is one script call, so what reaches GITHUB_OUTPUT is what
+// TestReleaseVersion and TestReleaseChecksums cover.
+type releaseGate struct {
+	id, name, run string
+	env           map[string]string
+}
+
+// releaseOutput is an output of a release gate that later steps read from
+// the environment variable name.
+type releaseOutput struct {
+	name, expr string
+}
+
+var (
+	versionExpr = "${{ steps.version.outputs.version }}"
+
+	versionGate = releaseGate{
+		id: "version", name: "Extract version",
+		run: "script/release-version.sh",
+	}
+	checksumsGate = releaseGate{
+		id: "checksums", name: "Get checksums",
+		run: `script/release-checksums.sh checksums.txt "$VERSION"`,
+		env: map[string]string{"VERSION": versionExpr},
+	}
+
+	versionOutput = releaseOutput{"VERSION", versionExpr}
+	x86Output     = releaseOutput{"SHA_X86", "${{ steps.checksums.outputs.sha256_x86_64 }}"}
+	armOutput     = releaseOutput{"SHA_ARM", "${{ steps.checksums.outputs.sha256_aarch64 }}"}
+)
+
+// releaseGates lists, per release workflow, its gates, the outputs its steps
+// read, and the steps that must read each output (so the check cannot pass
+// by finding no reader at all).
+var releaseGates = map[string]struct {
+	gates   []releaseGate
+	outputs []releaseOutput
+	readers map[string][]string
+}{
+	"aur.yml": {
+		gates:   []releaseGate{versionGate, checksumsGate},
+		outputs: []releaseOutput{versionOutput, x86Output, armOutput},
+		readers: map[string][]string{
+			"VERSION": {"Get checksums", "Generate PKGBUILD and .SRCINFO", "Publish to AUR"},
+			"SHA_X86": {"Generate PKGBUILD and .SRCINFO"},
+			"SHA_ARM": {"Generate PKGBUILD and .SRCINFO"},
+		},
+	},
+	"copr.yml": {
+		gates:   []releaseGate{versionGate},
+		outputs: []releaseOutput{versionOutput},
+		readers: map[string][]string{"VERSION": {"Build SRPM"}},
+	},
+}
+
+// checkReleaseGates returns one message per way the workflow file could let
+// an unchecked value reach a step that reads a gate's output: a gate whose
+// run block is not exactly its script call, a gate or job that can run in a
+// shell without -e or carry on after a failure, and a reader that takes the
+// variable from anywhere but the gate's output.
+func checkReleaseGates(file string, data []byte) ([]string, error) {
+	spec, ok := releaseGates[file]
+	if !ok {
+		return nil, fmt.Errorf("%s: not a release workflow", file)
+	}
+	var wf actionFile
+	if err := yaml.Unmarshal(data, &wf); err != nil {
+		return nil, fmt.Errorf("%s: %w", file, err)
+	}
+
+	var problems []string
+	report := func(format string, args ...any) {
+		problems = append(problems, file+": "+fmt.Sprintf(format, args...))
+	}
+	if wf.Defaults.Run.Shell != "" {
+		report("defaults.run.shell is set; gates must run in the default shell")
+	}
+
+	found := map[string]bool{}
+	read := map[string]map[string]bool{}
+	for jobName, job := range wf.Jobs {
+		if job.Defaults.Run.Shell != "" {
+			report("job %q sets defaults.run.shell; gates must run in the default shell", jobName)
+		}
+		produced := map[string]bool{}
+		for _, s := range job.Steps {
+			for _, g := range spec.gates {
+				if s.ID != g.id {
+					continue
+				}
+				found[g.id] = true
+				if s.Name != g.name {
+					report("step %q is named %q, want %q", g.id, s.Name, g.name)
+				}
+				if s.Run != g.run && s.Run != g.run+"\n" {
+					report("step %q runs %q, want exactly %q", g.name, s.Run, g.run)
+				}
+				if s.Shell != "" {
+					report("step %q sets shell: %s", g.name, s.Shell)
+				}
+				if s.ContinueOnError != nil {
+					report("step %q sets continue-on-error", g.name)
+				}
+				if s.If != "" {
+					report("step %q sets if: %s", g.name, s.If)
+				}
+				if !envEqual(s.Env, g.env) {
+					report("step %q has env %v, want %v", g.name, s.Env, g.env)
+				}
+			}
+			for _, o := range spec.outputs {
+				if !readsVar(s, o.name) {
+					continue
+				}
+				if read[o.name] == nil {
+					read[o.name] = map[string]bool{}
+				}
+				read[o.name][s.Name] = true
+				if got, ok := s.Env[o.name]; !ok || got != o.expr {
+					report("step %q reads %s, want env %s: %s", s.Name, o.name, o.name, o.expr)
+				}
+				if assignsVar(s.Run, o.name) {
+					report("step %q assigns %s in its run block", s.Name, o.name)
+				}
+				if gate := gateOf(o.expr); !produced[gate] {
+					report("step %q reads %s before step %q writes it", s.Name, o.name, gate)
+				}
+			}
+			produced[s.ID] = true
+		}
+	}
+
+	for _, g := range spec.gates {
+		if !found[g.id] {
+			report("no step with id %q (%s)", g.id, g.name)
+		}
+	}
+	for _, o := range spec.outputs {
+		for _, name := range spec.readers[o.name] {
+			if !read[o.name][name] {
+				report("step %q does not read %s", name, o.name)
+			}
+		}
+	}
+	sort.Strings(problems)
+	return problems, nil
+}
+
+// readsVar reports whether step s can see the environment variable name: it
+// sets it in env or mentions it in its run block.
+func readsVar(s step, name string) bool {
+	if _, ok := s.Env[name]; ok {
+		return true
+	}
+	return regexp.MustCompile(`\$\{?` + name + `\b`).MatchString(s.Run)
+}
+
+// assignsVar reports whether run assigns the shell variable name.
+func assignsVar(run, name string) bool {
+	return regexp.MustCompile(`(^|[^A-Za-z0-9_$])` + name + `=|\bread\b.*\b` + name + `\b`).MatchString(run)
+}
+
+// gateOf returns the step id in a ${{ steps.<id>.outputs.<name> }} expression.
+func gateOf(expr string) string {
+	return strings.Split(strings.TrimPrefix(expr, "${{ steps."), ".")[0]
+}
+
+func envEqual(got, want map[string]string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for k, v := range want {
+		if got[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+// TestReleaseGates keeps the release tag and the checksums out of PKGBUILD,
+// .SRCINFO and the RPM spec unless they passed script/release-version.sh and
+// script/release-checksums.sh.
+func TestReleaseGates(t *testing.T) {
+	for file := range releaseGates {
+		data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		problems, err := checkReleaseGates(file, data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range problems {
+			t.Error(p)
+		}
+	}
+}
+
+// TestReleaseGatesCatchEdits applies, to the real workflow files, each edit
+// that would let an unchecked value through, and expects checkReleaseGates
+// to report it.
+func TestReleaseGatesCatchEdits(t *testing.T) {
+	for _, tc := range []struct{ name, file, want, old, new string }{
+		{"guard followed by || true", "aur.yml", "step \"Extract version\" runs",
+			"run: script/release-version.sh\n", "run: script/release-version.sh || true\n"},
+		{"version written from GITHUB_REF_NAME", "copr.yml", "step \"Extract version\" runs",
+			"run: script/release-version.sh\n",
+			"run: |\n          script/release-version.sh\n          echo \"version=${GITHUB_REF_NAME#v}\" >> \"$GITHUB_OUTPUT\"\n"},
+		{"VERSION reassigned after the guard", "aur.yml", "step \"Extract version\" runs",
+			"run: script/release-version.sh\n",
+			"run: |\n          VERSION=x\n          script/release-version.sh\n"},
+		{"shell without -e on the gate", "aur.yml", "step \"Extract version\" sets shell",
+			"        id: version\n", "        id: version\n        shell: bash {0}\n"},
+		{"shell without -e as the job default", "copr.yml", "job \"copr\" sets defaults.run.shell",
+			"    runs-on: ubuntu-latest\n", "    runs-on: ubuntu-latest\n    defaults:\n      run:\n        shell: bash {0}\n"},
+		{"shell without -e as the workflow default", "aur.yml", "defaults.run.shell is set",
+			"permissions:\n", "defaults:\n  run:\n    shell: bash {0}\n\npermissions:\n"},
+		{"continue-on-error on the gate", "aur.yml", "step \"Get checksums\" sets continue-on-error",
+			"        id: checksums\n", "        id: checksums\n        continue-on-error: true\n"},
+		{"gate skipped", "copr.yml", "step \"Extract version\" sets if",
+			"        id: version\n", "        id: version\n        if: false\n"},
+		{"Build SRPM reading the tag", "copr.yml", "step \"Build SRPM\" reads VERSION, want env",
+			"          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n          VERSION: ${{ steps.version.outputs.version }}\n",
+			"          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n          VERSION: ${{ github.ref_name }}\n"},
+		{"Build SRPM assigning VERSION", "copr.yml", "step \"Build SRPM\" assigns VERSION",
+			"          sed -i \"s/^Version", "          VERSION=\"${GITHUB_REF_NAME#v}\"\n          sed -i \"s/^Version"},
+		{"Build SRPM without VERSION in env", "copr.yml", "step \"Build SRPM\" reads VERSION, want env",
+			"          VERSION: ${{ steps.version.outputs.version }}\n\n      - name: Submit", "\n      - name: Submit"},
+		{"second unchecked checksum write", "aur.yml", "step \"Get checksums\" runs",
+			"run: script/release-checksums.sh checksums.txt \"$VERSION\"\n",
+			"run: |\n          script/release-checksums.sh checksums.txt \"$VERSION\"\n          echo \"sha256_x86_64=x\" >> \"$GITHUB_OUTPUT\"\n"},
+		{"checksums gate given another VERSION", "aur.yml", "step \"Get checksums\" reads VERSION, want env",
+			"          VERSION: ${{ steps.version.outputs.version }}\n\n      - name: Generate",
+			"          VERSION: ${{ github.ref_name }}\n\n      - name: Generate"},
+		{"PKGBUILD reading another checksum", "aur.yml", "step \"Generate PKGBUILD and .SRCINFO\" reads SHA_ARM, want env",
+			"SHA_ARM: ${{ steps.checksums.outputs.sha256_aarch64 }}", "SHA_ARM: ${{ steps.checksums.outputs.sha256_x86_64 }}"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", tc.file))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Count(string(data), tc.old) != 1 {
+				t.Fatalf("%s: %q does not occur exactly once", tc.file, tc.old)
+			}
+			edited := strings.Replace(string(data), tc.old, tc.new, 1)
+			problems, err := checkReleaseGates(tc.file, []byte(edited))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, p := range problems {
+				if strings.Contains(p, tc.want) {
+					return
+				}
+			}
+			t.Errorf("%s with %s: problems %q, want one containing %q", tc.file, tc.name, problems, tc.want)
+		})
+	}
 }

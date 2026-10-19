@@ -32,10 +32,7 @@ jobs:
 
       - name: Extract version
         id: version
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          script/check-release-version.sh "$VERSION"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+        run: script/release-version.sh
 
       - name: Build SRPM
         run: |

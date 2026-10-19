@@ -15,23 +15,17 @@ jobs:
 
       - name: Extract version
         id: version
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          script/check-release-version.sh "$VERSION"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+        run: script/release-version.sh
+
+      - name: Download checksums
+        run: gh release download "$GITHUB_REF_NAME" --pattern "checksums.txt" --output checksums.txt
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Get checksums
         id: checksums
-        run: |
-          gh release download "$GITHUB_REF_NAME" --pattern "checksums.txt" --output checksums.txt
-          SHA_X86="$(script/select-checksum.sh checksums.txt "copia-cli_${VERSION}_linux_amd64.tar.gz")"
-          SHA_ARM="$(script/select-checksum.sh checksums.txt "copia-cli_${VERSION}_linux_arm64.tar.gz")"
-          script/check-sha256.sh "$SHA_X86"
-          script/check-sha256.sh "$SHA_ARM"
-          echo "sha256_x86_64=$SHA_X86" >> "$GITHUB_OUTPUT"
-          echo "sha256_aarch64=$SHA_ARM" >> "$GITHUB_OUTPUT"
+        run: script/release-checksums.sh checksums.txt "$VERSION"
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
 
       - name: Generate PKGBUILD and .SRCINFO
