@@ -71,6 +71,73 @@ func TestStatusRun_MasksToken(t *testing.T) {
 	assert.Equal(t, "app.copia.io\n  User: john\n  Token: "+strings.Repeat("*", 40)+"\n  Token valid\n", stdout.String())
 }
 
+func TestStatusRun_ShowToken(t *testing.T) {
+	tests := []struct {
+		name string
+		host string
+		want string
+	}{
+		{
+			name: "all hosts",
+			want: "app.copia.io\n  User: john\n  Token: abc123\n  Token valid\n",
+		},
+		{
+			name: "specific host",
+			host: "app.copia.io",
+			want: "app.copia.io\n  User: john\n  Token: abc123\n  Token valid\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			defer reg.Verify(t)
+			reg.Register(httpmock.REST("GET", "/api/v1/user"), httpmock.StringResponse(http.StatusOK, `{}`))
+
+			hosts := map[string]*config.HostConfig{"app.copia.io": {Token: "abc123", User: "john"}}
+			if tt.host != "" {
+				hosts["other.copia.io"] = &config.HostConfig{Token: "xyz789", User: "jane"}
+			}
+			configPath := filepath.Join(t.TempDir(), "config.yml")
+			require.NoError(t, config.Save(configPath, &config.Config{Hosts: hosts}))
+
+			ios, _, stdout, _ := iostreams.Test()
+			err := StatusRun(&StatusOptions{
+				IO:         ios,
+				ConfigPath: configPath,
+				HTTPClient: &http.Client{Transport: reg},
+				Host:       tt.host,
+				ShowToken:  true,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, stdout.String())
+			assert.NotContains(t, stdout.String(), "xyz789")
+		})
+	}
+}
+
+func TestStatusRun_SpecificHostMasksToken(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	reg.Register(httpmock.REST("GET", "/api/v1/user"), httpmock.StringResponse(http.StatusOK, `{}`))
+
+	configPath := filepath.Join(t.TempDir(), "config.yml")
+	require.NoError(t, config.Save(configPath, &config.Config{Hosts: map[string]*config.HostConfig{
+		"app.copia.io":   {Token: "abc123", User: "john"},
+		"other.copia.io": {Token: "xyz789", User: "jane"},
+	}}))
+
+	ios, _, stdout, _ := iostreams.Test()
+	err := StatusRun(&StatusOptions{
+		IO:         ios,
+		ConfigPath: configPath,
+		HTTPClient: &http.Client{Transport: reg},
+		Host:       "other.copia.io",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "other.copia.io\n  User: jane\n  Token: ******\n  Token valid\n", stdout.String())
+}
+
 func TestStatusRun_NoHosts(t *testing.T) {
 	configPath := t.TempDir() + "/config.yml"
 	cfg := &config.Config{Hosts: map[string]*config.HostConfig{}}
@@ -184,10 +251,10 @@ func setTempConfig(t *testing.T, hosts map[string]*config.HostConfig) string {
 	return path
 }
 
-func runStatusCmd(t *testing.T, f *cmdutil.Factory) error {
+func runStatusCmd(t *testing.T, f *cmdutil.Factory, args ...string) error {
 	t.Helper()
 	cmd := NewCmdStatus(f)
-	cmd.SetArgs([]string{})
+	cmd.SetArgs(args)
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)
 	return cmd.Execute()
@@ -238,6 +305,35 @@ func TestNewCmdStatus_FactoryHost(t *testing.T) {
 	require.Len(t, reg.Requests, 1)
 	assert.Equal(t, "other.example.com", reg.Requests[0].URL.Host)
 	assert.Equal(t, "token bad", reg.Requests[0].Header.Get("Authorization"))
+}
+
+func TestNewCmdStatus_ShowToken(t *testing.T) {
+	configPath := setTempConfig(t, map[string]*config.HostConfig{
+		"app.copia.io":      {Token: "good", User: "john"},
+		"other.example.com": {Token: "bad", User: "jane"},
+	})
+	before, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+	reg.Register(httpmock.REST("GET", "/api/v1/user"), httpmock.StringResponse(http.StatusOK, `{}`))
+
+	ios, _, stdout, _ := iostreams.Test()
+	err = runStatusCmd(t, &cmdutil.Factory{IOStreams: ios, Host: "other.example.com"}, "--show-token")
+	require.NoError(t, err)
+	assert.Equal(t, "other.example.com\n  User: jane\n  Token: bad\n  Token valid\n", stdout.String())
+	after, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
+}
+
+func TestNewCmdStatus_ShowTokenFlag(t *testing.T) {
+	cmd := NewCmdStatus(&cmdutil.Factory{})
+	flag := cmd.Flags().Lookup("show-token")
+	require.NotNil(t, flag)
+	assert.Equal(t, "false", flag.DefValue)
+	assert.Equal(t, "Display the authentication token", flag.Usage)
 }
 
 func TestNewCmdStatus_NoConfigFile(t *testing.T) {
