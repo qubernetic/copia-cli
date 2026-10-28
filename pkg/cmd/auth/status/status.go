@@ -3,6 +3,8 @@ package status
 import (
 	"fmt"
 	"net/http"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 	"github.com/qubernetic/copia-cli/internal/config"
@@ -16,6 +18,7 @@ type StatusOptions struct {
 	ConfigPath string
 	HTTPClient *http.Client
 	Host       string // filter to specific host (optional)
+	ShowToken  bool   // print the token instead of its mask
 }
 
 // NewCmdStatus creates the `copia auth status` command.
@@ -25,8 +28,8 @@ func NewCmdStatus(f *cmdutil.Factory) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "status",
 		Short:   "View authentication status",
-		Long:    "Display the authentication state for each configured Copia host, including the active user and token validity.",
-		Example: "  $ copia-cli auth status",
+		Long:    "Display the authentication state for each configured Copia host, including the active user, the masked token and token validity. Use --show-token to print the token itself.",
+		Example: "  $ copia-cli auth status\n  $ copia-cli auth status --show-token",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.IO = f.IOStreams
 			opts.ConfigPath = config.DefaultPath()
@@ -35,6 +38,8 @@ func NewCmdStatus(f *cmdutil.Factory) *cobra.Command {
 			return StatusRun(opts)
 		},
 	}
+
+	cmd.Flags().BoolVar(&opts.ShowToken, "show-token", false, "Display the authentication token")
 
 	return cmd
 }
@@ -80,8 +85,19 @@ func StatusRun(opts *StatusOptions) error {
 			}
 		}
 
-		_, _ = fmt.Fprintf(opts.IO.Out, "%s\n  User: %s\n  %s\n", host, hc.User, tokenStatus)
+		token := maskToken(hc.Token)
+		if opts.ShowToken {
+			token = hc.Token
+		}
+
+		_, _ = fmt.Fprintf(opts.IO.Out, "%s\n  User: %s\n  Token: %s\n  %s\n", host, hc.User, token, tokenStatus)
 	}
 
 	return nil
+}
+
+// maskToken replaces every character of the token with an asterisk. Copia
+// tokens carry no prefix, so unlike gh nothing of the token stays visible.
+func maskToken(token string) string {
+	return strings.Repeat("*", utf8.RuneCountInString(token))
 }
