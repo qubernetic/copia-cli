@@ -154,6 +154,41 @@ func TestJSONFlags_Print(t *testing.T) {
 			args:    []string{"--json", "title", "--jq", ".title"},
 			wantErr: "expected an object but got: array ([{\"title\":\"First\"},{\"titl ...])",
 		},
+		{
+			name: "template prints one number per line",
+			args: []string{"--json", "number", "--template", `{{range .}}{{.number}}{{"\n"}}{{end}}`},
+			want: "1\n9007199254740993\n",
+		},
+		{
+			name: "template sees only the requested fields",
+			args: []string{"--json", "number", "-t", `{{range .}}[{{.title}}]{{end}}`},
+			want: "[<no value>][<no value>]",
+		},
+		{
+			name: "template table rows render at the end",
+			args: []string{"--json", "number,title", "--template", `{{range .}}{{tablerow .number .title}}{{end}}`},
+			want: "1                 First\n9007199254740993  Second\n",
+		},
+		{
+			name:    "template without json",
+			args:    []string{"--template", "{{.}}"},
+			wantErr: "cannot use `--template` without specifying `--json`",
+		},
+		{
+			name:    "jq and template together",
+			args:    []string{"--json", "title", "--jq", ".", "--template", "{{.}}"},
+			wantErr: "cannot use `--jq` and `--template` together",
+		},
+		{
+			name:    "invalid template",
+			args:    []string{"--json", "title", "--template", "{{range .}}"},
+			wantErr: "invalid --template: template: :1: unexpected EOF",
+		},
+		{
+			name:    "template runtime error",
+			args:    []string{"--json", "title", "--template", "{{.title.x}}"},
+			wantErr: "template: :1:8: executing \"\" at <.title.x>: can't evaluate field title in type []interface {}",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

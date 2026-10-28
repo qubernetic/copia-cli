@@ -13,27 +13,42 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// JSONFlags holds --json and --jq flag state.
+// JSONFlags holds --json, --jq and --template flag state.
 type JSONFlags struct {
-	Fields []string
-	JQ     string
+	Fields   []string
+	JQ       string
+	Template string
 }
 
-// AddJSONFlags adds --json and --jq to a command. --json accepts only
-// validFields, which are the JSON keys of the command's output; --jq
-// requires --json and is checked before the command runs.
+// AddJSONFlags adds --json, --jq and --template to a command. --json
+// accepts only validFields, which are the JSON keys of the command's
+// output; --jq and --template require --json, exclude each other and are
+// checked before the command runs.
 func AddJSONFlags(cmd *cobra.Command, jf *JSONFlags, validFields []string) {
 	cmd.Flags().Var(&jsonFieldsValue{fields: &jf.Fields, valid: validFields}, "json",
 		fmt.Sprintf("Output JSON with the specified `fields`: %s", strings.Join(validFields, ", ")))
 	cmd.Flags().StringVarP(&jf.JQ, "jq", "q", "", "Filter JSON output using a jq `expression`")
+	cmd.Flags().StringVarP(&jf.Template, "template", "t", "",
+		"Format JSON output using a Go `template` (helpers: join, pluck, truncate, timeago, tablerow, tablerender)")
 
 	preRunE := cmd.PreRunE
 	cmd.PreRunE = func(c *cobra.Command, args []string) error {
+		if jf.JQ != "" && jf.Template != "" {
+			return errors.New("cannot use `--jq` and `--template` together")
+		}
 		if jf.JQ != "" {
 			if !jf.IsJSON() {
 				return errors.New("cannot use `--jq` without specifying `--json`")
 			}
 			if _, err := compileJQ(jf.JQ); err != nil {
+				return err
+			}
+		}
+		if jf.Template != "" {
+			if !jf.IsJSON() {
+				return errors.New("cannot use `--template` without specifying `--json`")
+			}
+			if _, err := parseTemplate(jf.Template); err != nil {
 				return err
 			}
 		}
@@ -51,7 +66,8 @@ func (jf *JSONFlags) IsJSON() bool {
 
 // Print writes v as JSON with only the --json fields: an array of objects
 // for a slice, one object otherwise. With --jq the result goes through
-// FilterJQ instead of being printed as is.
+// FilterJQ, with --template through ExecuteTemplate, instead of being
+// printed as is.
 func (jf *JSONFlags) Print(w io.Writer, v any) error {
 	data, err := selectFields(v, jf.Fields)
 	if err != nil {
@@ -59,6 +75,9 @@ func (jf *JSONFlags) Print(w io.Writer, v any) error {
 	}
 	if jf.JQ != "" {
 		return FilterJQ(w, data, jf.JQ)
+	}
+	if jf.Template != "" {
+		return ExecuteTemplate(w, data, jf.Template)
 	}
 	return PrintJSON(w, data)
 }
