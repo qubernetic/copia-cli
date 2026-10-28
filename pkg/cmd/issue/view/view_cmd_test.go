@@ -146,3 +146,81 @@ func TestViewRun_InvalidHost(t *testing.T) {
 	require.Error(t, ViewRun(opts))
 	assert.Empty(t, reg.Requests)
 }
+
+const commentsPath = "/api/v1/repos/my-org/my-repo/issues/12/comments"
+
+func registerIssueWithBody(reg *httpmock.Registry) {
+	reg.Register(httpmock.REST("GET", issuePath), httpmock.StringResponse(http.StatusOK,
+		`{"number":12,"title":"Fix PLC","body":"Details","state":"open","html_url":"https://app.copia.io/my-org/my-repo/issues/12","user":{"login":"john"},"comments":2}`))
+}
+
+func TestNewCmdView_Comments(t *testing.T) {
+	for _, flag := range []string{"--comments", "-c"} {
+		t.Run(flag, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			defer reg.Verify(t)
+			httpmock.ReplaceDefaultTransport(t, reg)
+			registerIssueWithBody(reg)
+			reg.Register(httpmock.REST("GET", commentsPath), httpmock.StringResponse(http.StatusOK,
+				`[{"body":"First","user":{"login":"jane"},"created_at":"2026-03-30T10:00:00Z"},`+
+					`{"body":"Second\nline","user":{"login":"john"},"created_at":"2026-03-31T09:30:00Z"}]`))
+
+			ios, _, stdout, _ := iostreams.Test()
+			require.NoError(t, runCmd(t, readyFactory(ios), "12", flag))
+			assert.Equal(t, "#12 Fix PLC\nState: open  Author: john  Comments: 2\n"+
+				"\nDetails\n"+
+				"\njane commented 2026-03-30T10:00:00Z:\nFirst\n"+
+				"\njohn commented 2026-03-31T09:30:00Z:\nSecond\nline\n"+
+				"\nhttps://app.copia.io/my-org/my-repo/issues/12\n", stdout.String())
+			require.Len(t, reg.Requests, 2)
+			assert.Equal(t, "token test-token", reg.Requests[1].Header.Get("Authorization"))
+		})
+	}
+}
+
+func TestNewCmdView_NoCommentsRequestWithoutFlag(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+	registerIssueWithBody(reg)
+
+	ios, _, stdout, _ := iostreams.Test()
+	require.NoError(t, runCmd(t, readyFactory(ios), "12"))
+	assert.Equal(t, "#12 Fix PLC\nState: open  Author: john  Comments: 2\n\nDetails\n\nhttps://app.copia.io/my-org/my-repo/issues/12\n", stdout.String())
+	assert.Len(t, reg.Requests, 1)
+}
+
+func TestNewCmdView_ZeroComments(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+	registerIssueWithBody(reg)
+	reg.Register(httpmock.REST("GET", commentsPath), httpmock.StringResponse(http.StatusOK, `[]`))
+
+	ios, _, stdout, _ := iostreams.Test()
+	require.NoError(t, runCmd(t, readyFactory(ios), "12", "--comments"))
+	assert.Equal(t, "#12 Fix PLC\nState: open  Author: john  Comments: 2\n\nDetails\n\nhttps://app.copia.io/my-org/my-repo/issues/12\n", stdout.String())
+}
+
+func TestNewCmdView_CommentsHTTPError(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+	registerIssueWithBody(reg)
+	reg.Register(httpmock.REST("GET", commentsPath), httpmock.StringResponse(http.StatusInternalServerError, `{}`))
+
+	ios, _, stdout, _ := iostreams.Test()
+	err := runCmd(t, readyFactory(ios), "12", "--comments")
+	require.EqualError(t, err, "API error (HTTP 500)")
+	assert.Empty(t, stdout.String())
+}
+
+func TestNewCmdView_CommentsWithJSON(t *testing.T) {
+	reg := &httpmock.Registry{}
+	httpmock.ReplaceDefaultTransport(t, reg)
+
+	ios, _, _, _ := iostreams.Test()
+	err := runCmd(t, readyFactory(ios), "12", "--comments", "--json", "number")
+	require.EqualError(t, err, "specify only one of --comments or --json")
+	assert.Empty(t, reg.Requests)
+}

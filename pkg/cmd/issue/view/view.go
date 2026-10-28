@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/spf13/cobra"
+	"github.com/qubernetic/copia-cli/pkg/cmd/issue/shared"
 	"github.com/qubernetic/copia-cli/pkg/cmdutil"
 	"github.com/qubernetic/copia-cli/pkg/iostreams"
 )
@@ -24,6 +25,7 @@ type ViewOptions struct {
 	Repo       string
 	Number     int64
 	JSON       cmdutil.JSONFlags
+	Comments   bool
 }
 
 type userRef struct {
@@ -57,10 +59,17 @@ func NewCmdView(f *cmdutil.Factory) *cobra.Command {
 		Example: `  # View an issue
   $ copia-cli issue view 12
 
+  # View an issue with its comments
+  $ copia-cli issue view 12 --comments
+
   # View as JSON
   $ copia-cli issue view 12 --json number,title,state`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if opts.Comments && opts.JSON.IsJSON() {
+				return fmt.Errorf("specify only one of --comments or --json")
+			}
+
 			num, err := strconv.ParseInt(args[0], 10, 64)
 			if err != nil {
 				return fmt.Errorf("invalid issue number: %s", args[0])
@@ -86,6 +95,7 @@ func NewCmdView(f *cmdutil.Factory) *cobra.Command {
 		},
 	}
 
+	cmd.Flags().BoolVarP(&opts.Comments, "comments", "c", false, "View comments")
 	cmdutil.AddJSONFlags(cmd, &opts.JSON, validJSONFields)
 
 	return cmd
@@ -128,6 +138,14 @@ func ViewRun(opts *ViewOptions) error {
 		return cmdutil.PrintJSON(opts.IO.Out, issue)
 	}
 
+	var comments []shared.Comment
+	if opts.Comments {
+		comments, err = shared.FetchComments(opts.HTTPClient, opts.Host, opts.Token, opts.Owner, opts.Repo, opts.Number)
+		if err != nil {
+			return err
+		}
+	}
+
 	_, _ = fmt.Fprintf(opts.IO.Out, "#%d %s\n", issue.Number, issue.Title)
 	_, _ = fmt.Fprintf(opts.IO.Out, "State: %s  Author: %s  Comments: %d\n", issue.State, issue.User.Login, issue.Comments)
 
@@ -145,6 +163,8 @@ func ViewRun(opts *ViewOptions) error {
 	if issue.Body != "" {
 		_, _ = fmt.Fprintf(opts.IO.Out, "\n%s\n", issue.Body)
 	}
+
+	shared.PrintComments(opts.IO.Out, comments)
 
 	_, _ = fmt.Fprintf(opts.IO.Out, "\n%s\n", issue.HTMLURL)
 	return nil
