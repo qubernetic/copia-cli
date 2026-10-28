@@ -31,6 +31,7 @@ type CreateOptions struct {
 	Milestone  string
 	Reviewers  []string
 	Draft      bool
+	Fill       bool
 }
 
 type createRequest struct {
@@ -112,7 +113,7 @@ command exits with an error.`,
 		},
 	}
 
-	cmd.Flags().StringVarP(&opts.Title, "title", "t", "", "PR title (required)")
+	cmd.Flags().StringVarP(&opts.Title, "title", "t", "", "PR title (required unless --fill is set)")
 	cmd.Flags().StringVarP(&opts.Body, "body", "b", "", "PR body")
 	cmd.Flags().StringVarP(&bodyFile, "body-file", "F", "", "Read the body from `file` (use \"-\" to read from standard input)")
 	cmd.Flags().StringVar(&opts.Base, "base", "main", "Base branch")
@@ -122,12 +123,18 @@ command exits with an error.`,
 	cmd.Flags().StringVarP(&opts.Milestone, "milestone", "m", "", "Add the pull request to a milestone by name or ID")
 	cmd.Flags().StringSliceVarP(&opts.Reviewers, "reviewer", "r", nil, "Request reviews from people or teams by their login or org/team name")
 	cmd.Flags().BoolVarP(&opts.Draft, "draft", "d", false, "Mark the pull request as work in progress (WIP: title prefix)")
+	cmd.Flags().BoolVarP(&opts.Fill, "fill", "f", false, "Use commit info between the base and head branches for the title and body")
 	cmd.MarkFlagsMutuallyExclusive("body", "body-file")
 
 	return cmd
 }
 
 func CreateRun(opts *CreateOptions) error {
+	if opts.Fill {
+		if err := fill(opts); err != nil {
+			return err
+		}
+	}
 	if opts.Title == "" {
 		return fmt.Errorf("title required")
 	}
