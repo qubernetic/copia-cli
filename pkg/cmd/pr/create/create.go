@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/qubernetic/copia-cli/pkg/cmd/issue/shared"
 	"github.com/qubernetic/copia-cli/pkg/cmdutil"
 	"github.com/qubernetic/copia-cli/pkg/iostreams"
 )
@@ -24,13 +26,25 @@ type CreateOptions struct {
 	Body       string
 	Base       string
 	Head       string
+	Assignees  []string
+	Labels     []string
+	Milestone  string
+	Reviewers  []string
 }
 
 type createRequest struct {
-	Title string `json:"title"`
-	Body  string `json:"body,omitempty"`
-	Base  string `json:"base"`
-	Head  string `json:"head"`
+	Title     string   `json:"title"`
+	Body      string   `json:"body,omitempty"`
+	Base      string   `json:"base"`
+	Head      string   `json:"head"`
+	Assignees []string `json:"assignees,omitempty"`
+	Labels    []int64  `json:"labels,omitempty"`
+	Milestone int64    `json:"milestone,omitempty"`
+}
+
+type reviewRequest struct {
+	Reviewers     []string `json:"reviewers,omitempty"`
+	TeamReviewers []string `json:"team_reviewers,omitempty"`
 }
 
 type createResponse struct {
@@ -46,12 +60,28 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create a pull request",
-		Long:  "Create a pull request on Copia. The --base and --head branches must be specified along with a title.",
+		Long: `Create a pull request on Copia. The --base and --head branches must be specified
+along with a title.
+
+--assignee takes a login and can be repeated; @me stands for the authenticated
+user. --label takes a repository or organization label name and can be
+repeated. --milestone takes a milestone name or its numeric ID. An unknown
+label or milestone fails before the pull request is created.
+
+--reviewer takes a login or an org/team name and can be repeated. Reviewers
+are requested in one request after the pull request is created; if that
+request fails, the pull request still exists, its URL is printed and the
+command exits with an error.`,
 		Example: `  # Create a pull request
   $ copia-cli pr create --title "feat: add wrapper" --base main --head feature/wrapper
 
   # Create a pull request with a body
-  $ copia-cli pr create --title "fix: timeout" --base develop --head fix/timeout --body "Fixes #12"`,
+  $ copia-cli pr create --title "fix: timeout" --base develop --head fix/timeout --body "Fixes #12"
+
+  # Assign yourself, add labels and a milestone, and request reviewers
+  $ copia-cli pr create --title "feat: add wrapper" --head feature/wrapper \
+      --assignee @me --label plc --label review --milestone v1.0 \
+      --reviewer jane --reviewer my-org/controls`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.IO = f.IOStreams
 			host, token, err := f.ResolveAuth()
@@ -76,6 +106,10 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 	cmd.Flags().StringVarP(&opts.Body, "body", "b", "", "PR body")
 	cmd.Flags().StringVar(&opts.Base, "base", "main", "Base branch")
 	cmd.Flags().StringVarP(&opts.Head, "head", "H", "", "Head branch")
+	cmd.Flags().StringSliceVarP(&opts.Assignees, "assignee", "a", nil, "Assign people by their login. Use \"@me\" to self-assign")
+	cmd.Flags().StringSliceVarP(&opts.Labels, "label", "l", nil, "Add labels by name (repository or organization labels)")
+	cmd.Flags().StringVarP(&opts.Milestone, "milestone", "m", "", "Add the pull request to a milestone by name or ID")
+	cmd.Flags().StringSliceVarP(&opts.Reviewers, "reviewer", "r", nil, "Request reviews from people or teams by their login or org/team name")
 
 	return cmd
 }
@@ -90,6 +124,28 @@ func CreateRun(opts *CreateOptions) error {
 		Body:  opts.Body,
 		Base:  opts.Base,
 		Head:  opts.Head,
+	}
+	if len(opts.Assignees) > 0 {
+		assignees, err := shared.ResolveAssignees(opts.HTTPClient, opts.Host, opts.Token, opts.Assignees)
+		if err != nil {
+			return err
+		}
+		payload.Assignees = assignees
+	}
+	if len(opts.Labels) > 0 {
+		// The API takes label IDs, not names.
+		ids, err := shared.ResolveLabelIDs(opts.HTTPClient, opts.Host, opts.Token, opts.Owner, opts.Repo, opts.Labels)
+		if err != nil {
+			return err
+		}
+		payload.Labels = ids
+	}
+	if opts.Milestone != "" {
+		id, err := shared.ResolveMilestoneID(opts.HTTPClient, opts.Host, opts.Token, opts.Owner, opts.Repo, opts.Milestone)
+		if err != nil {
+			return err
+		}
+		payload.Milestone = id
 	}
 
 	body, err := json.Marshal(payload)
@@ -127,5 +183,47 @@ func CreateRun(opts *CreateOptions) error {
 	}
 
 	_, _ = fmt.Fprintf(opts.IO.Out, "Created PR #%d: %s\n%s\n", result.Number, result.Title, result.HTMLURL)
+
+	if len(opts.Reviewers) > 0 {
+		return requestReviewers(opts, result.Number)
+	}
+	return nil
+}
+
+// requestReviewers asks for all reviews in one request. A value with a slash
+// is an org/team name; Gitea takes only the team part.
+func requestReviewers(opts *CreateOptions, number int64) error {
+	var payload reviewRequest
+	for _, r := range opts.Reviewers {
+		if _, team, ok := strings.Cut(r, "/"); ok {
+			payload.TeamReviewers = append(payload.TeamReviewers, team)
+		} else {
+			payload.Reviewers = append(payload.Reviewers, r)
+		}
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	url := fmt.Sprintf("https://%s/api/v1/repos/%s/%s/pulls/%d/requested_reviewers", opts.Host, opts.Owner, opts.Repo, number)
+	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "token "+opts.Token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := opts.HTTPClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("connecting to %s: %w", opts.Host, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusCreated {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to request reviewers (HTTP %d): %s", resp.StatusCode, string(respBody))
+	}
 	return nil
 }
