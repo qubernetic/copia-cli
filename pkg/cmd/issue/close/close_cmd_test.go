@@ -54,6 +54,14 @@ func TestNewCmdClose_RunsWithComment(t *testing.T) {
 	assert.Equal(t, "token test-token", reg.Requests[1].Header.Get("Authorization"))
 }
 
+func TestNewCmdClose_HelpExplainsMissingReason(t *testing.T) {
+	ios, _, _, _ := iostreams.Test()
+	cmd := NewCmdClose(readyFactory(ios))
+	assert.Contains(t, cmd.Long, "Gitea records no close reason")
+	assert.Contains(t, cmd.Long, "--comment")
+	assert.Nil(t, cmd.Flags().Lookup("reason"))
+}
+
 func TestNewCmdClose_InvalidNumber(t *testing.T) {
 	ios, _, _, _ := iostreams.Test()
 	err := runCmd(t, readyFactory(ios), "abc")
