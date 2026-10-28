@@ -64,7 +64,21 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 		Use:   "create",
 		Short: "Create a pull request",
 		Long: `Create a pull request on Copia. The --base and --head branches must be specified
-along with a title.
+along with a title, unless --fill is set.
+
+--fill takes the title and body from the local git history between the base
+branch (origin/<base> when it exists) and the head branch, which defaults to
+the current branch. One commit gives its subject as the title and its body as
+the body; several commits give the branch name as the title and the commit
+subjects, oldest first, as a bulleted body. An explicit --title or --body wins
+over the filled value.
+
+--body-file reads the body from a file; "-" reads standard input. It cannot be
+combined with --body.
+
+--draft marks the pull request as work in progress: Copia has no draft flag,
+so the title gets the prefix "WIP: " unless it already starts with "WIP:" or
+"[WIP]" (in any case).
 
 --assignee takes a login and can be repeated; @me stands for the authenticated
 user. --label takes a repository or organization label name and can be
@@ -80,6 +94,13 @@ command exits with an error.`,
 
   # Create a pull request with a body
   $ copia-cli pr create --title "fix: timeout" --base develop --head fix/timeout --body "Fixes #12"
+
+  # Open a work-in-progress PR from the current branch, filled from its commits
+  $ copia-cli pr create --fill --draft --base develop
+
+  # Read the body from a file, or from standard input with -
+  $ copia-cli pr create --title "docs: add manual" --head docs/manual --body-file notes.md
+  $ git log -1 --format=%b | copia-cli pr create --title "fix: timeout" --head fix/timeout -F -
 
   # Assign yourself, add labels and a milestone, and request reviewers
   $ copia-cli pr create --title "feat: add wrapper" --head feature/wrapper \

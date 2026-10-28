@@ -73,6 +73,12 @@ $ copia-cli issue edit 13 --add-assignee jane --remove-assignee john --remove-la
 # Open a PR
 $ copia-cli pr create --title "feat: add safety interlock" --base develop
 
+# Open a draft PR from the current branch, title and body filled from its commits
+$ copia-cli pr create --fill --draft --base develop
+
+# Take the PR body from a file (or "-" for standard input)
+$ copia-cli pr create --title "docs: add manual" --base develop --body-file notes.md
+
 # Open a PR with metadata and request reviews from a person and a team
 $ copia-cli pr create --title "feat: add safety interlock" --base develop \
     --assignee @me --label plc --milestone v1.0 --reviewer jane --reviewer my-org/controls
