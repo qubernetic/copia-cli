@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -718,6 +719,75 @@ func TestDependabotUpdatesCoprRequirements(t *testing.T) {
 		}
 	}
 	t.Errorf("dependabot.yml has no pip entry for %s", dir)
+}
+
+// dependabotPatternMatches reports whether a Dependabot group pattern matches
+// a dependency name: `*` stands for any run of characters, `/` included.
+func dependabotPatternMatches(pattern, name string) bool {
+	re := "^" + strings.ReplaceAll(regexp.QuoteMeta(pattern), `\*`, ".*") + "$"
+	return regexp.MustCompile(re).MatchString(name)
+}
+
+// TestDependabotGroupsCodeQLAction keeps the github/codeql-action sub-actions
+// in one Dependabot group: bumped one PR per step, each PR fails CodeQL
+// because its steps run different versions (#308, #309, #310).
+func TestDependabotGroupsCodeQLAction(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "dependabot.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		Updates []struct {
+			Ecosystem string `yaml:"package-ecosystem"`
+			Groups    map[string]struct {
+				Patterns []string `yaml:"patterns"`
+			} `yaml:"groups"`
+		} `yaml:"updates"`
+	}
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	subActions := []string{"init", "autobuild", "analyze", "upload-sarif"}
+	for _, u := range cfg.Updates {
+		if u.Ecosystem != "github-actions" {
+			continue
+		}
+		for _, g := range u.Groups {
+			matched := 0
+			for _, sub := range subActions {
+				for _, p := range g.Patterns {
+					if dependabotPatternMatches(p, "github/codeql-action/"+sub) {
+						matched++
+						break
+					}
+				}
+			}
+			if matched == len(subActions) {
+				return
+			}
+		}
+	}
+	t.Errorf("dependabot.yml: the github-actions entry has no group whose patterns match github/codeql-action/{%s}", strings.Join(subActions, ","))
+}
+
+func TestDependabotPatternMatches(t *testing.T) {
+	tests := []struct {
+		pattern, name string
+		want          bool
+	}{
+		{"github/codeql-action*", "github/codeql-action/init", true},
+		{"github/codeql-action*", "github/codeql-action", true},
+		{"github/codeql-action/*", "github/codeql-action/upload-sarif", true},
+		{"github/codeql-action/init", "github/codeql-action/analyze", false},
+		{"github/codeql-action*", "actions/checkout", false},
+		{"*", "actions/checkout", true},
+		{"actions.checkout", "actions/checkout", false},
+	}
+	for _, tt := range tests {
+		if got := dependabotPatternMatches(tt.pattern, tt.name); got != tt.want {
+			t.Errorf("dependabotPatternMatches(%q, %q) = %v, want %v", tt.pattern, tt.name, got, tt.want)
+		}
+	}
 }
 
 // TestCoprInstallRunsInCI keeps the hash-pinned copr-cli install exercised on
