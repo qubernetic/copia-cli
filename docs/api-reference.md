@@ -122,7 +122,7 @@ PATCH  /repos/{owner}/{repo}/labels/{id}           # Update label
 DELETE /repos/{owner}/{repo}/labels/{id}           # Delete label
 ```
 
-Issue endpoints take label IDs, not names. `issue create --label` and `issue edit --add-label` read every page of both the repo labels and the org labels and map names to IDs; a repo label wins over an org label of the same name. For a user-owned repository `/orgs/{owner}/labels` answers 404 and only repo labels are used.
+Issue endpoints take label IDs, not names. `issue create --label`, `issue edit --add-label` and `issue edit --remove-label` read every page of both the repo labels and the org labels and map names to IDs; a repo label wins over an org label of the same name. For a user-owned repository `/orgs/{owner}/labels` answers 404 and only repo labels are used.
 
 ### Milestones
 
@@ -135,6 +135,8 @@ DELETE /repos/{owner}/{repo}/milestones/{id}       # Delete milestone
 ```
 
 Issue endpoints take a milestone ID. `issue create --milestone` and `issue edit --milestone` accept a name or an ID and resolve it with one `GET /repos/{owner}/{repo}/milestones/{name}`, which Gitea answers for both; a 404 fails before the issue is created or changed. `issue create --assignee @me` reads the login of the authenticated user with one `GET /user`.
+
+Gitea has no endpoint that adds or removes one assignee: `PATCH /repos/{owner}/{repo}/issues/{index}` replaces the `assignees` list. `issue edit --add-assignee` and `--remove-assignee` read the current list with `GET /repos/{owner}/{repo}/issues/{index}`, change it and send it whole; removing the last assignee sends `"assignees": []`.
 
 ### Releases
 
