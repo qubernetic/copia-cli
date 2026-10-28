@@ -29,6 +29,19 @@ type PageDecoder[T any] func(body []byte) ([]T, error)
 // of 0 fetches every page. The page and limit query parameters are set on
 // rawURL; other parameters are kept on every request.
 func FetchPages[T any](client *http.Client, rawURL, token string, limit int, decode PageDecoder[T]) ([]T, error) {
+	return fetchPages(client, rawURL, token, limit, decode, nil)
+}
+
+// FetchFilteredPages is FetchPages for a filter the API cannot apply: it
+// drops every decoded item keep rejects and counts limit on the kept items.
+// It asks for full pages, since the share of kept items is not known, and a
+// page whose items are all dropped does not end the listing.
+func FetchFilteredPages[T any](client *http.Client, rawURL, token string, limit int, decode PageDecoder[T], keep func(T) bool) ([]T, error) {
+	return fetchPages(client, rawURL, token, limit, decode, keep)
+}
+
+// fetchPages implements FetchPages and, with a non-nil keep, FetchFilteredPages.
+func fetchPages[T any](client *http.Client, rawURL, token string, limit int, decode PageDecoder[T], keep func(T) bool) ([]T, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return nil, err
@@ -37,7 +50,7 @@ func FetchPages[T any](client *http.Client, rawURL, token string, limit int, dec
 	all := []T{}
 	for page := 1; ; page++ {
 		pageSize := MaxPageSize
-		if limit > 0 && limit-len(all) < pageSize {
+		if keep == nil && limit > 0 && limit-len(all) < pageSize {
 			pageSize = limit - len(all)
 		}
 
@@ -57,7 +70,11 @@ func FetchPages[T any](client *http.Client, rawURL, token string, limit int, dec
 		if len(items) == 0 {
 			return all, nil
 		}
-		all = append(all, items...)
+		for _, it := range items {
+			if keep == nil || keep(it) {
+				all = append(all, it)
+			}
+		}
 
 		if limit > 0 && len(all) >= limit {
 			return all[:limit], nil
