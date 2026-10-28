@@ -186,6 +186,10 @@ func TestEditRun_SetMilestone(t *testing.T) {
 	defer reg.Verify(t)
 
 	reg.Register(
+		httpmock.REST("GET", "/api/v1/repos/my-org/my-repo/milestones/1"),
+		httpmock.StringResponse(http.StatusOK, `{"id":1,"title":"v1.0"}`),
+	)
+	reg.Register(
 		httpmock.REST("PATCH", "/api/v1/repos/my-org/my-repo/issues/12"),
 		httpmock.StringResponse(http.StatusOK, `{"number":12}`),
 	)
@@ -200,7 +204,7 @@ func TestEditRun_SetMilestone(t *testing.T) {
 		Owner:      "my-org",
 		Repo:       "my-repo",
 		Number:     12,
-		Milestone:  1,
+		Milestone:  "1",
 	}
 
 	err := EditRun(opts)
