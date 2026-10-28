@@ -65,7 +65,7 @@ $ copia-cli issue create --title "Fix sensor mapping" --label bug
 $ copia-cli pr create --title "feat: add safety interlock" --base develop
 
 # Merge it
-$ copia-cli pr merge 7 --merge --delete-branch
+$ copia-cli pr merge 7 --merge --delete-branch --body "Tested on the line 3 PLC"
 ```
 
 ## Shell Completion

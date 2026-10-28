@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--visibility {public|private}` on `repo list`. The Gitea list endpoints take no visibility filter, so the filter runs on each page and `--limit` counts the kept repositories; paging continues past a page without a match (#172)
 - `auth status` prints a `Token:` line for each host, masked with one asterisk per character of the token; `--show-token` prints the full token instead. The config file is not touched (#176)
 - `--label/-l` on `search issues` (repeatable or comma separated, sent as `labels=a,b` like `issue list --label`); results come newest first, the issue endpoint takes no sort. `--sort {alpha|created|updated|size|stars|forks}` and `--order {asc|desc}` (default `desc`) on `search repos`; `--order` is ignored without `--sort`, as in `gh search repos`, and an unknown value of either fails before any request (#171)
+- `--body/-b` on `pr merge` sets the body of the merge commit (sent as `MergeMessageField`); Gitea keeps its default title and appends the body after a blank line. Combines with `--squash`, `--rebase` and `--delete-branch`; without `--body` the field is left out, so a squash merge keeps its default body (#175)
 
 ### Security
 

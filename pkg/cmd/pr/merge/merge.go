@@ -23,10 +23,12 @@ type MergeOptions struct {
 	Number       int64
 	Method       string
 	DeleteBranch bool
+	Body         string
 }
 
 type mergeRequest struct {
-	Do                    string `json:"Do"`
+	Do                     string `json:"Do"`
+	MergeMessageField      string `json:"MergeMessageField,omitempty"`
 	DeleteBranchAfterMerge bool   `json:"delete_branch_after_merge,omitempty"`
 }
 
@@ -45,7 +47,10 @@ func NewCmdMerge(f *cmdutil.Factory) *cobra.Command {
   $ copia-cli pr merge 7 --squash
 
   # Rebase and delete the branch
-  $ copia-cli pr merge 7 --rebase --delete-branch`,
+  $ copia-cli pr merge 7 --rebase --delete-branch
+
+  # Merge with a body for the merge commit
+  $ copia-cli pr merge 7 --squash --body "Tested on the line 3 PLC"`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			num, err := strconv.ParseInt(args[0], 10, 64)
@@ -89,13 +94,15 @@ func NewCmdMerge(f *cmdutil.Factory) *cobra.Command {
 	cmd.Flags().Bool("squash", false, "Squash and merge")
 	cmd.Flags().Bool("rebase", false, "Rebase and merge")
 	cmd.Flags().BoolVar(&opts.DeleteBranch, "delete-branch", false, "Delete branch after merge")
+	cmd.Flags().StringVarP(&opts.Body, "body", "b", "", "Body text for the merge commit")
 
 	return cmd
 }
 
 func MergeRun(opts *MergeOptions) error {
 	payload := mergeRequest{
-		Do:                    opts.Method,
+		Do:                     opts.Method,
+		MergeMessageField:      opts.Body,
 		DeleteBranchAfterMerge: opts.DeleteBranch,
 	}
 
