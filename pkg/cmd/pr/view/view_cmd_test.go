@@ -184,3 +184,95 @@ func TestViewRun_Errors(t *testing.T) {
 		})
 	}
 }
+
+const (
+	prPath       = "/api/v1/repos/my-org/my-repo/pulls/7"
+	commentsPath = "/api/v1/repos/my-org/my-repo/issues/7/comments"
+	prOutput     = "#7 feat: x\n" +
+		"State: open  Author: john  Mergeable: true\n" +
+		"Branches: main <- feat\n" +
+		"\nAdds x\n"
+	prURLOutput = "\nhttps://app.copia.io/my-org/my-repo/pulls/7\n"
+)
+
+func registerPRWithBody(reg *httpmock.Registry) {
+	reg.Register(httpmock.REST("GET", prPath), httpmock.StringResponse(http.StatusOK, `{
+		"number":7,"title":"feat: x","state":"open","body":"Adds x","mergeable":true,
+		"html_url":"https://app.copia.io/my-org/my-repo/pulls/7",
+		"user":{"login":"john"},"base":{"label":"main"},"head":{"label":"feat"}
+	}`))
+}
+
+func readyFactory(ios *iostreams.IOStreams) *cmdutil.Factory {
+	return &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Token: "test-token", Repo: "my-org/my-repo"}
+}
+
+func TestNewCmdView_Comments(t *testing.T) {
+	for _, flag := range []string{"--comments", "-c"} {
+		t.Run(flag, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			defer reg.Verify(t)
+			httpmock.ReplaceDefaultTransport(t, reg)
+			registerPRWithBody(reg)
+			reg.Register(httpmock.REST("GET", commentsPath), httpmock.StringResponse(http.StatusOK,
+				`[{"body":"Please rebase","user":{"login":"jane"},"created_at":"2026-03-30T10:00:00Z"},`+
+					`{"body":"Done","user":{"login":"john"},"created_at":"2026-03-31T09:30:00Z"}]`))
+
+			ios, _, stdout, _ := iostreams.Test()
+			require.NoError(t, runView(t, readyFactory(ios), "7", flag))
+			assert.Equal(t, prOutput+
+				"\njane commented 2026-03-30T10:00:00Z:\nPlease rebase\n"+
+				"\njohn commented 2026-03-31T09:30:00Z:\nDone\n"+
+				prURLOutput, stdout.String())
+			require.Len(t, reg.Requests, 2)
+			assert.Equal(t, "token test-token", reg.Requests[1].Header.Get("Authorization"))
+		})
+	}
+}
+
+func TestNewCmdView_NoCommentsRequestWithoutFlag(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+	registerPRWithBody(reg)
+
+	ios, _, stdout, _ := iostreams.Test()
+	require.NoError(t, runView(t, readyFactory(ios), "7"))
+	assert.Equal(t, prOutput+prURLOutput, stdout.String())
+	assert.Len(t, reg.Requests, 1)
+}
+
+func TestNewCmdView_ZeroComments(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+	registerPRWithBody(reg)
+	reg.Register(httpmock.REST("GET", commentsPath), httpmock.StringResponse(http.StatusOK, `[]`))
+
+	ios, _, stdout, _ := iostreams.Test()
+	require.NoError(t, runView(t, readyFactory(ios), "7", "--comments"))
+	assert.Equal(t, prOutput+prURLOutput, stdout.String())
+}
+
+func TestNewCmdView_CommentsHTTPError(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+	registerPRWithBody(reg)
+	reg.Register(httpmock.REST("GET", commentsPath), httpmock.StringResponse(http.StatusBadGateway, ``))
+
+	ios, _, stdout, _ := iostreams.Test()
+	err := runView(t, readyFactory(ios), "7", "--comments")
+	require.EqualError(t, err, "API error (HTTP 502)")
+	assert.Empty(t, stdout.String())
+}
+
+func TestNewCmdView_CommentsWithJSON(t *testing.T) {
+	reg := &httpmock.Registry{}
+	httpmock.ReplaceDefaultTransport(t, reg)
+
+	ios, _, _, _ := iostreams.Test()
+	err := runView(t, readyFactory(ios), "7", "--comments", "--json", "number")
+	require.EqualError(t, err, "specify only one of --comments or --json")
+	assert.Empty(t, reg.Requests)
+}
