@@ -119,6 +119,133 @@ func TestSearchRepos_PaginatesPastPageCap(t *testing.T) {
 	}
 }
 
+func TestSearchRepos_SortAndOrderOnEveryPage(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	path := "/api/v1/repos/search"
+	reg.Register(httpmock.QueryMatcher("GET", path, pageQuery(1, 50)), httpmock.StringResponse(http.StatusOK, searchJSON(1, 50)))
+	reg.Register(httpmock.QueryMatcher("GET", path, pageQuery(2, 10)), httpmock.StringResponse(http.StatusOK, searchJSON(51, 10)))
+
+	ios, _, stdout, _ := iostreams.Test()
+	err := SearchRun(&SearchOptions{
+		IO:         ios,
+		HTTPClient: &http.Client{Transport: reg},
+		Host:       "app.copia.io",
+		Token:      "test-token",
+		Query:      "plc",
+		Sort:       "stars",
+		Order:      "desc",
+		Limit:      60,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 60, strings.Count(stdout.String(), "\n"))
+
+	require.Len(t, reg.Requests, 2)
+	for _, req := range reg.Requests {
+		q := req.URL.Query()
+		assert.Equal(t, []string{"stars"}, q["sort"])
+		assert.Equal(t, []string{"desc"}, q["order"])
+		assert.Equal(t, "plc", q.Get("q"))
+	}
+}
+
+func TestNewCmdSearchRepos_SortAndOrder(t *testing.T) {
+	tests := []struct {
+		name      string
+		args      []string
+		wantSort  []string
+		wantOrder []string
+	}{
+		{
+			name:      "sort defaults order to desc",
+			args:      []string{"plc", "--sort", "stars"},
+			wantSort:  []string{"stars"},
+			wantOrder: []string{"desc"},
+		},
+		{
+			name:      "order asc",
+			args:      []string{"plc", "--sort", "updated", "--order", "asc"},
+			wantSort:  []string{"updated"},
+			wantOrder: []string{"asc"},
+		},
+		{
+			name: "order without sort sends neither",
+			args: []string{"plc", "--order", "asc"},
+		},
+		{
+			name: "no flags sends neither",
+			args: []string{"plc"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			defer reg.Verify(t)
+			httpmock.ReplaceDefaultTransport(t, reg)
+			reg.Register(httpmock.REST("GET", "/api/v1/repos/search"), httpmock.StringResponse(http.StatusOK, searchJSON(1, 1)))
+
+			ios, _, stdout, _ := iostreams.Test()
+			cmd := NewCmdSearchRepos(&cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Token: "test-token"})
+			cmd.SetArgs(tt.args)
+			cmd.SetOut(io.Discard)
+			cmd.SetErr(io.Discard)
+
+			err := cmd.Execute()
+			require.NoError(t, err)
+			assert.Equal(t, "my-org/plc-1  PLC 1\n", stdout.String())
+			require.Len(t, reg.Requests, 1)
+			q := reg.Requests[0].URL.Query()
+			assert.Equal(t, tt.wantSort, q["sort"])
+			assert.Equal(t, tt.wantOrder, q["order"])
+		})
+	}
+}
+
+func TestNewCmdSearchRepos_InvalidSortOrOrder(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		wantErr string
+	}{
+		{
+			name:    "invalid sort",
+			args:    []string{"plc", "--sort", "name"},
+			wantErr: `invalid sort "name": valid values are {alpha|created|updated|size|stars|forks}`,
+		},
+		{
+			name:    "invalid order",
+			args:    []string{"plc", "--sort", "stars", "--order", "up"},
+			wantErr: `invalid order "up": valid values are {asc|desc}`,
+		},
+		{
+			name:    "invalid order without sort",
+			args:    []string{"plc", "--order", "up"},
+			wantErr: `invalid order "up": valid values are {asc|desc}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			defer reg.Verify(t)
+			httpmock.ReplaceDefaultTransport(t, reg)
+
+			ios, _, stdout, _ := iostreams.Test()
+			cmd := NewCmdSearchRepos(&cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Token: "test-token"})
+			cmd.SetArgs(tt.args)
+			cmd.SetOut(io.Discard)
+			cmd.SetErr(io.Discard)
+
+			err := cmd.Execute()
+			require.Error(t, err)
+			assert.EqualError(t, err, tt.wantErr)
+			assert.Empty(t, reg.Requests)
+			assert.Empty(t, stdout.String())
+		})
+	}
+}
+
 func TestSearchRepos_InvalidLimit(t *testing.T) {
 	ios, _, _, _ := iostreams.Test()
 	err := SearchRun(&SearchOptions{IO: ios, Limit: -1})

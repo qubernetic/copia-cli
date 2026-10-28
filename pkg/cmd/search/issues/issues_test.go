@@ -127,6 +127,59 @@ func TestSearchIssues_PaginatesPastPageCap(t *testing.T) {
 	}
 }
 
+func TestSearchIssues_LabelsOnEveryPage(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	path := "/api/v1/repos/my-org/plc/issues"
+	reg.Register(httpmock.QueryMatcher("GET", path, pageQuery(1, 50)), httpmock.StringResponse(http.StatusOK, issuesJSON(1, 50)))
+	reg.Register(httpmock.QueryMatcher("GET", path, pageQuery(2, 10)), httpmock.StringResponse(http.StatusOK, issuesJSON(51, 10)))
+
+	ios, _, stdout, _ := iostreams.Test()
+	err := SearchRun(&SearchOptions{
+		IO:         ios,
+		HTTPClient: &http.Client{Transport: reg},
+		Host:       "app.copia.io",
+		Token:      "test-token",
+		Owner:      "my-org",
+		Repo:       "plc",
+		Query:      "bug",
+		Labels:     []string{"a", "b"},
+		Limit:      60,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 60, strings.Count(stdout.String(), "\n"))
+
+	require.Len(t, reg.Requests, 2)
+	for _, req := range reg.Requests {
+		assert.Equal(t, []string{"a,b"}, req.URL.Query()["labels"])
+		assert.Equal(t, "bug", req.URL.Query().Get("q"))
+	}
+}
+
+func TestSearchIssues_NoLabelsParameterWithoutLabels(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	reg.Register(
+		httpmock.REST("GET", "/api/v1/repos/my-org/plc/issues"),
+		httpmock.StringResponse(http.StatusOK, issuesJSON(1, 1)),
+	)
+
+	ios, _, _, _ := iostreams.Test()
+	err := SearchRun(&SearchOptions{
+		IO:         ios,
+		HTTPClient: &http.Client{Transport: reg},
+		Host:       "app.copia.io",
+		Token:      "test-token",
+		Owner:      "my-org",
+		Repo:       "plc",
+		Query:      "bug",
+		Limit:      30,
+	})
+	require.NoError(t, err)
+	require.Len(t, reg.Requests, 1)
+	assert.NotContains(t, reg.Requests[0].URL.Query(), "labels")
+}
+
 func TestSearchIssues_JSON(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
@@ -229,6 +282,29 @@ func TestNewCmdSearchIssues_RunE(t *testing.T) {
 	err := cmd.Execute()
 	require.NoError(t, err)
 	assert.Equal(t, "#5  Sensor error  closed\n", stdout.String())
+}
+
+func TestNewCmdSearchIssues_LabelFlag(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+	reg.Register(
+		httpmock.QueryMatcher("GET", "/api/v1/repos/my-org/plc/issues", url.Values{
+			"q": {"bug"}, "labels": {"a,b,c"}, "page": {"1"}, "limit": {"30"},
+		}),
+		httpmock.StringResponse(http.StatusOK, `[{"number":7,"title":"Bug","state":"open"}]`),
+	)
+
+	ios, _, stdout, _ := iostreams.Test()
+	f := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Token: "test-token", Repo: "my-org/plc"}
+	cmd := NewCmdSearchIssues(f)
+	cmd.SetArgs([]string{"bug", "--label", "a", "-l", "b,c"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.Equal(t, "#7  Bug  open\n", stdout.String())
 }
 
 func TestNewCmdSearchIssues_Errors(t *testing.T) {
