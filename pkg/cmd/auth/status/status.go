@@ -3,6 +3,8 @@ package status
 import (
 	"fmt"
 	"net/http"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 	"github.com/qubernetic/copia-cli/internal/config"
@@ -80,8 +82,14 @@ func StatusRun(opts *StatusOptions) error {
 			}
 		}
 
-		_, _ = fmt.Fprintf(opts.IO.Out, "%s\n  User: %s\n  %s\n", host, hc.User, tokenStatus)
+		_, _ = fmt.Fprintf(opts.IO.Out, "%s\n  User: %s\n  Token: %s\n  %s\n", host, hc.User, maskToken(hc.Token), tokenStatus)
 	}
 
 	return nil
+}
+
+// maskToken replaces every character of the token with an asterisk. Copia
+// tokens carry no prefix, so unlike gh nothing of the token stays visible.
+func maskToken(token string) string {
+	return strings.Repeat("*", utf8.RuneCountInString(token))
 }
