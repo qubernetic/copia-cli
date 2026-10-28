@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `--limit/-L` (default 30) on `label list`, `org list` and `notification list`; all three page through results, so they no longer stop at the server's first page. `notification list --all` applies to every page (#245)
 - `--visibility {public|private}` on `repo list`. The Gitea list endpoints take no visibility filter, so the filter runs on each page and `--limit` counts the kept repositories; paging continues past a page without a match (#172)
+- `auth status` prints a `Token:` line for each host, masked with one asterisk per character of the token; `--show-token` prints the full token instead. The config file is not touched (#176)
 
 ### Security
 

@@ -43,6 +43,27 @@ hosts:
 - Token can also be set via `COPIA_TOKEN` environment variable (takes precedence)
 - Token can also be passed per-command via `--token` flag (takes highest precedence)
 
+### Check the Auth Status
+
+`copia-cli auth status` lists every host in the config file with its user, its token and whether Copia accepts the token. `--host` limits the output to one host.
+
+```console
+$ copia-cli auth status
+app.copia.io
+  User: john
+  Token: ****************************************
+  Token valid
+```
+
+The token is masked by default: one asterisk per character. Copia tokens carry no prefix, so nothing of the token stays visible. `--show-token` prints the full token instead:
+
+```bash
+copia-cli auth status --show-token
+copia-cli auth status --host app.copia.io --show-token
+```
+
+**The output then contains the secret.** Do not run it where the terminal is recorded or shared, or in a CI log. The flag changes the output only; the config file is not touched.
+
 ## Auth Precedence
 
 1. `--token` flag (per-command)
