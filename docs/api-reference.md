@@ -93,6 +93,8 @@ POST   /repos/{owner}/{repo}/pulls/{index}/reviews/{id}     # Submit pending rev
 POST   /repos/{owner}/{repo}/pulls/{index}/requested_reviewers  # Request review
 ```
 
+`pr create --assignee`, `--label` and `--milestone` resolve `@me`, label names and the milestone like `issue create` (see Labels and Milestones) and send `assignees`, `labels` (IDs) and `milestone` (ID) in the create body. `pr create --reviewer` sends one `requested_reviewers` request after the create, with `reviewers` (logins) and `team_reviewers` (the team part of each `org/team` value); it works on older Gitea than the `reviewers` field of the create body.
+
 ### Issues
 
 ```
@@ -122,7 +124,7 @@ PATCH  /repos/{owner}/{repo}/labels/{id}           # Update label
 DELETE /repos/{owner}/{repo}/labels/{id}           # Delete label
 ```
 
-Issue endpoints take label IDs, not names. `issue create --label`, `issue edit --add-label` and `issue edit --remove-label` read every page of both the repo labels and the org labels and map names to IDs; a repo label wins over an org label of the same name. For a user-owned repository `/orgs/{owner}/labels` answers 404 and only repo labels are used.
+Issue endpoints take label IDs, not names. `issue create --label`, `issue edit --add-label`, `issue edit --remove-label` and `pr create --label` read every page of both the repo labels and the org labels and map names to IDs; a repo label wins over an org label of the same name. For a user-owned repository `/orgs/{owner}/labels` answers 404 and only repo labels are used.
 
 ### Milestones
 
