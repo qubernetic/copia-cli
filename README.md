@@ -64,6 +64,9 @@ $ copia-cli issue create --title "Fix sensor mapping" --label bug --assignee @me
 # Move it to another milestone, by name or ID
 $ copia-cli issue edit 13 --milestone v1.1
 
+# Hand it over and drop a label
+$ copia-cli issue edit 13 --add-assignee jane --remove-assignee john --remove-label triage
+
 # Open a PR
 $ copia-cli pr create --title "feat: add safety interlock" --base develop
 
