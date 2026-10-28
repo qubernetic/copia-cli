@@ -210,3 +210,25 @@ func TestNewCmdList_JSONErrors(t *testing.T) {
 	err = runCmd(t, readyFactory(ios), "--json", "title", "--jq", ".[")
 	require.ErrorContains(t, err, "invalid --jq expression")
 }
+
+func TestNewCmdList_JSONTemplate(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+	reg.Register(httpmock.REST("GET", issuesPath), httpmock.StringResponse(http.StatusOK,
+		`[{"number":3,"title":"T","state":"open","updated_at":"2026-03-30T10:00:00Z","labels":[]},
+		  {"number":4,"title":"U","state":"open","updated_at":"2026-03-30T10:00:00Z","labels":[]}]`))
+
+	ios, _, stdout, _ := iostreams.Test()
+	require.NoError(t, runCmd(t, readyFactory(ios), "--json", "number", "--template", `{{range .}}{{.number}}{{"\n"}}{{end}}`))
+	assert.Equal(t, "3\n4\n", stdout.String())
+
+	err := runCmd(t, readyFactory(ios), "--template", "{{.}}")
+	require.EqualError(t, err, "cannot use `--template` without specifying `--json`")
+
+	err = runCmd(t, readyFactory(ios), "--json", "title", "--jq", ".", "--template", "{{.}}")
+	require.EqualError(t, err, "cannot use `--jq` and `--template` together")
+
+	err = runCmd(t, readyFactory(ios), "--json", "title", "--template", "{{range .}}")
+	require.ErrorContains(t, err, "invalid --template")
+}
