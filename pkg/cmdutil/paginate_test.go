@@ -199,3 +199,50 @@ func TestFetchPages_NoItemsReturnsEmptySlice(t *testing.T) {
 	assert.NotNil(t, items)
 	assert.Empty(t, items)
 }
+
+func isEven(it item) bool { return it.N%2 == 0 }
+
+func isAbove(n int) func(item) bool {
+	return func(it item) bool { return it.N > n }
+}
+
+func TestFetchFilteredPages_DroppedPageDoesNotEndListing(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	reg.Register(
+		httpmock.QueryMatcher("GET", "/issues", pageQuery(1, 50)),
+		httpmock.WithHeader(httpmock.StringResponse(http.StatusOK, itemsJSON(1, 3)), "Link",
+			`<https://app.copia.io/api/v1/repos/o/r/issues?page=2&limit=50>; rel="next"`),
+	)
+	reg.Register(httpmock.QueryMatcher("GET", "/issues", pageQuery(2, 50)), httpmock.StringResponse(http.StatusOK, itemsJSON(4, 3)))
+
+	items, err := FetchFilteredPages(&http.Client{Transport: reg}, pageURL, "test-token", 1, decodeItems, isAbove(3))
+	require.NoError(t, err)
+	assert.Equal(t, []item{{N: 4}}, items)
+	assert.Equal(t, []string{"1/50", "2/50"}, requestedPages(reg))
+}
+
+func TestFetchFilteredPages_CountsLimitOnKeptItems(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	reg.Register(httpmock.QueryMatcher("GET", "/issues", pageQuery(1, 50)), httpmock.StringResponse(http.StatusOK, itemsJSON(1, 50)))
+	reg.Register(httpmock.QueryMatcher("GET", "/issues", pageQuery(2, 50)), httpmock.StringResponse(http.StatusOK, itemsJSON(51, 50)))
+
+	items, err := FetchFilteredPages(&http.Client{Transport: reg}, pageURL, "test-token", 30, decodeItems, isEven)
+	require.NoError(t, err)
+	require.Len(t, items, 30)
+	assert.Equal(t, 2, items[0].N)
+	assert.Equal(t, 60, items[29].N)
+	assert.Equal(t, []string{"1/50", "2/50"}, requestedPages(reg))
+}
+
+func TestFetchFilteredPages_StopsOnShortPageWithoutLink(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	reg.Register(httpmock.QueryMatcher("GET", "/issues", pageQuery(1, 50)), httpmock.StringResponse(http.StatusOK, itemsJSON(1, 7)))
+
+	items, err := FetchFilteredPages(&http.Client{Transport: reg}, pageURL, "test-token", 30, decodeItems, isEven)
+	require.NoError(t, err)
+	assert.Equal(t, []item{{N: 2}, {N: 4}, {N: 6}}, items)
+	assert.Equal(t, []string{"1/50"}, requestedPages(reg))
+}
