@@ -133,6 +133,13 @@ func FilterJQ(ctx context.Context, w io.Writer, input any, expr string) error {
 	}
 }
 
+// ValidateJQ returns the error FilterJQ would return for an expression that
+// does not compile, so a command can reject it before any request.
+func ValidateJQ(expr string) error {
+	_, err := compileJQ(expr)
+	return err
+}
+
 // compileJQ parses and compiles a --jq expression with gojq's defaults: no
 // environment loader, input iterator or module loader, so $ENV and env are
 // empty and input, inputs, import and include fail
