@@ -56,6 +56,7 @@ $ copia-cli auth login --host app.copia.io --token YOUR_TOKEN
 
 # List your repos
 $ copia-cli repo list
+$ copia-cli repo list --visibility private
 
 # Create an issue
 $ copia-cli issue create --title "Fix sensor mapping" --label bug
