@@ -280,3 +280,36 @@ func TestFilterJQ(t *testing.T) {
 		})
 	}
 }
+
+// TestFilterJQ_NoOutsideAccess pins that --jq cannot read the environment,
+// further inputs or module files: compileJQ keeps gojq's defaults, without
+// gojq.WithEnvironLoader, gojq.WithInputIter or gojq.WithModuleLoader.
+func TestFilterJQ_NoOutsideAccess(t *testing.T) {
+	t.Setenv("COPIA_TOKEN", "secret-token")
+	tests := []struct {
+		name    string
+		expr    string
+		want    string
+		wantErr bool
+	}{
+		{name: "$ENV", expr: "$ENV", want: "{}\n"},
+		{name: "env", expr: "env", want: "{}\n"},
+		{name: "input", expr: "input", wantErr: true},
+		{name: "inputs", expr: "[inputs]", wantErr: true},
+		{name: "import", expr: `import "x" as x; .`, wantErr: true},
+		{name: "include", expr: `include "x"; .`, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var out bytes.Buffer
+			err := FilterJQ(&out, map[string]any{}, tt.expr)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.NotContains(t, out.String(), "secret-token")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, out.String())
+		})
+	}
+}

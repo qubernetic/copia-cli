@@ -122,6 +122,10 @@ func FilterJQ(w io.Writer, input any, expr string) error {
 	}
 }
 
+// compileJQ parses and compiles a --jq expression with gojq's defaults: no
+// environment loader, input iterator or module loader, so $ENV and env are
+// empty and input, inputs, import and include fail
+// (TestFilterJQ_NoOutsideAccess). Unlike gh, do not add them.
 func compileJQ(expr string) (*gojq.Code, error) {
 	query, err := gojq.Parse(expr)
 	if err != nil {
