@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--jq/-q <expression>` on the same 13 commands filters the `--json` output with `github.com/itchyny/gojq`, the jq library `gh` uses (new dependency). Each result is printed on its own line: a string raw, `null` as an empty line, anything else as compact JSON, as in `gh`. `--jq` without `--json` and an expression that does not parse fail before any request (#177)
 - `--template/-t <template>` on the same 13 commands formats the `--json` output with a Go template, as in `gh`, for example `--json number --template '{{range .}}{{.number}}{{"\n"}}{{end}}'`. The helpers are `join`, `pluck`, `truncate`, `timeago`, `tablerow` and `tablerender`; the `gh` color helpers are left out. `--template` without `--json`, together with `--jq`, or a template that does not parse fails before any request (#321)
 - `--raw-field/-f key=value` on `api` always sends the value as a string; `-f key=value` sends exactly what it sent before (#167)
+- `--input <file>` on `api` sends the file as the request body, `-` reads standard input; the default method is then POST and the `Content-Type` stays `application/json` unless `--header` sets another. With `--input`, `--field` and `--raw-field` values are added to the query string, as in `gh` (`null` as an empty value) (#167)
 
 ### Security
 

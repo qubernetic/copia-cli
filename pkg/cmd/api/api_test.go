@@ -378,3 +378,108 @@ func TestNewCmdAPI_FieldFileMissing(t *testing.T) {
 	assert.Contains(t, err.Error(), `error parsing "body" value`)
 	assert.Empty(t, reg.Requests)
 }
+
+func TestNewCmdAPI_Input(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "body.json")
+	require.NoError(t, os.WriteFile(file, []byte(`{"title":"from file"}`), 0o600))
+
+	tests := []struct {
+		name      string
+		args      []string
+		stdin     string
+		wantPath  string
+		wantQuery string
+		wantType  string
+		wantBody  string
+	}{
+		{
+			name:     "file",
+			args:     []string{"--input", file},
+			wantPath: "/api/v1/repos/o/r/issues",
+			wantType: "application/json",
+			wantBody: `{"title":"from file"}`,
+		},
+		{
+			name:     "stdin",
+			args:     []string{"--input", "-"},
+			stdin:    `{"title":"from stdin"}`,
+			wantPath: "/api/v1/repos/o/r/issues",
+			wantType: "application/json",
+			wantBody: `{"title":"from stdin"}`,
+		},
+		{
+			name:      "fields become query parameters",
+			args:      []string{"--input", file, "-f", "note=a, b", "-F", "n=1", "-F", "ok=true", "-F", "none=null"},
+			wantPath:  "/api/v1/repos/o/r/issues",
+			wantQuery: "n=1&none=&note=a%2C+b&ok=true",
+			wantType:  "application/json",
+			wantBody:  `{"title":"from file"}`,
+		},
+		{
+			name:     "header overrides content type",
+			args:     []string{"--input", file, "-H", "Content-Type: text/plain"},
+			wantPath: "/api/v1/repos/o/r/issues",
+			wantType: "text/plain",
+			wantBody: `{"title":"from file"}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			defer reg.Verify(t)
+			httpmock.ReplaceDefaultTransport(t, reg)
+
+			var gotBody string
+			var gotReq *http.Request
+			reg.Register(httpmock.REST("POST", tt.wantPath),
+				func(req *http.Request) (*http.Response, error) {
+					gotReq = req
+					b, err := io.ReadAll(req.Body)
+					require.NoError(t, err)
+					gotBody = string(b)
+					return httpmock.StringResponse(http.StatusCreated, `{}`)(req)
+				})
+
+			ios, stdin, _, _ := iostreams.Test()
+			stdin.WriteString(tt.stdin)
+			f := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Token: "test-token"}
+			err := runAPICmd(t, f, append([]string{"repos/o/r/issues"}, tt.args...)...)
+			require.NoError(t, err)
+
+			require.NotNil(t, gotReq)
+			assert.Equal(t, tt.wantBody, gotBody)
+			assert.Equal(t, tt.wantQuery, gotReq.URL.RawQuery)
+			assert.Equal(t, tt.wantType, gotReq.Header.Get("Content-Type"))
+		})
+	}
+}
+
+func TestNewCmdAPI_InputKeepsExistingQuery(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+	reg.Register(httpmock.REST("PATCH", "/api/v1/repos/o/r/issues/1"),
+		httpmock.StringResponse(http.StatusOK, `{}`))
+
+	ios, stdin, _, _ := iostreams.Test()
+	stdin.WriteString(`{}`)
+	f := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Token: "test-token"}
+	err := runAPICmd(t, f, "repos/o/r/issues/1?a=1", "-X", "PATCH", "--input", "-", "-f", "b=2")
+	require.NoError(t, err)
+	require.Len(t, reg.Requests, 1)
+	assert.Equal(t, "a=1&b=2", reg.Requests[0].URL.RawQuery)
+}
+
+func TestNewCmdAPI_InputMissingFile(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+
+	ios, _, _, _ := iostreams.Test()
+	f := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Token: "test-token"}
+	err := runAPICmd(t, f, "repos/o/r/issues", "--input", filepath.Join(t.TempDir(), "missing"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reading --input")
+	assert.Empty(t, reg.Requests)
+}

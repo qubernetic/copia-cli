@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -27,6 +28,8 @@ type APIOptions struct {
 	// MagicFields are -F/--field values, typed like gh (see magicFieldValue).
 	MagicFields []string
 	Headers     []string
+	// InputFile is sent as the request body; "-" reads stdin.
+	InputFile string
 }
 
 // NewCmdAPI creates the `copia api` command.
@@ -50,6 +53,10 @@ Each flag takes key=value and can be repeated; a comma in a value is kept.
     - @file sends the contents of the file, @- reads standard input;
     - anything else is sent as a string.
 
+Use --input to send a file as the request body ("-" reads standard input);
+the default method is then POST, the Content-Type stays application/json
+unless --header sets it, and fields are added to the query string instead.
+
 Use --method to override the HTTP method (GET, POST, PATCH, DELETE, PUT).
 Use --header to add custom HTTP headers.`,
 		Example: `  # Get authenticated user
@@ -64,6 +71,9 @@ Use --header to add custom HTTP headers.`,
   # Typed fields: a number and a boolean
   $ copia-cli api -X PATCH /repos/my-org/my-repo/issues/12 -F milestone=3
   $ copia-cli api /user/repos -f name=demo -F private=true
+
+  # Send a prepared JSON body from standard input
+  $ echo '{"title":"Bug report"}' | copia-cli api /repos/my-org/my-repo/issues --input -
 
   # Delete a repo
   $ copia-cli api -X DELETE /repos/my-org/old-repo
@@ -86,10 +96,11 @@ Use --header to add custom HTTP headers.`,
 		},
 	}
 
-	cmd.Flags().StringVarP(&opts.Method, "method", "X", "", "HTTP method (default: GET, or POST if --field is used)")
+	cmd.Flags().StringVarP(&opts.Method, "method", "X", "", "HTTP method (default: GET, or POST with fields or --input)")
 	cmd.Flags().StringArrayVarP(&opts.MagicFields, "field", "F", nil, "Add a typed parameter in `key=value` format")
 	cmd.Flags().StringArrayVarP(&opts.RawFields, "raw-field", "f", nil, "Add a string parameter in `key=value` format")
 	cmd.Flags().StringSliceVarP(&opts.Headers, "header", "H", nil, "Add HTTP header (key: value)")
+	cmd.Flags().StringVar(&opts.InputFile, "input", "", "The `file` to use as the request body (\"-\" for standard input)")
 
 	return cmd
 }
@@ -116,16 +127,24 @@ func APIRun(opts *APIOptions) error {
 	// Determine method
 	method := opts.Method
 	if method == "" {
-		if len(params) > 0 {
+		if len(params) > 0 || opts.InputFile != "" {
 			method = "POST"
 		} else {
 			method = "GET"
 		}
 	}
 
-	// Build body from fields
+	// Build body from --input, or from fields; with --input, fields go
+	// into the query string, as in gh.
 	var body io.Reader
-	if len(params) > 0 {
+	if opts.InputFile != "" {
+		b, err := cmdutil.ReadFile(opts.InputFile, opts.IO.In)
+		if err != nil {
+			return fmt.Errorf("reading --input: %w", err)
+		}
+		body = bytes.NewReader(b)
+		path = addQuery(path, params)
+	} else if len(params) > 0 {
 		b, err := json.Marshal(params)
 		if err != nil {
 			return err
@@ -133,8 +152,8 @@ func APIRun(opts *APIOptions) error {
 		body = bytes.NewReader(b)
 	}
 
-	url := fmt.Sprintf("https://%s%s", opts.Host, path)
-	req, err := http.NewRequest(method, url, body)
+	reqURL := fmt.Sprintf("https://%s%s", opts.Host, path)
+	req, err := http.NewRequest(method, reqURL, body)
 	if err != nil {
 		return err
 	}
@@ -202,6 +221,27 @@ func parseFields(opts *APIOptions) (map[string]any, error) {
 		params[key] = v
 	}
 	return params, nil
+}
+
+// addQuery appends params to the query string of path; null is sent as an
+// empty value.
+func addQuery(path string, params map[string]any) string {
+	if len(params) == 0 {
+		return path
+	}
+	q := url.Values{}
+	for key, value := range params {
+		if value == nil {
+			q.Add(key, "")
+		} else {
+			q.Add(key, fmt.Sprint(value))
+		}
+	}
+	sep := "?"
+	if strings.Contains(path, "?") {
+		sep = "&"
+	}
+	return path + sep + q.Encode()
 }
 
 // magicFieldValue types a -F value like gh: @file reads a file (@- reads
