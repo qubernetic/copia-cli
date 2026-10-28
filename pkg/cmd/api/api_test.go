@@ -5,6 +5,9 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/qubernetic/copia-cli/internal/config"
@@ -58,7 +61,7 @@ func TestApiRun_POST_WithFields(t *testing.T) {
 		Token:      "test-token",
 		Method:     "POST",
 		Path:       "/repos/my-org/my-repo/issues",
-		Fields:     []string{"title=test issue", "body=description"},
+		RawFields:  []string{"title=test issue", "body=description"},
 	}
 
 	err := APIRun(opts)
@@ -301,4 +304,253 @@ func TestApiRun_NonJSONSuccess(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "# Title\n", stdout.String())
 	assert.Empty(t, reg.Requests[0].Header.Get("Content-Type"))
+}
+
+func captureBody(t *testing.T, reg *httpmock.Registry, method, path string, got *map[string]any) {
+	t.Helper()
+	reg.Register(httpmock.REST(method, path),
+		func(req *http.Request) (*http.Response, error) {
+			b, err := io.ReadAll(req.Body)
+			require.NoError(t, err)
+			require.NoError(t, json.Unmarshal(b, got))
+			return httpmock.StringResponse(http.StatusCreated, `{}`)(req)
+		})
+}
+
+func TestNewCmdAPI_TypedAndRawFields(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+
+	var got map[string]any
+	captureBody(t, reg, "POST", "/api/v1/repos/o/r/issues", &got)
+
+	ios, _, _, _ := iostreams.Test()
+	f := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Token: "test-token"}
+	err := runAPICmd(t, f, "repos/o/r/issues",
+		"-f", "raw=1", "--raw-field", "title=a, b",
+		"-F", "n=1", "--field", "ok=true", "-F", "no=false", "-F", "none=null", "-F", "s=hello, world")
+	require.NoError(t, err)
+
+	assert.Equal(t, map[string]any{
+		"raw":   "1",
+		"title": "a, b",
+		"n":     float64(1),
+		"ok":    true,
+		"no":    false,
+		"none":  nil,
+		"s":     "hello, world",
+	}, got)
+}
+
+func TestNewCmdAPI_FieldFromFile(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+
+	var got map[string]any
+	captureBody(t, reg, "POST", "/api/v1/repos/o/r/issues", &got)
+
+	file := filepath.Join(t.TempDir(), "body.md")
+	require.NoError(t, os.WriteFile(file, []byte("line 1\nline 2, with comma\n"), 0o600))
+
+	ios, stdin, _, _ := iostreams.Test()
+	stdin.WriteString("from stdin")
+	f := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Token: "test-token"}
+	err := runAPICmd(t, f, "repos/o/r/issues", "-F", "body=@"+file, "-F", "title=@-", "-f", "raw=@"+file)
+	require.NoError(t, err)
+
+	assert.Equal(t, map[string]any{
+		"body":  "line 1\nline 2, with comma\n",
+		"title": "from stdin",
+		"raw":   "@" + file,
+	}, got)
+}
+
+func TestNewCmdAPI_FieldFileMissing(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+
+	ios, _, _, _ := iostreams.Test()
+	f := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Token: "test-token"}
+	err := runAPICmd(t, f, "repos/o/r/issues", "-F", "skipped", "-F", "body=@"+filepath.Join(t.TempDir(), "missing"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `error parsing "body" value`)
+	assert.Empty(t, reg.Requests)
+}
+
+func TestNewCmdAPI_Input(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "body.json")
+	require.NoError(t, os.WriteFile(file, []byte(`{"title":"from file"}`), 0o600))
+
+	tests := []struct {
+		name      string
+		args      []string
+		stdin     string
+		wantPath  string
+		wantQuery string
+		wantType  string
+		wantBody  string
+	}{
+		{
+			name:     "file",
+			args:     []string{"--input", file},
+			wantPath: "/api/v1/repos/o/r/issues",
+			wantType: "application/json",
+			wantBody: `{"title":"from file"}`,
+		},
+		{
+			name:     "stdin",
+			args:     []string{"--input", "-"},
+			stdin:    `{"title":"from stdin"}`,
+			wantPath: "/api/v1/repos/o/r/issues",
+			wantType: "application/json",
+			wantBody: `{"title":"from stdin"}`,
+		},
+		{
+			name:      "fields become query parameters",
+			args:      []string{"--input", file, "-f", "note=a, b", "-F", "n=1", "-F", "ok=true", "-F", "none=null"},
+			wantPath:  "/api/v1/repos/o/r/issues",
+			wantQuery: "n=1&none=&note=a%2C+b&ok=true",
+			wantType:  "application/json",
+			wantBody:  `{"title":"from file"}`,
+		},
+		{
+			name:     "header overrides content type",
+			args:     []string{"--input", file, "-H", "Content-Type: text/plain"},
+			wantPath: "/api/v1/repos/o/r/issues",
+			wantType: "text/plain",
+			wantBody: `{"title":"from file"}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			defer reg.Verify(t)
+			httpmock.ReplaceDefaultTransport(t, reg)
+
+			var gotBody string
+			var gotReq *http.Request
+			reg.Register(httpmock.REST("POST", tt.wantPath),
+				func(req *http.Request) (*http.Response, error) {
+					gotReq = req
+					b, err := io.ReadAll(req.Body)
+					require.NoError(t, err)
+					gotBody = string(b)
+					return httpmock.StringResponse(http.StatusCreated, `{}`)(req)
+				})
+
+			ios, stdin, _, _ := iostreams.Test()
+			stdin.WriteString(tt.stdin)
+			f := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Token: "test-token"}
+			err := runAPICmd(t, f, append([]string{"repos/o/r/issues"}, tt.args...)...)
+			require.NoError(t, err)
+
+			require.NotNil(t, gotReq)
+			assert.Equal(t, tt.wantBody, gotBody)
+			assert.Equal(t, tt.wantQuery, gotReq.URL.RawQuery)
+			assert.Equal(t, tt.wantType, gotReq.Header.Get("Content-Type"))
+		})
+	}
+}
+
+func TestNewCmdAPI_InputKeepsExistingQuery(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+	reg.Register(httpmock.REST("PATCH", "/api/v1/repos/o/r/issues/1"),
+		httpmock.StringResponse(http.StatusOK, `{}`))
+
+	ios, stdin, _, _ := iostreams.Test()
+	stdin.WriteString(`{}`)
+	f := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Token: "test-token"}
+	err := runAPICmd(t, f, "repos/o/r/issues/1?a=1", "-X", "PATCH", "--input", "-", "-f", "b=2")
+	require.NoError(t, err)
+	require.Len(t, reg.Requests, 1)
+	assert.Equal(t, "a=1&b=2", reg.Requests[0].URL.RawQuery)
+}
+
+func TestNewCmdAPI_InputMissingFile(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+
+	ios, _, _, _ := iostreams.Test()
+	f := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Token: "test-token"}
+	err := runAPICmd(t, f, "repos/o/r/issues", "--input", filepath.Join(t.TempDir(), "missing"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reading --input")
+	assert.Empty(t, reg.Requests)
+}
+
+func TestNewCmdAPI_Include(t *testing.T) {
+	tests := []struct {
+		name      string
+		args      []string
+		responder httpmock.Responder
+		wantOut   string
+		wantErr   string
+	}{
+		{
+			name: "status line and sorted headers before the body",
+			args: []string{"-i"},
+			responder: httpmock.WithHeader(httpmock.StringResponse(http.StatusOK, `{"login":"john"}`),
+				"X-Total-Count", "3"),
+			wantOut: "HTTP/1.1 200 OK\nContent-Type: application/json\nX-Total-Count: 3\n\n{\n  \"login\": \"john\"\n}\n",
+		},
+		{
+			name: "protocol, status text and repeated header from the response",
+			args: []string{"--include"},
+			responder: func(*http.Request) (*http.Response, error) {
+				return &http.Response{
+					Proto:      "HTTP/2.0",
+					Status:     "201 Created",
+					StatusCode: http.StatusCreated,
+					Header:     http.Header{"Link": []string{"<a>", "<b>"}},
+					Body:       io.NopCloser(strings.NewReader("done")),
+				}, nil
+			},
+			wantOut: "HTTP/2.0 201 Created\nLink: <a>, <b>\n\ndone\n",
+		},
+		{
+			name:      "no content prints only the head",
+			args:      []string{"-i"},
+			responder: httpmock.StringResponse(http.StatusNoContent, ``),
+			wantOut:   "HTTP/1.1 204 No Content\nContent-Type: application/json\n\n",
+		},
+		{
+			name:      "error response",
+			args:      []string{"-i"},
+			responder: httpmock.StringResponse(http.StatusNotFound, `{"message":"not found"}`),
+			wantOut:   "HTTP/1.1 404 Not Found\nContent-Type: application/json\n\n{\n  \"message\": \"not found\"\n}\n",
+			wantErr:   "API error (HTTP 404)",
+		},
+		{
+			name:      "without the flag",
+			responder: httpmock.StringResponse(http.StatusOK, `{"login":"john"}`),
+			wantOut:   "{\n  \"login\": \"john\"\n}\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			defer reg.Verify(t)
+			httpmock.ReplaceDefaultTransport(t, reg)
+			reg.Register(httpmock.REST("GET", "/api/v1/user"), tt.responder)
+
+			ios, _, stdout, _ := iostreams.Test()
+			f := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Token: "test-token"}
+			err := runAPICmd(t, f, append([]string{"/user"}, tt.args...)...)
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tt.wantOut, stdout.String())
+		})
+	}
 }
