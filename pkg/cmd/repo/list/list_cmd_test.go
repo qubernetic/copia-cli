@@ -64,6 +64,52 @@ func TestNewCmdList_Run(t *testing.T) {
 	}
 }
 
+func TestNewCmdList_Visibility(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		want    string
+		notWant string
+	}{
+		{name: "private table", args: []string{"--visibility", "private"}, want: "john/hmi-config", notWant: "john/plc-project"},
+		{name: "public table", args: []string{"--visibility", "public"}, want: "john/plc-project", notWant: "john/hmi-config"},
+		{name: "private json", args: []string{"--visibility", "private", "--json", "full_name"}, want: `"full_name": "john/hmi-config"`, notWant: "john/plc-project"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			defer reg.Verify(t)
+			httpmock.ReplaceDefaultTransport(t, reg)
+			reg.Register(httpmock.REST("GET", "/api/v1/user/repos"), httpmock.StringResponse(http.StatusOK, `[
+				{"full_name":"john/plc-project","private":false},
+				{"full_name":"john/hmi-config","private":true}
+			]`))
+
+			ios, _, stdout, _ := iostreams.Test()
+			f := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Token: "test-token"}
+
+			require.NoError(t, runListCmd(f, tt.args...))
+			assert.Contains(t, stdout.String(), tt.want)
+			assert.NotContains(t, stdout.String(), tt.notWant)
+		})
+	}
+}
+
+func TestNewCmdList_InvalidVisibility(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+
+	ios, _, _, _ := iostreams.Test()
+	f := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Token: "test-token"}
+
+	err := runListCmd(f, "--visibility", "internal")
+	require.Error(t, err)
+	assert.Equal(t, `invalid visibility "internal": valid values are {public|private}`, err.Error())
+	assert.Empty(t, reg.Requests)
+}
+
 func TestNewCmdList_AuthFailure(t *testing.T) {
 	t.Setenv("COPIA_TOKEN", "")
 	t.Setenv("COPIA_HOST", "")
