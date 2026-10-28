@@ -20,6 +20,8 @@ type SearchOptions struct {
 	Host       string
 	Token      string
 	Query      string
+	Sort       string
+	Order      string
 	Limit      int
 	JSON       cmdutil.JSONFlags
 }
@@ -42,6 +44,7 @@ func NewCmdSearchRepos(f *cmdutil.Factory) *cobra.Command {
 		Short: "Search repositories",
 		Long:  "Search for repositories on Copia matching the given query string.",
 		Example: `  $ copia-cli search repos plc
+  $ copia-cli search repos plc --sort stars
   $ copia-cli search repos "automation controller" --json fullName,description`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -59,6 +62,8 @@ func NewCmdSearchRepos(f *cmdutil.Factory) *cobra.Command {
 		},
 	}
 
+	cmd.Flags().StringVar(&opts.Sort, "sort", "", "Sort fetched repositories: {alpha|created|updated|size|stars|forks}")
+	cmd.Flags().StringVar(&opts.Order, "order", "desc", "Order of repositories returned, ignored unless '--sort' flag is specified: {asc|desc}")
 	cmd.Flags().IntVarP(&opts.Limit, "limit", "L", 30, "Maximum number of results")
 	cmdutil.AddJSONFlags(cmd, &opts.JSON, validJSONFields)
 
@@ -77,8 +82,25 @@ func SearchRun(opts *SearchOptions) error {
 		return err
 	}
 
+	switch opts.Sort {
+	case "", "alpha", "created", "updated", "size", "stars", "forks":
+	default:
+		return fmt.Errorf("invalid sort %q: valid values are {alpha|created|updated|size|stars|forks}", opts.Sort)
+	}
+
+	order := opts.Order
+	if order == "" {
+		order = "desc"
+	}
+	if order != "asc" && order != "desc" {
+		return fmt.Errorf("invalid order %q: valid values are {asc|desc}", opts.Order)
+	}
+
 	u := fmt.Sprintf("https://%s/api/v1/repos/search?q=%s",
 		opts.Host, url.QueryEscape(opts.Query))
+	if opts.Sort != "" {
+		u += "&sort=" + opts.Sort + "&order=" + order
+	}
 
 	repos, err := cmdutil.FetchPages(opts.HTTPClient, u, opts.Token, opts.Limit, decodeSearch)
 	if err != nil {
