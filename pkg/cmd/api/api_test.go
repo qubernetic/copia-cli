@@ -5,6 +5,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/qubernetic/copia-cli/internal/config"
@@ -58,7 +60,7 @@ func TestApiRun_POST_WithFields(t *testing.T) {
 		Token:      "test-token",
 		Method:     "POST",
 		Path:       "/repos/my-org/my-repo/issues",
-		Fields:     []string{"title=test issue", "body=description"},
+		RawFields:  []string{"title=test issue", "body=description"},
 	}
 
 	err := APIRun(opts)
@@ -301,4 +303,78 @@ func TestApiRun_NonJSONSuccess(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "# Title\n", stdout.String())
 	assert.Empty(t, reg.Requests[0].Header.Get("Content-Type"))
+}
+
+func captureBody(t *testing.T, reg *httpmock.Registry, method, path string, got *map[string]any) {
+	t.Helper()
+	reg.Register(httpmock.REST(method, path),
+		func(req *http.Request) (*http.Response, error) {
+			b, err := io.ReadAll(req.Body)
+			require.NoError(t, err)
+			require.NoError(t, json.Unmarshal(b, got))
+			return httpmock.StringResponse(http.StatusCreated, `{}`)(req)
+		})
+}
+
+func TestNewCmdAPI_TypedAndRawFields(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+
+	var got map[string]any
+	captureBody(t, reg, "POST", "/api/v1/repos/o/r/issues", &got)
+
+	ios, _, _, _ := iostreams.Test()
+	f := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Token: "test-token"}
+	err := runAPICmd(t, f, "repos/o/r/issues",
+		"-f", "raw=1", "--raw-field", "title=a, b",
+		"-F", "n=1", "--field", "ok=true", "-F", "no=false", "-F", "none=null", "-F", "s=hello, world")
+	require.NoError(t, err)
+
+	assert.Equal(t, map[string]any{
+		"raw":   "1",
+		"title": "a, b",
+		"n":     float64(1),
+		"ok":    true,
+		"no":    false,
+		"none":  nil,
+		"s":     "hello, world",
+	}, got)
+}
+
+func TestNewCmdAPI_FieldFromFile(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+
+	var got map[string]any
+	captureBody(t, reg, "POST", "/api/v1/repos/o/r/issues", &got)
+
+	file := filepath.Join(t.TempDir(), "body.md")
+	require.NoError(t, os.WriteFile(file, []byte("line 1\nline 2, with comma\n"), 0o600))
+
+	ios, stdin, _, _ := iostreams.Test()
+	stdin.WriteString("from stdin")
+	f := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Token: "test-token"}
+	err := runAPICmd(t, f, "repos/o/r/issues", "-F", "body=@"+file, "-F", "title=@-", "-f", "raw=@"+file)
+	require.NoError(t, err)
+
+	assert.Equal(t, map[string]any{
+		"body":  "line 1\nline 2, with comma\n",
+		"title": "from stdin",
+		"raw":   "@" + file,
+	}, got)
+}
+
+func TestNewCmdAPI_FieldFileMissing(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+
+	ios, _, _, _ := iostreams.Test()
+	f := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Token: "test-token"}
+	err := runAPICmd(t, f, "repos/o/r/issues", "-F", "skipped", "-F", "body=@"+filepath.Join(t.TempDir(), "missing"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `error parsing "body" value`)
+	assert.Empty(t, reg.Requests)
 }

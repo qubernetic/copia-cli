@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--json` prints only the requested fields: an array of objects for a list, one object for a view. It takes a comma-separated list and can be repeated; an unknown field fails before any request and lists the available fields. Applies to `issue list`, `issue view`, `pr list`, `pr view`, `repo list`, `repo view`, `release list`, `label list`, `org list`, `org view`, `notification list`, `search repos` and `search issues` (#177)
 - `--jq/-q <expression>` on the same 13 commands filters the `--json` output with `github.com/itchyny/gojq`, the jq library `gh` uses (new dependency). Each result is printed on its own line: a string raw, `null` as an empty line, anything else as compact JSON, as in `gh`. `--jq` without `--json` and an expression that does not parse fail before any request (#177)
 - `--template/-t <template>` on the same 13 commands formats the `--json` output with a Go template, as in `gh`, for example `--json number --template '{{range .}}{{.number}}{{"\n"}}{{end}}'`. The helpers are `join`, `pluck`, `truncate`, `timeago`, `tablerow` and `tablerender`; the `gh` color helpers are left out. `--template` without `--json`, together with `--jq`, or a template that does not parse fails before any request (#321)
+- `--raw-field/-f key=value` on `api` always sends the value as a string; `-f key=value` sends exactly what it sent before (#167)
 
 ### Security
 
@@ -48,6 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `api --field` is now typed like `gh`, and its short form is `-F` (`-f` is `--raw-field`): `true`, `false`, `null` and integers are sent as JSON values, `@file` sends the contents of the file and `@-` reads standard input; anything else stays a string. A script that used `--field n=1` now sends the number `1`; use `--raw-field` or `-f` for the string. Both flags take one `key=value` per use, so a value with a comma, such as `-f title="a, b"`, is no longer split into two values (#167)
 - The `--json` field names are the keys the commands print: `user` replaces `author` on `issue view`, `pr list` and `pr view`, and `stars_count` and `forks_count` replace `stars` and `forks` on `repo view`. `html_url` is now listed on `issue view`, `pr view` and `repo view`, and `id` on `release list` and `label list`; these keys were already printed. The `release list` and `repo list` help examples use `tag_name` and `full_name` (#177)
 - `.devcontainer/compose.yaml` adds a `dev` service for the Horde sandbox (`horde-dev`): it runs as `1000:100`, keeps the Go caches and `HOME` on named volumes, is limited to 2 GB of memory and ships golangci-lint v2.15.0. bump-go now also updates `.devcontainer/Dockerfile`. The local workflow (`docker-compose*.yml`, `devcontainer.json`, `justfile`) is unchanged (#257)
 - All workflows except bump-go read the Go version from `go.mod` instead of a hard-coded `1.26` (#228)

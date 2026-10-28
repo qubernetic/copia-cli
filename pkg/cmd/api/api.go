@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -21,8 +22,11 @@ type APIOptions struct {
 	Token      string
 	Method     string
 	Path       string
-	Fields     []string
-	Headers    []string
+	// RawFields are -f/--raw-field values, always sent as strings.
+	RawFields []string
+	// MagicFields are -F/--field values, typed like gh (see magicFieldValue).
+	MagicFields []string
+	Headers     []string
 }
 
 // NewCmdAPI creates the `copia api` command.
@@ -37,14 +41,29 @@ func NewCmdAPI(f *cmdutil.Factory) *cobra.Command {
 The endpoint argument should be a path of a Gitea API v1 endpoint. The /api/v1
 prefix is added automatically if not present.
 
-Use --field to send JSON body fields (automatically switches to POST method).
+Parameters are sent as a JSON body, and the default method switches to POST.
+Each flag takes key=value and can be repeated; a comma in a value is kept.
+
+  -f/--raw-field sends the value as a string.
+  -F/--field types the value like gh:
+    - true, false, null and integers are sent as JSON values;
+    - @file sends the contents of the file, @- reads standard input;
+    - anything else is sent as a string.
+
 Use --method to override the HTTP method (GET, POST, PATCH, DELETE, PUT).
 Use --header to add custom HTTP headers.`,
 		Example: `  # Get authenticated user
   $ copia-cli api /user
 
   # Create an issue
-  $ copia-cli api -X POST /repos/my-org/my-repo/issues --field title="Bug report"
+  $ copia-cli api -X POST /repos/my-org/my-repo/issues -f title="Bug report"
+
+  # Create an issue with the body read from a file
+  $ copia-cli api /repos/my-org/my-repo/issues -f title="Bug report" -F body=@report.md
+
+  # Typed fields: a number and a boolean
+  $ copia-cli api -X PATCH /repos/my-org/my-repo/issues/12 -F milestone=3
+  $ copia-cli api /user/repos -f name=demo -F private=true
 
   # Delete a repo
   $ copia-cli api -X DELETE /repos/my-org/old-repo
@@ -68,7 +87,8 @@ Use --header to add custom HTTP headers.`,
 	}
 
 	cmd.Flags().StringVarP(&opts.Method, "method", "X", "", "HTTP method (default: GET, or POST if --field is used)")
-	cmd.Flags().StringSliceVarP(&opts.Fields, "field", "f", nil, "Add JSON body field (key=value)")
+	cmd.Flags().StringArrayVarP(&opts.MagicFields, "field", "F", nil, "Add a typed parameter in `key=value` format")
+	cmd.Flags().StringArrayVarP(&opts.RawFields, "raw-field", "f", nil, "Add a string parameter in `key=value` format")
 	cmd.Flags().StringSliceVarP(&opts.Headers, "header", "H", nil, "Add HTTP header (key: value)")
 
 	return cmd
@@ -88,10 +108,15 @@ func APIRun(opts *APIOptions) error {
 		path = "/api/v1" + path
 	}
 
+	params, err := parseFields(opts)
+	if err != nil {
+		return err
+	}
+
 	// Determine method
 	method := opts.Method
 	if method == "" {
-		if len(opts.Fields) > 0 {
+		if len(params) > 0 {
 			method = "POST"
 		} else {
 			method = "GET"
@@ -100,15 +125,8 @@ func APIRun(opts *APIOptions) error {
 
 	// Build body from fields
 	var body io.Reader
-	if len(opts.Fields) > 0 {
-		payload := map[string]string{}
-		for _, f := range opts.Fields {
-			parts := strings.SplitN(f, "=", 2)
-			if len(parts) == 2 {
-				payload[parts[0]] = parts[1]
-			}
-		}
-		b, err := json.Marshal(payload)
+	if len(params) > 0 {
+		b, err := json.Marshal(params)
 		if err != nil {
 			return err
 		}
@@ -161,4 +179,53 @@ func APIRun(opts *APIOptions) error {
 	}
 
 	return nil
+}
+
+// parseFields collects -f and -F values into one parameter map. A value
+// without "=" is skipped, as before.
+func parseFields(opts *APIOptions) (map[string]any, error) {
+	params := map[string]any{}
+	for _, f := range opts.RawFields {
+		if key, value, ok := strings.Cut(f, "="); ok {
+			params[key] = value
+		}
+	}
+	for _, f := range opts.MagicFields {
+		key, value, ok := strings.Cut(f, "=")
+		if !ok {
+			continue
+		}
+		v, err := magicFieldValue(value, opts)
+		if err != nil {
+			return nil, fmt.Errorf("error parsing %q value: %w", key, err)
+		}
+		params[key] = v
+	}
+	return params, nil
+}
+
+// magicFieldValue types a -F value like gh: @file reads a file (@- reads
+// stdin), integers, true, false and null become JSON values, anything else
+// stays a string.
+// Adapted from github.com/cli/cli/v2/pkg/cmd/api.magicFieldValue.
+func magicFieldValue(v string, opts *APIOptions) (any, error) {
+	if filename, ok := strings.CutPrefix(v, "@"); ok {
+		b, err := cmdutil.ReadFile(filename, opts.IO.In)
+		if err != nil {
+			return nil, err
+		}
+		return string(b), nil
+	}
+	if n, err := strconv.Atoi(v); err == nil {
+		return n, nil
+	}
+	switch v {
+	case "true":
+		return true, nil
+	case "false":
+		return false, nil
+	case "null":
+		return nil, nil
+	}
+	return v, nil
 }
