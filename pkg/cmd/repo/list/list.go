@@ -45,7 +45,7 @@ repositories for a specific organization instead.`,
 		Example: `  $ copia-cli repo list
   $ copia-cli repo list --org my-org
   $ copia-cli repo list --visibility private
-  $ copia-cli repo list --json fullName,description`,
+  $ copia-cli repo list --json full_name,description`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.IO = f.IOStreams
 			host, token, err := f.ResolveAuth()
@@ -104,7 +104,7 @@ func ListRun(opts *ListOptions) error {
 	}
 
 	if opts.JSON.IsJSON() {
-		return cmdutil.PrintJSON(opts.IO.Out, repos)
+		return opts.JSON.Print(opts.IO.Out, repos)
 	}
 
 	w := tabwriter.NewWriter(opts.IO.Out, 0, 0, 2, ' ', 0)

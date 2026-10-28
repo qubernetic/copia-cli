@@ -67,7 +67,8 @@ Use --limit to control how many issues are returned (default 30).`,
   $ copia-cli issue list --state closed
   $ copia-cli issue list --assignee @me --milestone v1.0
   $ copia-cli issue list --author jane --search "plc timeout"
-  $ copia-cli issue list --json number,title,state`,
+  $ copia-cli issue list --json number,title,state
+  $ copia-cli issue list --json number,title --jq '.[].title'`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.IO = f.IOStreams
 			host, token, err := f.ResolveAuth()
@@ -137,7 +138,7 @@ func ListRun(opts *ListOptions) error {
 	}
 
 	if opts.JSON.IsJSON() {
-		return cmdutil.PrintJSON(opts.IO.Out, issues)
+		return opts.JSON.Print(opts.IO.Out, issues)
 	}
 
 	w := tabwriter.NewWriter(opts.IO.Out, 0, 0, 2, ' ', 0)

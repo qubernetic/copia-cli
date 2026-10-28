@@ -733,3 +733,24 @@ Apply these patterns:
 - ✓ Makefile: build via Go script with `-ldflags` for version
 - ✓ GoReleaser: multi-arch builds with version injection
 
+### Output flags: `--json` and `--jq`
+
+Every command with machine-readable output registers both flags with one call and prints through the exporter in `pkg/cmdutil/json.go`:
+
+```go
+var validJSONFields = []string{"number", "title", "state", "labels", "updated_at"}
+
+cmdutil.AddJSONFlags(cmd, &opts.JSON, validJSONFields)
+
+// in the Run function
+if opts.JSON.IsJSON() {
+	return opts.JSON.Print(opts.IO.Out, issues)
+}
+```
+
+- The valid fields are the JSON keys the command prints (the tags of its output struct), so `--json user` prints the `user` key. Keep the list in step with the struct.
+- `--json` takes a comma-separated list and can be repeated. An unknown field fails while the flags are parsed, before any request, with the list of available fields.
+- `Print` keeps only the requested keys: an array of objects for a list, one object for a view. Numbers keep every digit (the output is decoded with `json.Number`).
+- `--jq/-q` runs the expression with `github.com/itchyny/gojq`, the library `gh` uses, on that filtered output. Each result goes on its own line: a string raw, `null` as an empty line, anything else as compact JSON, as in `gh`. `--jq` without `--json` and an expression that does not parse fail before any request (a `PreRunE` that `AddJSONFlags` adds in front of any existing one).
+- `cmdutil.FilterJQ(w, input, expr)` is the `--jq` part on its own, for output that does not come from `--json` (for example `api`).
+

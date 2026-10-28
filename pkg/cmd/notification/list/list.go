@@ -90,7 +90,7 @@ func ListRun(opts *ListOptions) error {
 	}
 
 	if opts.JSON.IsJSON() {
-		return cmdutil.PrintJSON(opts.IO.Out, notifications)
+		return opts.JSON.Print(opts.IO.Out, notifications)
 	}
 
 	if len(notifications) == 0 {

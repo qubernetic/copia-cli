@@ -11,7 +11,7 @@ import (
 	"github.com/qubernetic/copia-cli/pkg/iostreams"
 )
 
-var validJSONFields = []string{"number", "title", "state", "author", "base", "head", "updated_at"}
+var validJSONFields = []string{"number", "title", "state", "user", "base", "head", "updated_at"}
 
 // ListOptions holds all inputs for the pr list command.
 type ListOptions struct {
@@ -112,7 +112,7 @@ func ListRun(opts *ListOptions) error {
 	}
 
 	if opts.JSON.IsJSON() {
-		return cmdutil.PrintJSON(opts.IO.Out, prs)
+		return opts.JSON.Print(opts.IO.Out, prs)
 	}
 
 	w := tabwriter.NewWriter(opts.IO.Out, 0, 0, 2, ' ', 0)

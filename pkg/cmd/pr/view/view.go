@@ -13,7 +13,7 @@ import (
 	"github.com/qubernetic/copia-cli/pkg/iostreams"
 )
 
-var validJSONFields = []string{"number", "title", "body", "state", "mergeable", "author", "base", "head", "created_at"}
+var validJSONFields = []string{"number", "title", "body", "state", "mergeable", "user", "base", "head", "created_at", "html_url"}
 
 // ViewOptions holds all inputs for the pr view command.
 type ViewOptions struct {
@@ -136,7 +136,7 @@ func ViewRun(opts *ViewOptions) error {
 	}
 
 	if opts.JSON.IsJSON() {
-		return cmdutil.PrintJSON(opts.IO.Out, pr)
+		return opts.JSON.Print(opts.IO.Out, pr)
 	}
 
 	var comments []shared.Comment

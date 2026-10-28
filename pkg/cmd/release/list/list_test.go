@@ -68,7 +68,7 @@ func TestListRun_JSON(t *testing.T) {
 		Owner:      "my-org",
 		Repo:       "my-repo",
 		Limit:      30,
-		JSON:       cmdutil.JSONFlags{Fields: []string{"tagName", "name"}},
+		JSON:       cmdutil.JSONFlags{Fields: []string{"tag_name", "name"}},
 	}
 
 	err := ListRun(opts)
@@ -285,4 +285,21 @@ func TestNewCmdList_RunEErrors(t *testing.T) {
 			assert.Empty(t, reg.Requests)
 		})
 	}
+}
+
+func TestNewCmdList_JSONFieldsAndJQ(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+	reg.Register(httpmock.REST("GET", "/api/v1/repos/my-org/my-repo/releases"), httpmock.StringResponse(http.StatusOK,
+		`[{"id":5,"tag_name":"v1.0.0","name":"One","draft":false,"prerelease":false,"published_at":"2026-01-01T00:00:00Z"}]`))
+
+	ios, _, stdout, _ := iostreams.Test()
+	f := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Token: "test-token", Repo: "my-org/my-repo"}
+	cmd := NewCmdList(f)
+	cmd.SetArgs([]string{"--json", "id,tag_name", "--jq", ".[] | \"\\(.id) \\(.tag_name)\""})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	require.NoError(t, cmd.Execute())
+	assert.Equal(t, "5 v1.0.0\n", stdout.String())
 }

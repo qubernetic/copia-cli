@@ -64,6 +64,10 @@ $ copia-cli issue create --title "Fix sensor mapping" --label bug --assignee @me
 # List the issues assigned to you in that milestone
 $ copia-cli issue list --assignee @me --milestone v1.0 --search "sensor"
 
+# Print only some fields as JSON, or filter them with a jq expression
+$ copia-cli issue list --json number,title
+$ copia-cli issue list --json number,title --jq '.[].title'
+
 # Move it to another milestone, by name or ID
 $ copia-cli issue edit 13 --milestone v1.1
 
