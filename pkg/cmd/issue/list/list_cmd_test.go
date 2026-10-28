@@ -64,6 +64,28 @@ func TestNewCmdList_Flags(t *testing.T) {
 	assert.Equal(t, "closed", q.Get("state"))
 	assert.Equal(t, "5", q.Get("limit"))
 	assert.Equal(t, "bug", q.Get("labels"))
+	assert.False(t, q.Has("assigned_by"))
+	assert.False(t, q.Has("q"))
+}
+
+func TestNewCmdList_FilterFlags(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+	reg.Register(httpmock.REST("GET", "/api/v1/user"), httpmock.StringResponse(http.StatusOK, `{"login":"me"}`))
+	reg.Register(httpmock.REST("GET", issuesPath), httpmock.StringResponse(http.StatusOK, `[]`))
+
+	ios, _, _, _ := iostreams.Test()
+	err := runCmd(t, readyFactory(ios), "-a", "@me", "-A", "jane", "--mention", "joe", "-m", "v1.0", "-S", "plc timeout")
+	require.NoError(t, err)
+
+	require.Len(t, reg.Requests, 2)
+	q := reg.Requests[1].URL.Query()
+	assert.Equal(t, "me", q.Get("assigned_by"))
+	assert.Equal(t, "jane", q.Get("created_by"))
+	assert.Equal(t, "joe", q.Get("mentioned_by"))
+	assert.Equal(t, "v1.0", q.Get("milestones"))
+	assert.Equal(t, "plc timeout", q.Get("q"))
 }
 
 func TestNewCmdList_AuthFailure(t *testing.T) {
