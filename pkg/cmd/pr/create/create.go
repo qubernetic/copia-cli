@@ -30,6 +30,7 @@ type CreateOptions struct {
 	Labels     []string
 	Milestone  string
 	Reviewers  []string
+	Draft      bool
 }
 
 type createRequest struct {
@@ -110,6 +111,7 @@ command exits with an error.`,
 	cmd.Flags().StringSliceVarP(&opts.Labels, "label", "l", nil, "Add labels by name (repository or organization labels)")
 	cmd.Flags().StringVarP(&opts.Milestone, "milestone", "m", "", "Add the pull request to a milestone by name or ID")
 	cmd.Flags().StringSliceVarP(&opts.Reviewers, "reviewer", "r", nil, "Request reviews from people or teams by their login or org/team name")
+	cmd.Flags().BoolVarP(&opts.Draft, "draft", "d", false, "Mark the pull request as work in progress (WIP: title prefix)")
 
 	return cmd
 }
@@ -119,8 +121,13 @@ func CreateRun(opts *CreateOptions) error {
 		return fmt.Errorf("title required")
 	}
 
+	title := opts.Title
+	if opts.Draft && !hasWIPPrefix(title) {
+		title = "WIP: " + title
+	}
+
 	payload := createRequest{
-		Title: opts.Title,
+		Title: title,
 		Body:  opts.Body,
 		Base:  opts.Base,
 		Head:  opts.Head,
@@ -188,6 +195,13 @@ func CreateRun(opts *CreateOptions) error {
 		return requestReviewers(opts, result.Number)
 	}
 	return nil
+}
+
+// hasWIPPrefix reports whether title already starts with one of Gitea's
+// default work-in-progress prefixes, which Gitea matches case-insensitively.
+func hasWIPPrefix(title string) bool {
+	upper := strings.ToUpper(title)
+	return strings.HasPrefix(upper, "WIP:") || strings.HasPrefix(upper, "[WIP]")
 }
 
 // requestReviewers asks for all reviews in one request. A value with a slash
