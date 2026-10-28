@@ -86,7 +86,8 @@ copia-cli/
 │   │   └── completion/            # single command: completion <shell> (bash, zsh, fish, powershell)
 │   ├── cmdutil/
 │   │   ├── factory.go             # Factory dependency injection
-│   │   └── json.go                # --json field filter, --jq (gojq), PrintJSON
+│   │   ├── json.go                # --json field filter, --jq (gojq), --template, PrintJSON
+│   │   └── template.go            # --template execution and its gh helpers
 │   ├── iostreams/iostreams.go     # TTY-aware I/O, Test() helper
 │   └── httpmock/registry.go       # HTTP transport mock for testing
 ├── test/integration/              # Live API integration tests
@@ -207,7 +208,7 @@ sequenceDiagram
 
 - **Naming:** camelCase for Go, kebab-case for flags, lowercase package names
 - **Error handling:** `_, _ = fmt.Fprintf()` for I/O writes, `defer func() { _ = resp.Body.Close() }()` for response bodies
-- **Output:** `text/tabwriter` for tables, `cmdutil.AddJSONFlags` and `JSONFlags.Print` for `--json` and `--jq` (see `docs/cli-patterns.md`)
+- **Output:** `text/tabwriter` for tables, `cmdutil.AddJSONFlags` and `JSONFlags.Print` for `--json`, `--jq` and `--template` (see `docs/cli-patterns.md`)
 - **Testing:** TDD — test written before implementation, httpmock + iostreams.Test()
 - **Git workflow:** Gitflow, conventional commits, issue-driven branches, PR-only merges
 
