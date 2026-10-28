@@ -11,7 +11,7 @@ import (
 	"github.com/qubernetic/copia-cli/pkg/iostreams"
 )
 
-var validJSONFields = []string{"name", "color", "description"}
+var validJSONFields = []string{"id", "name", "color", "description"}
 
 // ListOptions holds all inputs for the label list command.
 type ListOptions struct {
@@ -90,7 +90,7 @@ func ListRun(opts *ListOptions) error {
 	}
 
 	if opts.JSON.IsJSON() {
-		return cmdutil.PrintJSON(opts.IO.Out, labels)
+		return opts.JSON.Print(opts.IO.Out, labels)
 	}
 
 	w := tabwriter.NewWriter(opts.IO.Out, 0, 0, 2, ' ', 0)

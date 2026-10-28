@@ -290,3 +290,20 @@ func TestNewCmdList_RunEErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestNewCmdList_JSONFieldsAndJQ(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+	reg.Register(httpmock.REST("GET", "/api/v1/repos/my-org/my-repo/labels"), httpmock.StringResponse(http.StatusOK,
+		`[{"id":9,"name":"bug","color":"ee0701","description":"Broken"}]`))
+
+	ios, _, stdout, _ := iostreams.Test()
+	f := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Token: "test-token", Repo: "my-org/my-repo"}
+	cmd := NewCmdList(f)
+	cmd.SetArgs([]string{"--json", "id,name"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	require.NoError(t, cmd.Execute())
+	assert.Equal(t, "[\n  {\n    \"id\": 9,\n    \"name\": \"bug\"\n  }\n]\n", stdout.String())
+}

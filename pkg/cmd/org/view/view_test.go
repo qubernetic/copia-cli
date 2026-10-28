@@ -178,3 +178,16 @@ func TestViewRun_Errors(t *testing.T) {
 		})
 	}
 }
+
+func TestNewCmdView_JSONFieldsAndJQ(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+	reg.Register(httpmock.REST("GET", "/api/v1/orgs/my-org"),
+		httpmock.StringResponse(http.StatusOK, `{"username":"my-org","full_name":"My Org","description":"d","website":"https://example.com"}`))
+
+	ios, _, stdout, _ := iostreams.Test()
+	f := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Token: "test-token"}
+	require.NoError(t, runViewCmd(t, f, "my-org", "--json", "username,website", "--jq", "keys"))
+	assert.Equal(t, "[\"username\",\"website\"]\n", stdout.String())
+}

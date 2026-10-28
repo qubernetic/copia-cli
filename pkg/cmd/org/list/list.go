@@ -75,7 +75,7 @@ func ListRun(opts *ListOptions) error {
 	}
 
 	if opts.JSON.IsJSON() {
-		return cmdutil.PrintJSON(opts.IO.Out, orgs)
+		return opts.JSON.Print(opts.IO.Out, orgs)
 	}
 
 	w := tabwriter.NewWriter(opts.IO.Out, 0, 0, 2, ' ', 0)

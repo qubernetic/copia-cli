@@ -194,7 +194,7 @@ func TestListRun_JSON(t *testing.T) {
 		Host:       "app.copia.io",
 		Token:      "test-token",
 		Limit:      30,
-		JSON:       cmdutil.JSONFlags{Fields: []string{"id"}},
+		JSON:       cmdutil.JSONFlags{Fields: []string{"id", "repository"}},
 	}
 
 	err := ListRun(opts)
@@ -289,4 +289,21 @@ func TestNewCmdList_AuthError(t *testing.T) {
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no config")
+}
+
+func TestNewCmdList_JSONFieldsAndJQ(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+	reg.Register(httpmock.REST("GET", "/api/v1/notifications"),
+		httpmock.StringResponse(http.StatusOK, `[{"id":1,"subject":{"title":"Old PR","type":"Pull"},"repository":{"full_name":"my-org/plc"},"unread":true}]`))
+
+	ios, _, stdout, _ := iostreams.Test()
+	f := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Token: "test-token"}
+	cmd := NewCmdList(f)
+	cmd.SetArgs([]string{"--json", "subject,unread", "--jq", ".[] | [.subject.title, .unread, .id]"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	require.NoError(t, cmd.Execute())
+	assert.Equal(t, "[\"Old PR\",true,null]\n", stdout.String())
 }

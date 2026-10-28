@@ -198,7 +198,7 @@ func TestSearchIssues_JSON(t *testing.T) {
 		Repo:       "plc",
 		Query:      "timeout",
 		Limit:      30,
-		JSON:       cmdutil.JSONFlags{Fields: []string{"number"}},
+		JSON:       cmdutil.JSONFlags{Fields: []string{"number", "title"}},
 	})
 	require.NoError(t, err)
 	assert.Contains(t, stdout.String(), `"number": 12`)
@@ -362,4 +362,21 @@ func TestNewCmdSearchIssues_Errors(t *testing.T) {
 			assert.Empty(t, reg.Requests)
 		})
 	}
+}
+
+func TestNewCmdSearchIssues_JSONFieldsAndJQ(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+	reg.Register(httpmock.REST("GET", "/api/v1/repos/my-org/plc/issues"),
+		httpmock.StringResponse(http.StatusOK, `[{"number":5,"title":"Sensor error","state":"closed"}]`))
+
+	ios, _, stdout, _ := iostreams.Test()
+	f := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Token: "test-token", Repo: "my-org/plc"}
+	cmd := NewCmdSearchIssues(f)
+	cmd.SetArgs([]string{"sensor", "--json", "number,title", "--jq", ".[] | \"#\\(.number) \\(.title)\""})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	require.NoError(t, cmd.Execute())
+	assert.Equal(t, "#5 Sensor error\n", stdout.String())
 }

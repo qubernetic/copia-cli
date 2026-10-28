@@ -106,7 +106,7 @@ func SearchRun(opts *SearchOptions) error {
 	}
 
 	if opts.JSON.IsJSON() {
-		return cmdutil.PrintJSON(opts.IO.Out, issues)
+		return opts.JSON.Print(opts.IO.Out, issues)
 	}
 
 	w := tabwriter.NewWriter(opts.IO.Out, 0, 0, 2, ' ', 0)

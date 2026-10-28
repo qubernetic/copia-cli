@@ -86,7 +86,7 @@ func ViewRun(opts *ViewOptions) error {
 	}
 
 	if opts.JSON.IsJSON() {
-		return cmdutil.PrintJSON(opts.IO.Out, org)
+		return opts.JSON.Print(opts.IO.Out, org)
 	}
 
 	_, _ = fmt.Fprintf(opts.IO.Out, "%s (%s)\n", org.Username, org.FullName)

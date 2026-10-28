@@ -67,7 +67,7 @@ func TestViewRun_JSON(t *testing.T) {
 		Token:      "test-token",
 		Owner:      "my-org",
 		Repo:       "my-repo",
-		JSON:       cmdutil.JSONFlags{Fields: []string{"fullName", "description"}},
+		JSON:       cmdutil.JSONFlags{Fields: []string{"full_name", "description"}},
 	}
 
 	err := ViewRun(opts)

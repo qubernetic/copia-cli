@@ -11,7 +11,7 @@ import (
 	"github.com/qubernetic/copia-cli/pkg/iostreams"
 )
 
-var validJSONFields = []string{"tag_name", "name", "draft", "prerelease", "published_at"}
+var validJSONFields = []string{"id", "tag_name", "name", "draft", "prerelease", "published_at"}
 
 type ListOptions struct {
 	IO         *iostreams.IOStreams
@@ -42,7 +42,7 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 		Long:    "List releases in a Copia repository, ordered by creation date.",
 		Aliases: []string{"ls"},
 		Example: `  $ copia-cli release list
-  $ copia-cli release list --json tagName,name`,
+  $ copia-cli release list --json tag_name,name`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.IO = f.IOStreams
 			host, token, err := f.ResolveAuth()
@@ -89,7 +89,7 @@ func ListRun(opts *ListOptions) error {
 	}
 
 	if opts.JSON.IsJSON() {
-		return cmdutil.PrintJSON(opts.IO.Out, releases)
+		return opts.JSON.Print(opts.IO.Out, releases)
 	}
 
 	w := tabwriter.NewWriter(opts.IO.Out, 0, 0, 2, ' ', 0)

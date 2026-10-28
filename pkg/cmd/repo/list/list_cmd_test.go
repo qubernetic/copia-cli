@@ -168,3 +168,16 @@ func TestListRun_Errors(t *testing.T) {
 		})
 	}
 }
+
+func TestNewCmdList_JSONFieldsAndJQ(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+	reg.Register(httpmock.REST("GET", "/api/v1/user/repos"), httpmock.StringResponse(http.StatusOK,
+		`[{"full_name":"john/a","description":"d","private":true,"updated_at":"2026-03-30T10:00:00Z"}]`))
+
+	ios, _, stdout, _ := iostreams.Test()
+	f := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Token: "test-token"}
+	require.NoError(t, runListCmd(f, "--json", "full_name,private", "--jq", ".[] | select(.private) | .full_name"))
+	assert.Equal(t, "john/a\n", stdout.String())
+}

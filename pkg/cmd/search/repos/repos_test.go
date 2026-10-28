@@ -65,7 +65,7 @@ func TestSearchRepos_JSON(t *testing.T) {
 		Token:      "test-token",
 		Query:      "plc",
 		Limit:      30,
-		JSON:       cmdutil.JSONFlags{Fields: []string{"fullName"}},
+		JSON:       cmdutil.JSONFlags{Fields: []string{"full_name"}},
 	}
 
 	err := SearchRun(opts)
@@ -385,4 +385,20 @@ func TestNewCmdSearchRepos_Errors(t *testing.T) {
 			assert.Empty(t, reg.Requests)
 		})
 	}
+}
+
+func TestNewCmdSearchRepos_JSONFieldsAndJQ(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+	reg.Register(httpmock.REST("GET", "/api/v1/repos/search"), httpmock.StringResponse(http.StatusOK, searchJSON(1, 2)))
+
+	ios, _, stdout, _ := iostreams.Test()
+	f := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Token: "test-token"}
+	cmd := NewCmdSearchRepos(f)
+	cmd.SetArgs([]string{"plc", "-L", "2", "--json", "full_name", "--jq", ".[].full_name"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	require.NoError(t, cmd.Execute())
+	assert.Equal(t, "my-org/plc-1\nmy-org/plc-2\n", stdout.String())
 }
