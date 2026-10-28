@@ -30,6 +30,8 @@ type CreateOptions struct {
 	Labels     []string
 	Milestone  string
 	Reviewers  []string
+	Draft      bool
+	Fill       bool
 }
 
 type createRequest struct {
@@ -56,12 +58,27 @@ type createResponse struct {
 // NewCmdCreate creates the `copia pr create` command.
 func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 	opts := &CreateOptions{}
+	var bodyFile string
 
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create a pull request",
 		Long: `Create a pull request on Copia. The --base and --head branches must be specified
-along with a title.
+along with a title, unless --fill is set.
+
+--fill takes the title and body from the local git history between the base
+branch (origin/<base> when it exists) and the head branch, which defaults to
+the current branch. One commit gives its subject as the title and its body as
+the body; several commits give the branch name as the title and the commit
+subjects, oldest first, as a bulleted body. An explicit --title or --body wins
+over the filled value.
+
+--body-file reads the body from a file; "-" reads standard input. It cannot be
+combined with --body.
+
+--draft marks the pull request as work in progress: Copia has no draft flag,
+so the title gets the prefix "WIP: " unless it already starts with "WIP:" or
+"[WIP]" (in any case).
 
 --assignee takes a login and can be repeated; @me stands for the authenticated
 user. --label takes a repository or organization label name and can be
@@ -78,12 +95,27 @@ command exits with an error.`,
   # Create a pull request with a body
   $ copia-cli pr create --title "fix: timeout" --base develop --head fix/timeout --body "Fixes #12"
 
+  # Open a work-in-progress PR from the current branch, filled from its commits
+  $ copia-cli pr create --fill --draft --base develop
+
+  # Read the body from a file, or from standard input with -
+  $ copia-cli pr create --title "docs: add manual" --head docs/manual --body-file notes.md
+  $ git log -1 --format=%b | copia-cli pr create --title "fix: timeout" --head fix/timeout -F -
+
   # Assign yourself, add labels and a milestone, and request reviewers
   $ copia-cli pr create --title "feat: add wrapper" --head feature/wrapper \
       --assignee @me --label plc --label review --milestone v1.0 \
       --reviewer jane --reviewer my-org/controls`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.IO = f.IOStreams
+			if bodyFile != "" {
+				b, err := cmdutil.ReadFile(bodyFile, opts.IO.In)
+				if err != nil {
+					return err
+				}
+				opts.Body = string(b)
+			}
+
 			host, token, err := f.ResolveAuth()
 			if err != nil {
 				return err
@@ -102,25 +134,39 @@ command exits with an error.`,
 		},
 	}
 
-	cmd.Flags().StringVarP(&opts.Title, "title", "t", "", "PR title (required)")
+	cmd.Flags().StringVarP(&opts.Title, "title", "t", "", "PR title (required unless --fill is set)")
 	cmd.Flags().StringVarP(&opts.Body, "body", "b", "", "PR body")
+	cmd.Flags().StringVarP(&bodyFile, "body-file", "F", "", "Read the body from `file` (use \"-\" to read from standard input)")
 	cmd.Flags().StringVar(&opts.Base, "base", "main", "Base branch")
 	cmd.Flags().StringVarP(&opts.Head, "head", "H", "", "Head branch")
 	cmd.Flags().StringSliceVarP(&opts.Assignees, "assignee", "a", nil, "Assign people by their login. Use \"@me\" to self-assign")
 	cmd.Flags().StringSliceVarP(&opts.Labels, "label", "l", nil, "Add labels by name (repository or organization labels)")
 	cmd.Flags().StringVarP(&opts.Milestone, "milestone", "m", "", "Add the pull request to a milestone by name or ID")
 	cmd.Flags().StringSliceVarP(&opts.Reviewers, "reviewer", "r", nil, "Request reviews from people or teams by their login or org/team name")
+	cmd.Flags().BoolVarP(&opts.Draft, "draft", "d", false, "Mark the pull request as work in progress (WIP: title prefix)")
+	cmd.Flags().BoolVarP(&opts.Fill, "fill", "f", false, "Use commit info between the base and head branches for the title and body")
+	cmd.MarkFlagsMutuallyExclusive("body", "body-file")
 
 	return cmd
 }
 
 func CreateRun(opts *CreateOptions) error {
+	if opts.Fill {
+		if err := fill(opts); err != nil {
+			return err
+		}
+	}
 	if opts.Title == "" {
 		return fmt.Errorf("title required")
 	}
 
+	title := opts.Title
+	if opts.Draft && !hasWIPPrefix(title) {
+		title = "WIP: " + title
+	}
+
 	payload := createRequest{
-		Title: opts.Title,
+		Title: title,
 		Body:  opts.Body,
 		Base:  opts.Base,
 		Head:  opts.Head,
@@ -188,6 +234,13 @@ func CreateRun(opts *CreateOptions) error {
 		return requestReviewers(opts, result.Number)
 	}
 	return nil
+}
+
+// hasWIPPrefix reports whether title already starts with one of Gitea's
+// default work-in-progress prefixes, which Gitea matches case-insensitively.
+func hasWIPPrefix(title string) bool {
+	upper := strings.ToUpper(title)
+	return strings.HasPrefix(upper, "WIP:") || strings.HasPrefix(upper, "[WIP]")
 }
 
 // requestReviewers asks for all reviews in one request. A value with a slash

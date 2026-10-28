@@ -95,6 +95,8 @@ POST   /repos/{owner}/{repo}/pulls/{index}/requested_reviewers  # Request review
 
 `pr create --assignee`, `--label` and `--milestone` resolve `@me`, label names and the milestone like `issue create` (see Labels and Milestones) and send `assignees`, `labels` (IDs) and `milestone` (ID) in the create body. `pr create --reviewer` sends one `requested_reviewers` request after the create, with `reviewers` (logins) and `team_reviewers` (the team part of each `org/team` value); it works on older Gitea than the `reviewers` field of the create body.
 
+The create body has no draft field: Gitea treats a pull request as work in progress when its title starts with a WIP prefix (`WIP:` and `[WIP]` by default, case-insensitive). `pr create --draft` adds `WIP: ` to the title unless one of these is already there. `--body-file` and `--fill` are client-side: they only change the `title` and `body` that are sent.
+
 ### Issues
 
 ```
