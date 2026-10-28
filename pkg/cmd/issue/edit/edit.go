@@ -25,7 +25,7 @@ type EditOptions struct {
 	Body       string
 	AddLabels  []string
 	Assignees  []string
-	Milestone  int64
+	Milestone  string
 }
 
 func NewCmdEdit(f *cmdutil.Factory) *cobra.Command {
@@ -34,7 +34,10 @@ func NewCmdEdit(f *cmdutil.Factory) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "edit <number>",
 		Short: "Edit an issue",
-		Long:  "Edit an issue's title, body, labels, assignees, or milestone.",
+		Long: `Edit an issue's title, body, labels, assignees, or milestone.
+
+--milestone takes a milestone name or its numeric ID; an unknown milestone
+fails before the issue is changed.`,
 		Example: `  # Edit the title
   $ copia-cli issue edit 12 --title "New title"
 
@@ -44,7 +47,8 @@ func NewCmdEdit(f *cmdutil.Factory) *cobra.Command {
   # Set assignees
   $ copia-cli issue edit 12 --assignee john --assignee jane
 
-  # Set milestone
+  # Set milestone by name or ID
+  $ copia-cli issue edit 12 --milestone v1.0
   $ copia-cli issue edit 12 --milestone 1`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -77,17 +81,27 @@ func NewCmdEdit(f *cmdutil.Factory) *cobra.Command {
 	cmd.Flags().StringVarP(&opts.Body, "body", "b", "", "Set body")
 	cmd.Flags().StringSliceVar(&opts.AddLabels, "add-label", nil, "Add labels by name (repository or organization labels)")
 	cmd.Flags().StringSliceVarP(&opts.Assignees, "assignee", "a", nil, "Set assignees")
-	cmd.Flags().Int64VarP(&opts.Milestone, "milestone", "m", 0, "Set milestone ID")
+	cmd.Flags().StringVarP(&opts.Milestone, "milestone", "m", "", "Set milestone by name or ID")
 
 	return cmd
 }
 
 func EditRun(opts *EditOptions) error {
-	hasIssueUpdate := opts.Title != "" || opts.Body != "" || len(opts.Assignees) > 0 || opts.Milestone > 0
+	hasIssueUpdate := opts.Title != "" || opts.Body != "" || len(opts.Assignees) > 0 || opts.Milestone != ""
 	hasLabelAdd := len(opts.AddLabels) > 0
 
 	if !hasIssueUpdate && !hasLabelAdd {
 		return fmt.Errorf("nothing to edit. Use --title, --body, --add-label, --assignee, or --milestone")
+	}
+
+	// Resolve the milestone first, so an unknown one fails before any change.
+	var milestoneID int64
+	if opts.Milestone != "" {
+		id, err := shared.ResolveMilestoneID(opts.HTTPClient, opts.Host, opts.Token, opts.Owner, opts.Repo, opts.Milestone)
+		if err != nil {
+			return err
+		}
+		milestoneID = id
 	}
 
 	if hasLabelAdd {
@@ -97,7 +111,7 @@ func EditRun(opts *EditOptions) error {
 	}
 
 	if hasIssueUpdate {
-		if err := updateIssue(opts); err != nil {
+		if err := updateIssue(opts, milestoneID); err != nil {
 			return err
 		}
 	}
@@ -106,7 +120,7 @@ func EditRun(opts *EditOptions) error {
 	return nil
 }
 
-func updateIssue(opts *EditOptions) error {
+func updateIssue(opts *EditOptions, milestoneID int64) error {
 	payload := map[string]interface{}{}
 	if opts.Title != "" {
 		payload["title"] = opts.Title
@@ -117,8 +131,8 @@ func updateIssue(opts *EditOptions) error {
 	if len(opts.Assignees) > 0 {
 		payload["assignees"] = opts.Assignees
 	}
-	if opts.Milestone > 0 {
-		payload["milestone"] = opts.Milestone
+	if milestoneID > 0 {
+		payload["milestone"] = milestoneID
 	}
 
 	body, err := json.Marshal(payload)

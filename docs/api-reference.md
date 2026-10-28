@@ -128,10 +128,13 @@ Issue endpoints take label IDs, not names. `issue create --label` and `issue edi
 
 ```
 GET    /repos/{owner}/{repo}/milestones            # List milestones
+GET    /repos/{owner}/{repo}/milestones/{id}       # Get milestone (by ID or name)
 POST   /repos/{owner}/{repo}/milestones            # Create milestone
 PATCH  /repos/{owner}/{repo}/milestones/{id}       # Update milestone
 DELETE /repos/{owner}/{repo}/milestones/{id}       # Delete milestone
 ```
+
+Issue endpoints take a milestone ID. `issue create --milestone` and `issue edit --milestone` accept a name or an ID and resolve it with one `GET /repos/{owner}/{repo}/milestones/{name}`, which Gitea answers for both; a 404 fails before the issue is created or changed. `issue create --assignee @me` reads the login of the authenticated user with one `GET /user`.
 
 ### Releases
 

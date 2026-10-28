@@ -46,6 +46,7 @@ func TestNewCmdEdit_RunsAllFlags(t *testing.T) {
 	reg.Register(httpmock.REST("GET", orgLabelsPath), httpmock.StringResponse(http.StatusOK, `[{"id":90,"name":"urgent"}]`))
 	var labelsPosted, patched string
 	reg.Register(httpmock.REST("POST", issueLabelsPath), recordBody(&labelsPosted, httpmock.StringResponse(http.StatusCreated, `[]`)))
+	reg.Register(httpmock.REST("GET", "/api/v1/repos/my-org/my-repo/milestones/3"), httpmock.StringResponse(http.StatusOK, `{"id":3,"title":"v1.0"}`))
 	reg.Register(httpmock.REST("PATCH", issuePath), recordBody(&patched, httpmock.StringResponse(http.StatusCreated, `{}`)))
 
 	ios, _, stdout, _ := iostreams.Test()
@@ -93,10 +94,36 @@ func TestNewCmdEdit_NothingToEdit(t *testing.T) {
 	assert.Contains(t, err.Error(), "nothing to edit")
 }
 
-func TestNewCmdEdit_InvalidMilestoneFlag(t *testing.T) {
+func TestNewCmdEdit_MilestoneByNameOrID(t *testing.T) {
+	for _, milestone := range []string{"v1.0", "1"} {
+		t.Run(milestone, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			defer reg.Verify(t)
+			httpmock.ReplaceDefaultTransport(t, reg)
+
+			reg.Register(httpmock.REST("GET", "/api/v1/repos/my-org/my-repo/milestones/"+milestone), httpmock.StringResponse(http.StatusOK, `{"id":1,"title":"v1.0"}`))
+			var patched string
+			reg.Register(httpmock.REST("PATCH", issuePath), recordBody(&patched, httpmock.StringResponse(http.StatusCreated, `{}`)))
+
+			ios, _, _, _ := iostreams.Test()
+			err := runCmd(t, readyFactory(ios), "12", "--milestone", milestone)
+			require.NoError(t, err)
+			assert.JSONEq(t, `{"milestone":1}`, patched)
+		})
+	}
+}
+
+func TestNewCmdEdit_UnknownMilestone(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+
+	reg.Register(httpmock.REST("GET", "/api/v1/repos/my-org/my-repo/milestones/abc"), httpmock.StringResponse(http.StatusNotFound, ``))
+
 	ios, _, _, _ := iostreams.Test()
 	err := runCmd(t, readyFactory(ios), "12", "--milestone", "abc")
-	require.Error(t, err)
+	require.EqualError(t, err, `milestone "abc" not found in my-org/my-repo`)
+	assert.Len(t, reg.Requests, 1, "the issue is not patched")
 }
 
 func editOpts(reg *httpmock.Registry) (*EditOptions, *bytes.Buffer) {
