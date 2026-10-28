@@ -31,7 +31,9 @@ func NewCmdClose(f *cmdutil.Factory) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "close <number>",
 		Short: "Close an issue",
-		Long:  "Close an issue by number. Optionally add a closing comment with --comment.",
+		Long: "Close an issue by number. Optionally add a closing comment with --comment.\n\n" +
+			"Gitea records no close reason (completed or not planned), so there is no --reason flag; " +
+			"write the reason with --comment instead.",
 		Example: `  # Close an issue
   $ copia-cli issue close 12
 

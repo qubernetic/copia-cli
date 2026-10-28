@@ -42,7 +42,7 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 | `gh issue list` | Full | `copia-cli issue list` | [x] |
 | `gh issue create` | Full | `copia-cli issue create` | [x] |
 | `gh issue view` | Full | `copia-cli issue view` | [x] |
-| `gh issue close` | Full | `copia-cli issue close` | [x] |
+| `gh issue close` | Partial | `copia-cli issue close` | [x] |
 | `gh issue reopen` | Full | `copia-cli issue reopen` | [ ] |
 | `gh issue comment` | Full | `copia-cli issue comment` | [x] |
 | `gh issue edit` | Full | `copia-cli issue edit` | [x] |
@@ -50,6 +50,8 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 | `gh issue pin` | Full | `copia-cli issue pin` | [ ] |
 | `gh issue lock` | None | n/a | — |
 | `gh issue transfer` | None | n/a | — |
+
+`gh issue close`: Gitea records no close reason (`completed` / `not planned`), so there is no `--reason`. Write the reason with `--comment`.
 
 ## pr
 
