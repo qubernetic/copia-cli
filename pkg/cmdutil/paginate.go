@@ -5,6 +5,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -92,6 +94,59 @@ func hasNextPage(header http.Header, got, requested int) bool {
 		return strings.Contains(link, `rel="next"`)
 	}
 	return got >= requested
+}
+
+// linkRE matches one entry of a Link header, as gh's api command does.
+var linkRE = regexp.MustCompile(`<([^>]+)>;\s*rel="([^"]+)"`)
+
+// FollowLinkPages sends req and then, for as long as a response's Link
+// header names a rel="next" page, a copy of req for that page without a
+// body. page gets every response in order and must not close its body;
+// an error from page ends the walk. A next link to another scheme or host
+// is refused, so the Authorization header of req never leaves its host.
+func FollowLinkPages(client *http.Client, req *http.Request, page func(*http.Response) error) error {
+	origin := req.URL
+	for {
+		resp, err := client.Do(req)
+		if err != nil {
+			return fmt.Errorf("connecting to %s: %w", req.URL.Host, err)
+		}
+		err = page(resp)
+		_ = resp.Body.Close()
+		if err != nil {
+			return err
+		}
+
+		next, err := nextPageURL(req.URL, resp.Header)
+		if err != nil || next == nil {
+			return err
+		}
+		if next.Scheme != origin.Scheme || next.Host != origin.Host {
+			return fmt.Errorf("refusing to follow the next page link to another host: %q", next.String())
+		}
+		req = req.Clone(req.Context())
+		req.URL = next
+		req.Host = ""
+		req.Body = nil
+		req.GetBody = nil
+		req.ContentLength = 0
+	}
+}
+
+// nextPageURL returns the rel="next" target of a Link header, resolved
+// against base, or nil when there is none.
+func nextPageURL(base *url.URL, header http.Header) (*url.URL, error) {
+	for _, m := range linkRE.FindAllStringSubmatch(header.Get("Link"), -1) {
+		if !slices.Contains(strings.Fields(m[2]), "next") {
+			continue
+		}
+		u, err := url.Parse(m[1])
+		if err != nil {
+			return nil, fmt.Errorf("parsing the next page link: %w", err)
+		}
+		return base.ResolveReference(u), nil
+	}
+	return nil, nil
 }
 
 // getPage sends one authenticated GET and returns the body and headers of a
