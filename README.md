@@ -73,6 +73,10 @@ $ copia-cli issue edit 13 --add-assignee jane --remove-assignee john --remove-la
 # Open a PR
 $ copia-cli pr create --title "feat: add safety interlock" --base develop
 
+# Open a PR with metadata and request reviews from a person and a team
+$ copia-cli pr create --title "feat: add safety interlock" --base develop \
+    --assignee @me --label plc --milestone v1.0 --reviewer jane --reviewer my-org/controls
+
 # Merge it
 $ copia-cli pr merge 7 --merge --delete-branch --body "Tested on the line 3 PLC"
 ```
