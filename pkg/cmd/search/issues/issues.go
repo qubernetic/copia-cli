@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
@@ -22,6 +23,7 @@ type SearchOptions struct {
 	Repo       string
 	Query      string
 	State      string
+	Labels     []string
 	Limit      int
 	JSON       cmdutil.JSONFlags
 }
@@ -40,10 +42,11 @@ func NewCmdSearchIssues(f *cmdutil.Factory) *cobra.Command {
 		Use:   "issues <query>",
 		Short: "Search issues in a repository",
 		Long: `Search issues within a repository by keyword. By default, searches across
-all states (open and closed). Use --state to filter. Requires repo context
-via -R flag or git remote.`,
+all states (open and closed). Use --state and --label to filter. Results
+come newest first. Requires repo context via -R flag or git remote.`,
 		Example: `  $ copia-cli search issues "sensor timeout"
-  $ copia-cli search issues bug --state closed`,
+  $ copia-cli search issues bug --state closed
+  $ copia-cli search issues timeout --label bug --label plc`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.Query = args[0]
@@ -68,6 +71,7 @@ via -R flag or git remote.`,
 	}
 
 	cmd.Flags().StringVarP(&opts.State, "state", "s", "", "Filter by state: {open|closed}")
+	cmd.Flags().StringSliceVarP(&opts.Labels, "label", "l", nil, "Filter by label")
 	cmd.Flags().IntVarP(&opts.Limit, "limit", "L", 30, "Maximum number of results")
 	cmdutil.AddJSONFlags(cmd, &opts.JSON, []string{"number", "title", "state"})
 
@@ -92,6 +96,9 @@ func SearchRun(opts *SearchOptions) error {
 
 	u := fmt.Sprintf("https://%s/api/v1/repos/%s/%s/issues?q=%s&type=issues&state=%s",
 		opts.Host, opts.Owner, opts.Repo, url.QueryEscape(opts.Query), url.QueryEscape(state))
+	if len(opts.Labels) > 0 {
+		u += "&labels=" + strings.Join(opts.Labels, ",")
+	}
 
 	issues, err := cmdutil.FetchPages(opts.HTTPClient, u, opts.Token, opts.Limit, decodeIssues)
 	if err != nil {
