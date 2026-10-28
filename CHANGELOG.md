@@ -26,9 +26,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--raw-field/-f key=value` on `api` always sends the value as a string; `-f key=value` sends exactly what it sent before (#167)
 - `--input <file>` on `api` sends the file as the request body, `-` reads standard input; the default method is then POST and the `Content-Type` stays `application/json` unless `--header` sets another. With `--input`, `--field` and `--raw-field` values are added to the query string, as in `gh` (`null` as an empty value) (#167)
 - `--include/-i` on `api` prints the status line (such as `HTTP/1.1 200 OK`), the response headers sorted by name and a blank line before the body; a `204 No Content` response prints only these lines (#167)
+- `--paginate` on `api` follows the `rel="next"` entry of the `Link` header until there is none and prints the items of array pages as one array, as `gh api --paginate` does without `--slurp`; any other response is printed as is. A next link to another host is refused, so the token is never sent there. `--paginate` with a method other than GET, also the POST that fields default to, fails before any request (#322)
+- `--jq/-q <expression>` on `api` filters the response like `--jq` on the `--json` commands; with `--paginate` it runs on each page. An expression that does not compile fails before any request, and an error response is printed unfiltered (#322)
 
 ### Security
 
+- `--jq` keeps gojq's defaults, unlike `gh`: `$ENV` and `env` are empty, and `input`, `inputs`, `import` and `include` fail, so an expression cannot read the environment (such as `COPIA_TOKEN`) or local files; a test pins it. The filter runs with the command's context and stops when it is canceled (#322)
 - Go 1.26.2 → 1.26.9, fixes GO-2026-6599, GO-2026-6600, GO-2026-6603, GO-2026-6605, GO-2026-6607, GO-2026-6608, GO-2026-6610, GO-2026-6611, GO-2026-6612, GO-2026-6613 and GO-2026-6617 in the standard library (#228)
 - golang.org/x/crypto 0.49.0 → 0.52.0, fixes GO-2026-5018; also pulls golang.org/x/sys 0.42.0 → 0.45.0 (#228)
 - aur and copr fail when the version taken from the release tag does not match `^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$` (`script/check-release-version.sh`), and aur fails when a checksum from `checksums.txt` does not match `^[0-9a-f]{64}$` (`script/check-sha256.sh`), so a malformed tag or checksum never reaches `PKGBUILD`, `.SRCINFO` or the RPM spec. aur writes its SSH key under `umask 077` (#273)

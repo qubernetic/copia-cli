@@ -2,6 +2,8 @@ package cmdutil
 
 import (
 	"bytes"
+	"context"
+	"time"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -232,7 +234,7 @@ type failWriter struct{}
 func (failWriter) Write([]byte) (int, error) { return 0, assert.AnError }
 
 func TestFilterJQ_WriteError(t *testing.T) {
-	err := FilterJQ(failWriter{}, "x", ".")
+	err := FilterJQ(context.Background(), failWriter{}, "x", ".")
 	require.ErrorIs(t, err, assert.AnError)
 }
 
@@ -270,7 +272,7 @@ func TestFilterJQ(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var out bytes.Buffer
-			err := FilterJQ(&out, tt.input, tt.expr)
+			err := FilterJQ(context.Background(), &out, tt.input, tt.expr)
 			if tt.wantErr != "" {
 				require.EqualError(t, err, tt.wantErr)
 				return
@@ -279,4 +281,83 @@ func TestFilterJQ(t *testing.T) {
 			assert.Equal(t, tt.want, out.String())
 		})
 	}
+}
+
+// TestFilterJQ_NoOutsideAccess pins that --jq cannot read the environment,
+// further inputs or module files: compileJQ keeps gojq's defaults, without
+// gojq.WithEnvironLoader, gojq.WithInputIter or gojq.WithModuleLoader.
+func TestFilterJQ_NoOutsideAccess(t *testing.T) {
+	t.Setenv("COPIA_TOKEN", "secret-token")
+	tests := []struct {
+		name    string
+		expr    string
+		want    string
+		wantErr bool
+	}{
+		{name: "$ENV", expr: "$ENV", want: "{}\n"},
+		{name: "env", expr: "env", want: "{}\n"},
+		{name: "input", expr: "input", wantErr: true},
+		{name: "inputs", expr: "[inputs]", wantErr: true},
+		{name: "import", expr: `import "x" as x; .`, wantErr: true},
+		{name: "include", expr: `include "x"; .`, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var out bytes.Buffer
+			err := FilterJQ(context.Background(), &out, map[string]any{}, tt.expr)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.NotContains(t, out.String(), "secret-token")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, out.String())
+		})
+	}
+}
+
+// loopForever is a jq expression that never yields and never ends.
+const loopForever = "last(repeat(.))"
+
+// withinDeadline fails the test when run does not return within a few
+// seconds, so a filter that ignores its context cannot hang the suite.
+func withinDeadline(t *testing.T, run func() error) error {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() { done <- run() }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(5 * time.Second):
+		t.Fatal("jq filter did not stop on a canceled context")
+		return nil
+	}
+}
+
+func TestFilterJQ_CancelledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := withinDeadline(t, func() error {
+		return FilterJQ(ctx, &bytes.Buffer{}, map[string]any{}, loopForever)
+	})
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestJSONFlags_PrintUsesCommandContext(t *testing.T) {
+	var jf JSONFlags
+	cmd := &cobra.Command{
+		Use: "test",
+		RunE: func(c *cobra.Command, _ []string) error {
+			return jf.Print(c.OutOrStdout(), map[string]any{"title": "x"})
+		},
+	}
+	AddJSONFlags(cmd, &jf, testFields)
+	cmd.SetArgs([]string{"--json", "title", "--jq", loopForever})
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SilenceUsage = true
+	cmd.SilenceErrors = true
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := withinDeadline(t, func() error { return cmd.ExecuteContext(ctx) })
+	require.ErrorIs(t, err, context.Canceled)
 }

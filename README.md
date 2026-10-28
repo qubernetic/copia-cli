@@ -90,6 +90,9 @@ $ copia-cli pr create --title "feat: add safety interlock" --base develop \
 
 # Merge it
 $ copia-cli pr merge 7 --merge --delete-branch --body "Tested on the line 3 PLC"
+
+# Call any API endpoint: fetch every page and keep only the titles
+$ copia-cli api --paginate /repos/my-org/my-repo/issues --jq '.[].title'
 ```
 
 ## Shell Completion

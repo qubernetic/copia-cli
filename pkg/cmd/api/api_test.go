@@ -3,10 +3,13 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -553,4 +556,182 @@ func TestNewCmdAPI_Include(t *testing.T) {
 			assert.Equal(t, tt.wantOut, stdout.String())
 		})
 	}
+}
+
+// registerIssuePages registers three pages of /repos/o/r/issues linked by
+// Link headers, the first one without a page parameter.
+func registerIssuePages(reg *httpmock.Registry, bodies ...string) {
+	for i, body := range bodies {
+		query := url.Values{"page": nil}
+		if i > 0 {
+			query = url.Values{"page": {fmt.Sprint(i + 1)}}
+		}
+		responder := httpmock.StringResponse(http.StatusOK, body)
+		if i < len(bodies)-1 {
+			responder = httpmock.WithHeader(responder, "Link", fmt.Sprintf(
+				`<https://app.copia.io/api/v1/repos/o/r/issues?page=%d>; rel="next"`, i+2))
+		}
+		reg.Register(httpmock.QueryMatcher("GET", "/api/v1/repos/o/r/issues", query), responder)
+	}
+}
+
+func TestNewCmdAPI_Paginate(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		pages   []string
+		wantOut string
+	}{
+		{
+			name:    "array pages merge into one array",
+			args:    []string{"--paginate"},
+			pages:   []string{`[{"n":1},{"n":2}]`, `[{"n":3}]`, `[{"n":"<4>"}]`},
+			wantOut: "[\n  {\n    \"n\": 1\n  },\n  {\n    \"n\": 2\n  },\n  {\n    \"n\": 3\n  },\n  {\n    \"n\": \"<4>\"\n  }\n]\n",
+		},
+		{
+			name:    "empty pages merge into an empty array",
+			args:    []string{"--paginate"},
+			pages:   []string{`[]`},
+			wantOut: "[]\n",
+		},
+		{
+			name:    "a non-array response prints once",
+			args:    []string{"--paginate"},
+			pages:   []string{`{"total":3}`},
+			wantOut: "{\n  \"total\": 3\n}\n",
+		},
+		{
+			name:    "jq runs on each page",
+			args:    []string{"--paginate", "--jq", "length"},
+			pages:   []string{`[{"n":1},{"n":2}]`, `[{"n":3}]`, `[]`},
+			wantOut: "2\n1\n0\n",
+		},
+		{
+			name:    "jq keeps large numbers",
+			args:    []string{"-q", ".[].id"},
+			pages:   []string{`[{"id":12345678901234567890}]`},
+			wantOut: "12345678901234567890\n",
+		},
+		{
+			name:    "jq without paginate runs on the single response",
+			args:    []string{"--jq", ".[].n"},
+			pages:   []string{`[{"n":1},{"n":2}]`, `[{"n":3}]`},
+			wantOut: "1\n2\n",
+		},
+		{
+			name:    "include prints the head of every page",
+			args:    []string{"--paginate", "-i"},
+			pages:   []string{`[1]`, `[2]`},
+			wantOut: "HTTP/1.1 200 OK\nContent-Type: application/json\nLink: <https://app.copia.io/api/v1/repos/o/r/issues?page=2>; rel=\"next\"\n\nHTTP/1.1 200 OK\nContent-Type: application/json\n\n[\n  1,\n  2\n]\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			httpmock.ReplaceDefaultTransport(t, reg)
+			registerIssuePages(reg, tt.pages...)
+
+			ios, _, stdout, _ := iostreams.Test()
+			f := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Token: "test-token"}
+			err := runAPICmd(t, f, append([]string{"repos/o/r/issues"}, tt.args...)...)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantOut, stdout.String())
+			if slices.Contains(tt.args, "--paginate") {
+				assert.Len(t, reg.Requests, len(tt.pages))
+			} else {
+				assert.Len(t, reg.Requests, 1)
+			}
+		})
+	}
+}
+
+func TestNewCmdAPI_PaginateErrorPage(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+	reg.Register(httpmock.QueryMatcher("GET", "/api/v1/repos/o/r/issues", url.Values{"page": nil}),
+		httpmock.WithHeader(httpmock.StringResponse(http.StatusOK, `[1]`), "Link",
+			`<https://app.copia.io/api/v1/repos/o/r/issues?page=2>; rel="next"`))
+	reg.Register(httpmock.QueryMatcher("GET", "/api/v1/repos/o/r/issues", url.Values{"page": {"2"}}),
+		httpmock.StringResponse(http.StatusInternalServerError, `{"message":"boom"}`))
+
+	ios, _, stdout, _ := iostreams.Test()
+	f := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Token: "test-token"}
+	err := runAPICmd(t, f, "repos/o/r/issues", "--paginate", "--jq", ".[]")
+	require.EqualError(t, err, "API error (HTTP 500)")
+	assert.Equal(t, "1\n{\n  \"message\": \"boom\"\n}\n", stdout.String())
+}
+
+func TestNewCmdAPI_JQErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		body    string
+		status  int
+		args    []string
+		wantErr string
+		wantOut string
+	}{
+		{name: "not JSON", body: "plain", status: http.StatusOK, args: []string{"--jq", "."}, wantErr: "parsing the response for --jq"},
+		{name: "jq runtime error", body: `{"a":1}`, status: http.StatusOK, args: []string{"--jq", ".a[]"}, wantErr: "cannot iterate over"},
+		{name: "no content", body: "", status: http.StatusNoContent, args: []string{"--jq", "."}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			defer reg.Verify(t)
+			httpmock.ReplaceDefaultTransport(t, reg)
+			reg.Register(httpmock.REST("GET", "/api/v1/user"), httpmock.StringResponse(tt.status, tt.body))
+
+			ios, _, stdout, _ := iostreams.Test()
+			f := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Token: "test-token"}
+			err := runAPICmd(t, f, append([]string{"/user"}, tt.args...)...)
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tt.wantOut, stdout.String())
+		})
+	}
+}
+
+func TestNewCmdAPI_RejectedBeforeAnyRequest(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		wantErr string
+	}{
+		{name: "paginate with -X POST", args: []string{"--paginate", "-X", "POST"}, wantErr: "the `--paginate` option is not supported for non-GET requests"},
+		{name: "paginate with lowercase post", args: []string{"--paginate", "--method", "post"}, wantErr: "the `--paginate` option is not supported for non-GET requests"},
+		{name: "paginate with fields defaulting to POST", args: []string{"--paginate", "-f", "title=x"}, wantErr: "the `--paginate` option is not supported for non-GET requests"},
+		{name: "invalid jq expression", args: []string{"--jq", "{"}, wantErr: "invalid --jq expression"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			httpmock.ReplaceDefaultTransport(t, reg)
+
+			ios, _, stdout, _ := iostreams.Test()
+			f := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Token: "test-token"}
+			err := runAPICmd(t, f, append([]string{"repos/o/r/issues"}, tt.args...)...)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+			assert.Empty(t, reg.Requests)
+			assert.Empty(t, stdout.String())
+		})
+	}
+}
+
+func TestNewCmdAPI_PaginateGETAllowed(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+	registerIssuePages(reg, `[1]`)
+
+	ios, _, stdout, _ := iostreams.Test()
+	f := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Token: "test-token"}
+	require.NoError(t, runAPICmd(t, f, "repos/o/r/issues", "--paginate", "-X", "GET"))
+	assert.Equal(t, "[\n  1\n]\n", stdout.String())
 }

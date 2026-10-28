@@ -2,7 +2,9 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -33,6 +35,13 @@ type APIOptions struct {
 	InputFile string
 	// Include prints the status line and response headers before the body.
 	Include bool
+	// Paginate follows Link rel="next" headers and merges array pages.
+	Paginate bool
+	// JQ filters each response through a jq expression.
+	JQ string
+	// Context cancels the requests and the --jq filter; nil means
+	// context.Background().
+	Context context.Context
 }
 
 // NewCmdAPI creates the `copia api` command.
@@ -63,7 +72,19 @@ unless --header sets it, and fields are added to the query string instead.
 Use --method to override the HTTP method (GET, POST, PATCH, DELETE, PUT).
 Use --header to add custom HTTP headers.
 Use --include to print the status line and the response headers, sorted by
-name, and a blank line before the body.`,
+name, and a blank line before the body.
+
+Use --paginate to fetch every page of a GET request: the next page is taken
+from the rel="next" entry of the Link header until there is none. The items
+of array pages are printed as one array; any other response is printed as
+is. A next page link to another host is refused, so the token stays on the
+host it was sent to. --paginate with any method other than GET fails before
+the first request.
+
+Use --jq to filter the response with a jq expression, as in "gh api --jq";
+with --paginate it runs on each page. Each result is printed on its own
+line: a string raw, null as an empty line, anything else as compact JSON.
+An error response is printed unfiltered.`,
 		Example: `  # Get authenticated user
   $ copia-cli api /user
 
@@ -86,12 +107,19 @@ name, and a blank line before the body.`,
   # Show the status line and headers, for example the total count of a list
   $ copia-cli api -i "/repos/my-org/my-repo/issues?limit=1"
 
+  # List every open issue across all pages, as one JSON array
+  $ copia-cli api --paginate "/repos/my-org/my-repo/issues?state=open"
+
+  # Print only the issue titles of every page
+  $ copia-cli api --paginate /repos/my-org/my-repo/issues --jq '.[].title'
+
   # Custom header
   $ copia-cli api /user --header "Accept: application/json"`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.Path = args[0]
 			opts.IO = f.IOStreams
+			opts.Context = cmd.Context()
 
 			host, token, err := f.ResolveAuth()
 			if err != nil {
@@ -110,6 +138,8 @@ name, and a blank line before the body.`,
 	cmd.Flags().StringSliceVarP(&opts.Headers, "header", "H", nil, "Add HTTP header (key: value)")
 	cmd.Flags().StringVar(&opts.InputFile, "input", "", "The `file` to use as the request body (\"-\" for standard input)")
 	cmd.Flags().BoolVarP(&opts.Include, "include", "i", false, "Include the HTTP status line and response headers in the output")
+	cmd.Flags().BoolVar(&opts.Paginate, "paginate", false, "Make additional GET requests to fetch all pages of results")
+	cmd.Flags().StringVarP(&opts.JQ, "jq", "q", "", "Query to select values from the response using jq syntax")
 
 	return cmd
 }
@@ -142,6 +172,18 @@ func APIRun(opts *APIOptions) error {
 			method = "GET"
 		}
 	}
+	if opts.Paginate && !strings.EqualFold(method, "GET") {
+		return errors.New("the `--paginate` option is not supported for non-GET requests")
+	}
+	if opts.JQ != "" {
+		if err := cmdutil.ValidateJQ(opts.JQ); err != nil {
+			return err
+		}
+	}
+	ctx := opts.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	// Build body from --input, or from fields; with --input, fields go
 	// into the query string, as in gh.
@@ -162,7 +204,7 @@ func APIRun(opts *APIOptions) error {
 	}
 
 	reqURL := fmt.Sprintf("https://%s%s", opts.Host, path)
-	req, err := http.NewRequest(method, reqURL, body)
+	req, err := http.NewRequestWithContext(ctx, method, reqURL, body)
 	if err != nil {
 		return err
 	}
@@ -179,14 +221,39 @@ func APIRun(opts *APIOptions) error {
 		}
 	}
 
-	resp, err := opts.HTTPClient.Do(req)
+	p := &responsePrinter{opts: opts, ctx: ctx}
+	if opts.Paginate {
+		err = cmdutil.FollowLinkPages(opts.HTTPClient, req, p.page)
+	} else {
+		err = sendOnce(opts.HTTPClient, req, p.page)
+	}
+	p.flush()
+	return err
+}
+
+// sendOnce sends req and hands the response to page.
+func sendOnce(client *http.Client, req *http.Request, page func(*http.Response) error) error {
+	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("connecting to %s: %w", opts.Host, err)
+		return fmt.Errorf("connecting to %s: %w", req.URL.Host, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	return page(resp)
+}
 
-	if opts.Include {
-		printHead(opts.IO.Out, resp)
+// responsePrinter prints each response of the api command. With --paginate
+// it holds the items of array pages back and prints them as one array.
+type responsePrinter struct {
+	opts    *APIOptions
+	ctx     context.Context
+	items   []json.RawMessage
+	merging bool
+}
+
+func (p *responsePrinter) page(resp *http.Response) error {
+	w := p.opts.IO.Out
+	if p.opts.Include {
+		printHead(w, resp)
 	}
 
 	if resp.StatusCode == http.StatusNoContent {
@@ -198,19 +265,61 @@ func APIRun(opts *APIOptions) error {
 		return err
 	}
 
-	// Pretty-print JSON if possible
-	var prettyJSON bytes.Buffer
-	if json.Indent(&prettyJSON, respBody, "", "  ") == nil {
-		_, _ = fmt.Fprintln(opts.IO.Out, prettyJSON.String())
-	} else {
-		_, _ = fmt.Fprintln(opts.IO.Out, string(respBody))
-	}
-
 	if resp.StatusCode >= 400 {
+		p.flush()
+		printBody(w, respBody)
 		return fmt.Errorf("API error (HTTP %d)", resp.StatusCode)
 	}
 
+	if p.opts.JQ != "" {
+		dec := json.NewDecoder(bytes.NewReader(respBody))
+		dec.UseNumber()
+		var data any
+		if err := dec.Decode(&data); err != nil {
+			return fmt.Errorf("parsing the response for --jq: %w", err)
+		}
+		return cmdutil.FilterJQ(p.ctx, w, data, p.opts.JQ)
+	}
+
+	if p.opts.Paginate && bytes.HasPrefix(bytes.TrimSpace(respBody), []byte("[")) {
+		var items []json.RawMessage
+		if json.Unmarshal(respBody, &items) == nil {
+			p.items = append(p.items, items...)
+			p.merging = true
+			return nil
+		}
+	}
+
+	printBody(w, respBody)
 	return nil
+}
+
+// flush prints the merged array pages, if any.
+func (p *responsePrinter) flush() {
+	if !p.merging {
+		return
+	}
+	var merged bytes.Buffer
+	merged.WriteByte('[')
+	for i, item := range p.items {
+		if i > 0 {
+			merged.WriteByte(',')
+		}
+		merged.Write(item)
+	}
+	merged.WriteByte(']')
+	printBody(p.opts.IO.Out, merged.Bytes())
+	p.items, p.merging = nil, false
+}
+
+// printBody prints body indented when it is JSON, as is otherwise.
+func printBody(w io.Writer, body []byte) {
+	var prettyJSON bytes.Buffer
+	if json.Indent(&prettyJSON, body, "", "  ") == nil {
+		_, _ = fmt.Fprintln(w, prettyJSON.String())
+	} else {
+		_, _ = fmt.Fprintln(w, string(body))
+	}
 }
 
 // printHead prints the status line, the response headers sorted by name and
