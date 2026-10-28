@@ -3,6 +3,8 @@ package create
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/qubernetic/copia-cli/pkg/cmdutil"
@@ -57,4 +59,56 @@ func TestCreate_Draft(t *testing.T) {
 		sent := runCreateSent(t, ios, "-d", "-t", "feat: x", "--head", "feature/x")
 		assert.Equal(t, "WIP: feat: x", sent["title"])
 	})
+}
+
+func TestCreate_BodyFile(t *testing.T) {
+	t.Run("file", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "body.md")
+		require.NoError(t, os.WriteFile(path, []byte("from file\n"), 0o600))
+
+		ios, _, _, _ := iostreams.Test()
+		sent := runCreateSent(t, ios, "-t", "feat: x", "--head", "feature/x", "--body-file", path)
+		assert.Equal(t, "from file\n", sent["body"])
+	})
+
+	t.Run("stdin", func(t *testing.T) {
+		ios, stdin, _, _ := iostreams.Test()
+		stdin.WriteString("from stdin")
+		sent := runCreateSent(t, ios, "-t", "feat: x", "--head", "feature/x", "-F", "-")
+		assert.Equal(t, "from stdin", sent["body"])
+	})
+}
+
+func TestCreate_BodyFileErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		wantErr string
+	}{
+		{
+			name:    "with body",
+			args:    []string{"--body", "b", "--body-file", "body.md"},
+			wantErr: "[body body-file] were all set",
+		},
+		{
+			name:    "missing file",
+			args:    []string{"--body-file", filepath.Join(t.TempDir(), "missing.md")},
+			wantErr: "missing.md",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			defer reg.Verify(t)
+			httpmock.ReplaceDefaultTransport(t, reg)
+
+			ios, _, _, _ := iostreams.Test()
+			f := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Token: "test-token", Repo: "my-org/my-repo"}
+			args := append([]string{"-t", "feat: x", "--head", "feature/x"}, tt.args...)
+			err := runCreate(t, f, args...)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+			assert.Empty(t, reg.Requests)
+		})
+	}
 }

@@ -57,6 +57,7 @@ type createResponse struct {
 // NewCmdCreate creates the `copia pr create` command.
 func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 	opts := &CreateOptions{}
+	var bodyFile string
 
 	cmd := &cobra.Command{
 		Use:   "create",
@@ -85,6 +86,14 @@ command exits with an error.`,
       --reviewer jane --reviewer my-org/controls`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.IO = f.IOStreams
+			if bodyFile != "" {
+				b, err := cmdutil.ReadFile(bodyFile, opts.IO.In)
+				if err != nil {
+					return err
+				}
+				opts.Body = string(b)
+			}
+
 			host, token, err := f.ResolveAuth()
 			if err != nil {
 				return err
@@ -105,6 +114,7 @@ command exits with an error.`,
 
 	cmd.Flags().StringVarP(&opts.Title, "title", "t", "", "PR title (required)")
 	cmd.Flags().StringVarP(&opts.Body, "body", "b", "", "PR body")
+	cmd.Flags().StringVarP(&bodyFile, "body-file", "F", "", "Read the body from `file` (use \"-\" to read from standard input)")
 	cmd.Flags().StringVar(&opts.Base, "base", "main", "Base branch")
 	cmd.Flags().StringVarP(&opts.Head, "head", "H", "", "Head branch")
 	cmd.Flags().StringSliceVarP(&opts.Assignees, "assignee", "a", nil, "Assign people by their login. Use \"@me\" to self-assign")
@@ -112,6 +122,7 @@ command exits with an error.`,
 	cmd.Flags().StringVarP(&opts.Milestone, "milestone", "m", "", "Add the pull request to a milestone by name or ID")
 	cmd.Flags().StringSliceVarP(&opts.Reviewers, "reviewer", "r", nil, "Request reviews from people or teams by their login or org/team name")
 	cmd.Flags().BoolVarP(&opts.Draft, "draft", "d", false, "Mark the pull request as work in progress (WIP: title prefix)")
+	cmd.MarkFlagsMutuallyExclusive("body", "body-file")
 
 	return cmd
 }
