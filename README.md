@@ -59,7 +59,10 @@ $ copia-cli repo list
 $ copia-cli repo list --visibility private
 
 # Create an issue
-$ copia-cli issue create --title "Fix sensor mapping" --label bug
+$ copia-cli issue create --title "Fix sensor mapping" --label bug --assignee @me --milestone v1.0
+
+# Move it to another milestone, by name or ID
+$ copia-cli issue edit 13 --milestone v1.1
 
 # Open a PR
 $ copia-cli pr create --title "feat: add safety interlock" --base develop
