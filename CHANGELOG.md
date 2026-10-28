@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--template/-t <template>` on the same 13 commands formats the `--json` output with a Go template, as in `gh`, for example `--json number --template '{{range .}}{{.number}}{{"\n"}}{{end}}'`. The helpers are `join`, `pluck`, `truncate`, `timeago`, `tablerow` and `tablerender`; the `gh` color helpers are left out. `--template` without `--json`, together with `--jq`, or a template that does not parse fails before any request (#321)
 - `--raw-field/-f key=value` on `api` always sends the value as a string; `-f key=value` sends exactly what it sent before (#167)
 - `--input <file>` on `api` sends the file as the request body, `-` reads standard input; the default method is then POST and the `Content-Type` stays `application/json` unless `--header` sets another. With `--input`, `--field` and `--raw-field` values are added to the query string, as in `gh` (`null` as an empty value) (#167)
+- `--include/-i` on `api` prints the status line (such as `HTTP/1.1 200 OK`), the response headers sorted by name and a blank line before the body; a `204 No Content` response prints only these lines (#167)
 
 ### Security
 

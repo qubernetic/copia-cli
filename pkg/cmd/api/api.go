@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -30,6 +31,8 @@ type APIOptions struct {
 	Headers     []string
 	// InputFile is sent as the request body; "-" reads stdin.
 	InputFile string
+	// Include prints the status line and response headers before the body.
+	Include bool
 }
 
 // NewCmdAPI creates the `copia api` command.
@@ -58,7 +61,9 @@ the default method is then POST, the Content-Type stays application/json
 unless --header sets it, and fields are added to the query string instead.
 
 Use --method to override the HTTP method (GET, POST, PATCH, DELETE, PUT).
-Use --header to add custom HTTP headers.`,
+Use --header to add custom HTTP headers.
+Use --include to print the status line and the response headers, sorted by
+name, and a blank line before the body.`,
 		Example: `  # Get authenticated user
   $ copia-cli api /user
 
@@ -77,6 +82,9 @@ Use --header to add custom HTTP headers.`,
 
   # Delete a repo
   $ copia-cli api -X DELETE /repos/my-org/old-repo
+
+  # Show the status line and headers, for example the total count of a list
+  $ copia-cli api -i "/repos/my-org/my-repo/issues?limit=1"
 
   # Custom header
   $ copia-cli api /user --header "Accept: application/json"`,
@@ -101,6 +109,7 @@ Use --header to add custom HTTP headers.`,
 	cmd.Flags().StringArrayVarP(&opts.RawFields, "raw-field", "f", nil, "Add a string parameter in `key=value` format")
 	cmd.Flags().StringSliceVarP(&opts.Headers, "header", "H", nil, "Add HTTP header (key: value)")
 	cmd.Flags().StringVar(&opts.InputFile, "input", "", "The `file` to use as the request body (\"-\" for standard input)")
+	cmd.Flags().BoolVarP(&opts.Include, "include", "i", false, "Include the HTTP status line and response headers in the output")
 
 	return cmd
 }
@@ -176,6 +185,10 @@ func APIRun(opts *APIOptions) error {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	if opts.Include {
+		printHead(opts.IO.Out, resp)
+	}
+
 	if resp.StatusCode == http.StatusNoContent {
 		return nil
 	}
@@ -198,6 +211,30 @@ func APIRun(opts *APIOptions) error {
 	}
 
 	return nil
+}
+
+// printHead prints the status line, the response headers sorted by name and
+// a blank line, as gh api --include does.
+func printHead(w io.Writer, resp *http.Response) {
+	proto := resp.Proto
+	if proto == "" {
+		proto = "HTTP/1.1"
+	}
+	status := resp.Status
+	if status == "" {
+		status = fmt.Sprintf("%d %s", resp.StatusCode, http.StatusText(resp.StatusCode))
+	}
+	_, _ = fmt.Fprintf(w, "%s %s\n", proto, status)
+
+	names := make([]string, 0, len(resp.Header))
+	for name := range resp.Header {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		_, _ = fmt.Fprintf(w, "%s: %s\n", name, strings.Join(resp.Header[name], ", "))
+	}
+	_, _ = fmt.Fprintln(w)
 }
 
 // parseFields collects -f and -F values into one parameter map. A value
