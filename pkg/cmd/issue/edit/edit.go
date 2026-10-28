@@ -26,6 +26,7 @@ type EditOptions struct {
 	Title           string
 	Body            string
 	AddLabels       []string
+	RemoveLabels    []string
 	Assignees       []string
 	AddAssignees    []string
 	RemoveAssignees []string
@@ -45,6 +46,9 @@ func NewCmdEdit(f *cmdutil.Factory) *cobra.Command {
 removing a login the issue does not have changes nothing. --assignee cannot
 be combined with --add-assignee or --remove-assignee.
 
+--add-label and --remove-label take label names of the repository or its
+organization; an unknown name fails before the issue is changed.
+
 --milestone takes a milestone name or its numeric ID; an unknown milestone
 fails before the issue is changed.`,
 		Example: `  # Edit the title
@@ -52,6 +56,9 @@ fails before the issue is changed.`,
 
   # Add labels
   $ copia-cli issue edit 12 --add-label bug --add-label urgent
+
+  # Remove a label
+  $ copia-cli issue edit 12 --remove-label wontfix
 
   # Set assignees
   $ copia-cli issue edit 12 --assignee john --assignee jane
@@ -92,6 +99,7 @@ fails before the issue is changed.`,
 	cmd.Flags().StringVarP(&opts.Title, "title", "t", "", "Set title")
 	cmd.Flags().StringVarP(&opts.Body, "body", "b", "", "Set body")
 	cmd.Flags().StringSliceVar(&opts.AddLabels, "add-label", nil, "Add labels by name (repository or organization labels)")
+	cmd.Flags().StringSliceVar(&opts.RemoveLabels, "remove-label", nil, "Remove labels by name (repository or organization labels)")
 	cmd.Flags().StringSliceVarP(&opts.Assignees, "assignee", "a", nil, "Set assignees")
 	cmd.Flags().StringSliceVar(&opts.AddAssignees, "add-assignee", nil, "Add assignees by login")
 	cmd.Flags().StringSliceVar(&opts.RemoveAssignees, "remove-assignee", nil, "Remove assignees by login")
@@ -104,9 +112,10 @@ func EditRun(opts *EditOptions) error {
 	changesAssignees := len(opts.AddAssignees) > 0 || len(opts.RemoveAssignees) > 0
 	hasIssueUpdate := opts.Title != "" || opts.Body != "" || len(opts.Assignees) > 0 || changesAssignees || opts.Milestone != ""
 	hasLabelAdd := len(opts.AddLabels) > 0
+	hasLabelRemove := len(opts.RemoveLabels) > 0
 
-	if !hasIssueUpdate && !hasLabelAdd {
-		return fmt.Errorf("nothing to edit. Use --title, --body, --add-label, --assignee, --add-assignee, --remove-assignee, or --milestone")
+	if !hasIssueUpdate && !hasLabelAdd && !hasLabelRemove {
+		return fmt.Errorf("nothing to edit. Use --title, --body, --add-label, --remove-label, --assignee, --add-assignee, --remove-assignee, or --milestone")
 	}
 	if len(opts.Assignees) > 0 && changesAssignees {
 		return fmt.Errorf("specify only one of --assignee or --add-assignee/--remove-assignee")
@@ -122,6 +131,16 @@ func EditRun(opts *EditOptions) error {
 		milestoneID = id
 	}
 
+	// Resolve the labels to remove before any change, for the same reason.
+	var removeLabelIDs []int64
+	if hasLabelRemove {
+		ids, err := shared.ResolveLabelIDs(opts.HTTPClient, opts.Host, opts.Token, opts.Owner, opts.Repo, opts.RemoveLabels)
+		if err != nil {
+			return err
+		}
+		removeLabelIDs = ids
+	}
+
 	// Gitea has no endpoint that removes one assignee: compute the new list
 	// from the current one and send it whole.
 	assignees := opts.Assignees
@@ -135,6 +154,12 @@ func EditRun(opts *EditOptions) error {
 
 	if hasLabelAdd {
 		if err := addLabels(opts); err != nil {
+			return err
+		}
+	}
+
+	for i, id := range removeLabelIDs {
+		if err := removeLabel(opts, opts.RemoveLabels[i], id); err != nil {
 			return err
 		}
 	}
@@ -227,6 +252,29 @@ func addLabels(opts *EditOptions) error {
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		return fmt.Errorf("failed to add labels (HTTP %d)", resp.StatusCode)
+	}
+
+	return nil
+}
+
+func removeLabel(opts *EditOptions, name string, id int64) error {
+	url := fmt.Sprintf("https://%s/api/v1/repos/%s/%s/issues/%d/labels/%d",
+		opts.Host, opts.Owner, opts.Repo, opts.Number, id)
+
+	req, err := http.NewRequest("DELETE", url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "token "+opts.Token)
+
+	resp, err := opts.HTTPClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("failed to remove label %q (HTTP %d)", name, resp.StatusCode)
 	}
 
 	return nil

@@ -331,7 +331,64 @@ func TestEditRun_NothingToEditNamesNewFlags(t *testing.T) {
 	opts, _ := editOpts(&httpmock.Registry{})
 	err := EditRun(opts)
 	require.Error(t, err)
-	for _, flag := range []string{"--add-assignee", "--remove-assignee"} {
+	for _, flag := range []string{"--add-assignee", "--remove-assignee", "--remove-label"} {
 		assert.Contains(t, err.Error(), flag)
+	}
+}
+
+func TestNewCmdEdit_RemoveLabels(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+
+	reg.Register(httpmock.REST("GET", repoLabelsPath), httpmock.StringResponse(http.StatusOK, `[{"id":1,"name":"bug"}]`))
+	reg.Register(httpmock.REST("GET", orgLabelsPath), httpmock.StringResponse(http.StatusOK, `[{"id":90,"name":"urgent"}]`))
+	reg.Register(httpmock.REST("DELETE", issueLabelsPath+"/1"), httpmock.StringResponse(http.StatusNoContent, ``))
+	reg.Register(httpmock.REST("DELETE", issueLabelsPath+"/90"), httpmock.StringResponse(http.StatusNoContent, ``))
+
+	ios, _, stdout, _ := iostreams.Test()
+	err := runCmd(t, readyFactory(ios), "12", "--remove-label", "bug", "--remove-label", "urgent")
+	require.NoError(t, err)
+	assert.Equal(t, "Updated issue #12\n", stdout.String())
+}
+
+func TestEditRun_RemoveUnknownLabel(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	registerLabelLookup(reg)
+
+	opts, stdout := editOpts(reg)
+	opts.RemoveLabels = []string{"missing"}
+	opts.Title = "x"
+	opts.RemoveAssignees = []string{"john"}
+	err := EditRun(opts)
+	require.EqualError(t, err, `label "missing" not found in repository or organization`)
+	assert.Len(t, reg.Requests, 2, "only the label lookups are sent")
+	assert.Empty(t, stdout.String())
+}
+
+func TestEditRun_RemoveLabelErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		stub    httpmock.Responder
+		wantErr string
+	}{
+		{name: "rejected", stub: httpmock.StringResponse(http.StatusForbidden, `{}`), wantErr: `failed to remove label "bug" (HTTP 403)`},
+		{name: "transport error", stub: failing, wantErr: "boom"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			defer reg.Verify(t)
+			registerLabelLookup(reg)
+			reg.Register(httpmock.REST("DELETE", issueLabelsPath+"/1"), tt.stub)
+
+			opts, stdout := editOpts(reg)
+			opts.RemoveLabels = []string{"bug"}
+			err := EditRun(opts)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+			assert.Empty(t, stdout.String())
+		})
 	}
 }
