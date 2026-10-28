@@ -2,6 +2,7 @@ package cmdutil
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +19,10 @@ type JSONFlags struct {
 	Fields   []string
 	JQ       string
 	Template string
+
+	// ctx is the command's context, saved before the command runs, so a
+	// --jq filter stops when the command is canceled.
+	ctx context.Context
 }
 
 // AddJSONFlags adds --json, --jq and --template to a command. --json
@@ -33,6 +38,7 @@ func AddJSONFlags(cmd *cobra.Command, jf *JSONFlags, validFields []string) {
 
 	preRunE := cmd.PreRunE
 	cmd.PreRunE = func(c *cobra.Command, args []string) error {
+		jf.ctx = c.Context()
 		if jf.JQ != "" && jf.Template != "" {
 			return errors.New("cannot use `--jq` and `--template` together")
 		}
@@ -74,7 +80,11 @@ func (jf *JSONFlags) Print(w io.Writer, v any) error {
 		return err
 	}
 	if jf.JQ != "" {
-		return FilterJQ(w, data, jf.JQ)
+		ctx := jf.ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		return FilterJQ(ctx, w, data, jf.JQ)
 	}
 	if jf.Template != "" {
 		return ExecuteTemplate(w, data, jf.Template)
@@ -91,13 +101,14 @@ func PrintJSON(w io.Writer, v interface{}) error {
 
 // FilterJQ runs the jq expression on input, a value decoded from JSON, and
 // writes each result on its own line, as gh does: a string raw, null as an
-// empty line, anything else as compact JSON.
-func FilterJQ(w io.Writer, input any, expr string) error {
+// empty line, anything else as compact JSON. It stops with ctx's error when
+// ctx is canceled.
+func FilterJQ(ctx context.Context, w io.Writer, input any, expr string) error {
 	code, err := compileJQ(expr)
 	if err != nil {
 		return err
 	}
-	iter := code.Run(input)
+	iter := code.RunWithContext(ctx, input)
 	for {
 		v, ok := iter.Next()
 		if !ok {
