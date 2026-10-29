@@ -32,7 +32,12 @@ func NewCmdClone(f *cmdutil.Factory) *cobra.Command {
 		Short: "Clone a repository",
 		Long: `Clone a Copia repository locally. The repository can be specified as
 owner/repo or as a full URL. Private repositories are automatically
-authenticated using your configured token.`,
+authenticated using your configured token.
+
+The token is sent only to the configured host: an https URL whose host and
+port match it. Any other URL (another host, http, SSH) is cloned without
+credentials. The token is passed to git as a host-scoped HTTP header, never
+in the clone URL, so it is not stored in the remote.`,
 		Example: `  # Clone by owner/repo
   $ copia-cli repo clone my-org/my-repo
 
