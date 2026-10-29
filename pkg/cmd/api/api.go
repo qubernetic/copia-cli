@@ -81,6 +81,10 @@ is. A next page link to another host is refused, so the token stays on the
 host it was sent to. --paginate with any method other than GET fails before
 the first request.
 
+An HTTP redirect is followed only when it keeps the scheme, host and port
+of the request; a redirect to another origin, such as from https to http or
+to another port, fails the command, so the token is never sent there.
+
 Use --jq to filter the response with a jq expression, as in "gh api --jq";
 with --paginate it runs on each page. Each result is printed on its own
 line: a string raw, null as an empty line, anything else as compact JSON.
@@ -127,7 +131,7 @@ An error response is printed unfiltered.`,
 			}
 			opts.Host = host
 			opts.Token = token
-			opts.HTTPClient = &http.Client{}
+			opts.HTTPClient = cmdutil.NewHTTPClient()
 			return APIRun(opts)
 		},
 	}

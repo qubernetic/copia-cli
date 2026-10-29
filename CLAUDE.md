@@ -71,6 +71,7 @@ copia-cli/
 ## Key Design Constraints
 
 - **Auth-first:** Every API call requires authentication. `copia-cli auth login` is mandatory before any operation.
+- **Same-origin redirects:** every command builds its HTTP client with `cmdutil.NewHTTPClient()`, which refuses a redirect that changes scheme, host or port; a guard test fails on `&http.Client{}` or `http.DefaultClient` in non-test code under `pkg/` and `internal/`.
 - **Auth precedence:** `--token` flag > `COPIA_TOKEN` env var > config file
 - **Multi-instance support:** Config supports multiple hosts; active instance resolved by `--host` flag > `COPIA_HOST` env > git remote URL > first config entry
 - **Config location:** `~/.config/copia/config.yml` (Windows: `%USERPROFILE%\.config\copia\config.yml`), file permissions `600`

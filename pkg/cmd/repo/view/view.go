@@ -75,7 +75,7 @@ func NewCmdView(f *cmdutil.Factory) *cobra.Command {
 				opts.Owner, opts.Repo = owner, repo
 			}
 
-			opts.HTTPClient = &http.Client{}
+			opts.HTTPClient = cmdutil.NewHTTPClient()
 			return ViewRun(opts)
 		},
 	}

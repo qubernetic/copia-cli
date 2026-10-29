@@ -70,7 +70,7 @@ Token precedence: --token flag > COPIA_TOKEN env var > config file.`,
 				return fmt.Errorf("token required. Use --token flag or run interactively")
 			}
 
-			opts.HTTPClient = &http.Client{}
+			opts.HTTPClient = cmdutil.NewHTTPClient()
 			return LoginRun(opts)
 		},
 	}

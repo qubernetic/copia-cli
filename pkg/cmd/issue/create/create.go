@@ -78,7 +78,7 @@ milestone fails before the issue is created.`,
 			}
 			opts.Owner = owner
 			opts.Repo = repo
-			opts.HTTPClient = &http.Client{}
+			opts.HTTPClient = cmdutil.NewHTTPClient()
 			return CreateRun(opts)
 		},
 	}

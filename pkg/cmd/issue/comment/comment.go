@@ -55,7 +55,7 @@ func NewCmdComment(f *cmdutil.Factory) *cobra.Command {
 			}
 			opts.Owner = owner
 			opts.Repo = repo
-			opts.HTTPClient = &http.Client{}
+			opts.HTTPClient = cmdutil.NewHTTPClient()
 			return CommentRun(opts)
 		},
 	}

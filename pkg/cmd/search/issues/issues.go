@@ -65,7 +65,7 @@ come newest first. Requires repo context via -R flag or git remote.`,
 			}
 			opts.Owner = owner
 			opts.Repo = repo
-			opts.HTTPClient = &http.Client{}
+			opts.HTTPClient = cmdutil.NewHTTPClient()
 			return SearchRun(opts)
 		},
 	}

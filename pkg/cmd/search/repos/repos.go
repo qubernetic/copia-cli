@@ -57,7 +57,7 @@ func NewCmdSearchRepos(f *cmdutil.Factory) *cobra.Command {
 			}
 			opts.Host = host
 			opts.Token = token
-			opts.HTTPClient = &http.Client{}
+			opts.HTTPClient = cmdutil.NewHTTPClient()
 			return SearchRun(opts)
 		},
 	}
