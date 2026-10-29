@@ -204,7 +204,8 @@ func TestCloneCommand_GitScopesCredential(t *testing.T) {
 	t.Setenv("GIT_CONFIG_KEY_0", "credential.helper")
 	t.Setenv("GIT_CONFIG_VALUE_0", "!f() { echo username=user; echo password=user-secret; }; f")
 
-	_, env := cloneCommand(&CloneOptions{Host: "app.copia.io", Token: "test-token", Repo: "o/r"}, 1)
+	_, env, err := cloneCommand(&CloneOptions{Host: "app.copia.io", Token: "test-token", Repo: "o/r"}, 1)
+	require.NoError(t, err)
 
 	credential := func(action, input string) string {
 		cmd := exec.Command("git", "credential", action)
@@ -362,4 +363,25 @@ func TestCloneRun_RedirectGetsNoToken(t *testing.T) {
 			assert.Empty(t, leaked, "Authorization sent to the other origin")
 		})
 	}
+}
+
+// TestCloneCommand_GitScopesCredentialIPv6 checks with the real git that the
+// bracketed IPv6 key matches the configured address and port only.
+func TestCloneCommand_GitScopesCredentialIPv6(t *testing.T) {
+	isolateGit(t)
+	_, env, err := cloneCommand(&CloneOptions{Host: "[::1]:8443", Token: "test-token", Repo: "o/r"}, 0)
+	require.NoError(t, err)
+
+	fill := func(target string) string {
+		cmd := exec.Command("git", "credential", "fill")
+		cmd.Dir = t.TempDir()
+		cmd.Env = append(os.Environ(), env...)
+		cmd.Stdin = strings.NewReader("url=" + target + "\n\n")
+		out, _ := cmd.Output()
+		return string(out)
+	}
+
+	assert.Contains(t, fill("https://[::1]:8443/o/r.git"), "password=test-token\n")
+	assert.NotContains(t, fill("https://[::1]:9443/o/r.git"), "test-token")
+	assert.NotContains(t, fill("https://[::1]/o/r.git"), "test-token")
 }

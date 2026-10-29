@@ -69,7 +69,8 @@ func TestCloneCommand_TokenOnlyForConfiguredHost(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.repo, func(t *testing.T) {
-			args, env := cloneCommand(&CloneOptions{Host: "app.copia.io", Token: testToken, Repo: tt.repo}, 0)
+			args, env, err := cloneCommand(&CloneOptions{Host: "app.copia.io", Token: testToken, Repo: tt.repo}, 0)
+			require.NoError(t, err)
 			assert.Equal(t, []string{"clone", "--", tt.wantURL}, args)
 			assert.Equal(t, []string{"GIT_TERMINAL_PROMPT=0"}, env)
 			assertNoToken(t, args, env)
@@ -90,10 +91,14 @@ func TestCloneCommand_HelperForConfiguredHost(t *testing.T) {
 		{host: "app.copia.io", repo: "https://app.copia.io:443/o/r.git", dir: "target", wantURL: "https://app.copia.io:443/o/r.git", wantKey: "credential.https://app.copia.io.helper"},
 		{host: "App.Copia.io", repo: "https://app.copia.io/o/r.git", wantURL: "https://app.copia.io/o/r.git", wantKey: "credential.https://app.copia.io.helper"},
 		{host: "copia.local:8443", repo: "https://copia.local:8443/o/r.git", wantURL: "https://copia.local:8443/o/r.git", wantKey: "credential.https://copia.local:8443.helper"},
+		{host: "app.copia.io:443", repo: "my-org/my-repo", wantURL: "https://app.copia.io:443/my-org/my-repo.git", wantKey: "credential.https://app.copia.io.helper"},
+		{host: "[::1]:8443", repo: "o/r", wantURL: "https://[::1]:8443/o/r.git", wantKey: "credential.https://[::1]:8443.helper"},
+		{host: "[::1]", repo: "https://[::1]/o/r.git", wantURL: "https://[::1]/o/r.git", wantKey: "credential.https://[::1].helper"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.repo, func(t *testing.T) {
-			args, env := cloneCommand(&CloneOptions{Host: tt.host, Token: testToken, Repo: tt.repo, Dir: tt.dir}, 0)
+			args, env, err := cloneCommand(&CloneOptions{Host: tt.host, Token: testToken, Repo: tt.repo, Dir: tt.dir}, 0)
+			require.NoError(t, err)
 
 			wantArgs := []string{"clone", "--", tt.wantURL}
 			if tt.dir != "" {
@@ -109,16 +114,46 @@ func TestCloneCommand_HelperForConfiguredHost(t *testing.T) {
 }
 
 func TestCloneCommand_KeepsExistingConfigEntries(t *testing.T) {
-	_, env := cloneCommand(&CloneOptions{Host: "app.copia.io", Token: testToken, Repo: "o/r"}, 3)
+	_, env, err := cloneCommand(&CloneOptions{Host: "app.copia.io", Token: testToken, Repo: "o/r"}, 3)
+	require.NoError(t, err)
 	assert.Equal(t, helperEnv("credential.https://app.copia.io.helper", 3), env)
 }
 
 func TestCloneCommand_NoTokenConfigured(t *testing.T) {
 	for _, repo := range []string{"my-org/my-repo", "https://app.copia.io/o/r.git"} {
-		args, env := cloneCommand(&CloneOptions{Host: "app.copia.io", Repo: repo}, 0)
+		args, env, err := cloneCommand(&CloneOptions{Host: "app.copia.io", Repo: repo}, 0)
+		require.NoError(t, err)
 		assert.Equal(t, []string{"GIT_TERMINAL_PROMPT=0"}, env)
 		for _, s := range append(args, env...) {
 			assert.False(t, strings.Contains(s, "credential") || strings.Contains(s, "COPIA_CLONE_TOKEN") || strings.Contains(s, "@app.copia.io"), s)
+		}
+	}
+}
+
+// A configured host carrying git URL-pattern syntax would widen or shift
+// the credential key, so it is refused rather than written into it.
+func TestCloneCommand_RejectsInvalidHost(t *testing.T) {
+	for _, host := range []string{
+		"",
+		"*.copia.io",
+		"app.*.io",
+		"u@app.copia.io",
+		"u:p@app.copia.io",
+		"app.copia.io/sub",
+		"app.copia.io/",
+		"app.copia.io?x=1",
+		"app.copia.io#frag",
+		"app.copia.io:bad",
+		"app copia.io",
+		"[fe80::1%25eth0]",
+		`app.copia.io\sub`,
+	} {
+		for _, token := range []string{testToken, ""} {
+			args, env, err := cloneCommand(&CloneOptions{Host: host, Token: token, Repo: "o/r"}, 0)
+			require.Error(t, err, host)
+			assert.Contains(t, err.Error(), "invalid host", host)
+			assert.Nil(t, args, host)
+			assert.Nil(t, env, host)
 		}
 	}
 }
