@@ -25,6 +25,8 @@ curl -H "Authorization: token <your-token>" \
 
 The `Authorization: token <your-token>` header is the only supported way to send a token on Copia since 2026-05-01. Query parameter tokens (`?token=` and `?access_token=`) are ignored, so the call is anonymous and Copia returns `403 Forbidden`. copia-cli only uses the header.
 
+copia-cli follows an HTTP redirect only when it keeps the scheme, host and port of the request; a redirect to another origin (another host, another port, or `https` to `http`) fails the command, so the header is never sent anywhere but the host the token belongs to.
+
 ### Token Storage
 
 The CLI will store tokens in `~/.config/copia/config.yml`:

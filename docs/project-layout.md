@@ -216,7 +216,7 @@ sequenceDiagram
 ## Gotchas
 
 - **Auth commands use raw HTTP** — not the Gitea SDK, because `gitea.NewClient` tries to connect on init
-- **Never build an HTTP client by hand** — use `cmdutil.NewHTTPClient()`; a guard test fails on `&http.Client{}` or `http.DefaultClient` in non-test code under `pkg/` and `internal/`
+- **Never build an HTTP client by hand:** use `cmdutil.NewHTTPClient()`; a guard test fails on `&http.Client{}` or `http.DefaultClient` in non-test code under `pkg/` and `internal/`
 - **`f.BaseRepo` can be nil** — commands that don't need repo context (auth, repo create) must check before calling
 - **Gitea returns 403 (not 401) for invalid tokens** — integration tests use `Contains([]int{401, 403})`
 - **PR checkout doesn't use auth** — pure git shell-out, relies on git credential config
