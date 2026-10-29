@@ -146,6 +146,17 @@ func TestCloneRun_NoToken(t *testing.T) {
 	assert.Equal(t, "https://app.copia.io/my-org/my-repo.git", storedOrigin(t, filepath.Join(work, "my-repo")))
 }
 
+func TestCloneRun_InvalidConfigCount(t *testing.T) {
+	work := setupRemote(t)
+	t.Setenv("GIT_CONFIG_COUNT", "bogus")
+	ios, _, _, _ := iostreams.Test()
+
+	err := CloneRun(&CloneOptions{IO: ios, Host: "app.copia.io", Token: "test-token", Repo: "my-org/my-repo"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `GIT_CONFIG_COUNT "bogus"`)
+	assert.NoDirExists(t, filepath.Join(work, "my-repo"))
+}
+
 func TestCloneRun_SSHKeepsURL(t *testing.T) {
 	work := setupRemote(t)
 	ios, _, _, _ := iostreams.Test()

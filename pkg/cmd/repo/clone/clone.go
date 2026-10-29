@@ -67,7 +67,11 @@ in the clone URL, so it is not stored in the remote.`,
 }
 
 func CloneRun(opts *CloneOptions) error {
-	args, env := cloneCommand(opts, configCount(os.Getenv("GIT_CONFIG_COUNT")))
+	existing, err := configCount(os.Getenv("GIT_CONFIG_COUNT"))
+	if err != nil {
+		return err
+	}
+	args, env := cloneCommand(opts, existing)
 
 	gitCmd := exec.Command("git", args...)
 	gitCmd.Stdout = opts.IO.Out
@@ -105,14 +109,18 @@ func cloneCommand(opts *CloneOptions, existing int) (args, env []string) {
 	return args, env
 }
 
-// configCount parses GIT_CONFIG_COUNT; anything but a non-negative number
-// counts as no entries.
-func configCount(value string) int {
+// configCount parses GIT_CONFIG_COUNT. Unset or empty means no entries; any
+// other value that is not a non-negative integer is an error, as it is for
+// git, so the entries already set are never overwritten.
+func configCount(value string) (int, error) {
+	if value == "" {
+		return 0, nil
+	}
 	n, err := strconv.Atoi(value)
 	if err != nil || n < 0 {
-		return 0
+		return 0, fmt.Errorf("invalid GIT_CONFIG_COUNT %q: must be a non-negative integer", value)
 	}
-	return n
+	return n, nil
 }
 
 // isConfiguredHost reports whether rawURL is an https URL whose host and

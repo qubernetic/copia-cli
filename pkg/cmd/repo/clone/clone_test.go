@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBuildCloneURL_FullURL(t *testing.T) {
@@ -120,8 +121,14 @@ func TestCloneCommand_NoTokenConfigured(t *testing.T) {
 }
 
 func TestConfigCount(t *testing.T) {
-	assert.Equal(t, 0, configCount(""))
-	assert.Equal(t, 3, configCount("3"))
-	assert.Equal(t, 0, configCount("bogus"))
-	assert.Equal(t, 0, configCount("-2"))
+	for value, want := range map[string]int{"": 0, "0": 0, "3": 3} {
+		got, err := configCount(value)
+		require.NoError(t, err, value)
+		assert.Equal(t, want, got, value)
+	}
+	for _, value := range []string{"bogus", "-2", "99999999999999999999", " 1"} {
+		_, err := configCount(value)
+		require.Error(t, err, value)
+		assert.Contains(t, err.Error(), "GIT_CONFIG_COUNT", value)
+	}
 }
