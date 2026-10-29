@@ -47,13 +47,11 @@ func setupRemote(t *testing.T) string {
 	runGit(t, "clone", "-q", "--bare", src, filepath.Join(parent, "my-org", "my-repo.git"))
 
 	base := "url.file://" + filepath.ToSlash(parent) + "/.insteadOf"
-	t.Setenv("GIT_CONFIG_COUNT", "3")
+	t.Setenv("GIT_CONFIG_COUNT", "2")
 	t.Setenv("GIT_CONFIG_KEY_0", base)
-	t.Setenv("GIT_CONFIG_VALUE_0", "https://token:test-token@app.copia.io/")
+	t.Setenv("GIT_CONFIG_VALUE_0", "https://app.copia.io/")
 	t.Setenv("GIT_CONFIG_KEY_1", base)
-	t.Setenv("GIT_CONFIG_VALUE_1", "https://app.copia.io/")
-	t.Setenv("GIT_CONFIG_KEY_2", base)
-	t.Setenv("GIT_CONFIG_VALUE_2", "git@app.copia.io:")
+	t.Setenv("GIT_CONFIG_VALUE_1", "git@app.copia.io:")
 
 	work := t.TempDir()
 	t.Chdir(work)
@@ -163,9 +161,39 @@ func TestCloneRun_SSHKeepsURL(t *testing.T) {
 	assert.Equal(t, "git@app.copia.io:my-org/my-repo.git", storedOrigin(t, filepath.Join(work, "ssh-clone")))
 }
 
-func TestBuildAuthCloneURL(t *testing.T) {
-	assert.Equal(t, "https://token:tok@app.copia.io/my-org/my-repo.git",
-		buildAuthCloneURL("app.copia.io", "tok", "my-org/my-repo"))
-	assert.Equal(t, "https://token:tok@app.copia.io/my-org/my-repo.git",
-		buildAuthCloneURL("app.copia.io", "tok", "https://app.copia.io/my-org/my-repo.git"))
+// TestCloneCommand_GitScopesHeader checks with the real git that the header
+// cloneCommand configures applies to the configured host only.
+func TestCloneCommand_GitScopesHeader(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_COUNT", "")
+
+	_, env := cloneCommand(&CloneOptions{Host: "app.copia.io", Token: "test-token", Repo: "o/r"}, 0)
+
+	headerFor := func(target string) string {
+		cmd := exec.Command("git", "config", "--get-urlmatch", "http.extraHeader", target)
+		cmd.Dir = t.TempDir()
+		cmd.Env = append(os.Environ(), env...)
+		out, _ := cmd.Output()
+		return strings.TrimSpace(string(out))
+	}
+
+	for _, target := range []string{
+		"https://app.copia.io/o/r.git",
+		"https://APP.copia.io/o/r.git",
+		"https://app.copia.io:443/o/r.git",
+	} {
+		assert.True(t, strings.HasPrefix(headerFor(target), "Authorization: Basic "), target)
+	}
+	for _, target := range []string{
+		"https://other.example/o/r.git",
+		"https://app.copia.io.evil.example/o/r.git",
+		"http://app.copia.io/o/r.git",
+		"https://app.copia.io:8443/o/r.git",
+	} {
+		assert.Empty(t, headerFor(target), target)
+	}
 }

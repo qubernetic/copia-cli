@@ -1,9 +1,12 @@
 package clone
 
 import (
+	"encoding/base64"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -59,53 +62,78 @@ authenticated using your configured token.`,
 }
 
 func CloneRun(opts *CloneOptions) error {
-	cloneURL := buildCloneURL(opts.Host, opts.Repo)
-
-	// Use token in URL for authentication, then remove it from the remote.
-	authURL := cloneURL
-	if opts.Token != "" && !strings.HasPrefix(opts.Repo, "git@") {
-		authURL = buildAuthCloneURL(opts.Host, opts.Token, opts.Repo)
-	}
-
-	args := []string{"clone", "--", authURL}
-	dir := opts.Dir
-	if dir != "" {
-		args = append(args, dir)
-	} else {
-		// Derive dir name from repo for post-clone remote fix
-		parts := strings.Split(strings.TrimSuffix(opts.Repo, ".git"), "/")
-		dir = parts[len(parts)-1]
-	}
+	args, env := cloneCommand(opts, configCount(os.Getenv("GIT_CONFIG_COUNT")))
 
 	gitCmd := exec.Command("git", args...)
 	gitCmd.Stdout = opts.IO.Out
 	gitCmd.Stderr = opts.IO.ErrOut
 	gitCmd.Stdin = os.Stdin
-	gitCmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	gitCmd.Env = append(os.Environ(), env...)
 
-	if err := gitCmd.Run(); err != nil {
-		return err
+	return gitCmd.Run()
+}
+
+// cloneCommand returns the git arguments and the environment entries to add
+// for a clone. The token never goes into the arguments: when the URL points
+// at the configured host over https, it travels as an Authorization header
+// that git's config scopes to that host. existing is the number of
+// GIT_CONFIG_* entries already in the environment, which are kept.
+func cloneCommand(opts *CloneOptions, existing int) (args, env []string) {
+	cloneURL := buildCloneURL(opts.Host, opts.Repo)
+
+	args = []string{"clone", "--", cloneURL}
+	if opts.Dir != "" {
+		args = append(args, opts.Dir)
 	}
 
-	// Remove token from the stored remote URL
-	if opts.Token != "" && authURL != cloneURL {
-		setCmd := exec.Command("git", "-C", dir, "remote", "set-url", "origin", cloneURL)
-		_ = setCmd.Run()
+	env = []string{"GIT_TERMINAL_PROMPT=0"}
+	if opts.Token == "" || !isConfiguredHost(opts.Host, cloneURL) {
+		return args, env
 	}
 
-	return nil
+	credential := base64.StdEncoding.EncodeToString([]byte("token:" + opts.Token))
+	env = append(env,
+		fmt.Sprintf("GIT_CONFIG_COUNT=%d", existing+1),
+		fmt.Sprintf("GIT_CONFIG_KEY_%d=http.https://%s/.extraHeader", existing, strings.ToLower(opts.Host)),
+		fmt.Sprintf("GIT_CONFIG_VALUE_%d=Authorization: Basic %s", existing, credential),
+	)
+	return args, env
+}
+
+// configCount parses GIT_CONFIG_COUNT; anything but a non-negative number
+// counts as no entries.
+func configCount(value string) int {
+	n, err := strconv.Atoi(value)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
+}
+
+// isConfiguredHost reports whether rawURL is an https URL whose host and
+// port equal the configured host (case-insensitive, a missing port is 443).
+func isConfiguredHost(host, rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Scheme != "https" {
+		return false
+	}
+	configured, err := url.Parse("https://" + host)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(u.Hostname(), configured.Hostname()) && httpsPort(u) == httpsPort(configured)
+}
+
+func httpsPort(u *url.URL) string {
+	if p := u.Port(); p != "" {
+		return p
+	}
+	return "443"
 }
 
 func buildCloneURL(host, repo string) string {
-	if strings.HasPrefix(repo, "https://") || strings.HasPrefix(repo, "git@") {
+	if strings.Contains(repo, "://") || strings.HasPrefix(repo, "git@") {
 		return repo
 	}
 	return fmt.Sprintf("https://%s/%s.git", host, repo)
-}
-
-func buildAuthCloneURL(host, token, repo string) string {
-	if strings.HasPrefix(repo, "https://") {
-		return strings.Replace(repo, "https://", fmt.Sprintf("https://token:%s@", token), 1)
-	}
-	return fmt.Sprintf("https://token:%s@%s/%s.git", token, host, repo)
 }
