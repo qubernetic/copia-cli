@@ -1,12 +1,20 @@
 package clone
 
 import (
+	"encoding/base64"
+	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
+	"net/http"
+	"net/http/cgi"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/qubernetic/copia-cli/internal/config"
@@ -24,10 +32,8 @@ func runGit(t *testing.T, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// setupRemote creates a bare repo at <parent>/my-org/my-repo.git with one
-// commit and rewrites the Copia URLs CloneRun builds to point at it via
-// git's environment config. It then chdirs into an empty work dir.
-func setupRemote(t *testing.T) string {
+// isolateGit keeps the user's and the system's git config out of the test.
+func isolateGit(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
@@ -35,25 +41,39 @@ func setupRemote(t *testing.T) string {
 
 	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_COUNT", "")
 	t.Setenv("GIT_AUTHOR_NAME", "Test")
 	t.Setenv("GIT_AUTHOR_EMAIL", "test@example.com")
 	t.Setenv("GIT_COMMITTER_NAME", "Test")
 	t.Setenv("GIT_COMMITTER_EMAIL", "test@example.com")
+}
 
+// newBareRepo creates a bare repo at <parent>/my-org/my-repo.git with one
+// commit and returns parent.
+func newBareRepo(t *testing.T) string {
+	t.Helper()
 	parent := t.TempDir()
 	src := t.TempDir()
 	runGit(t, "init", "-q", src)
 	runGit(t, "-C", src, "commit", "-q", "--allow-empty", "-m", "init")
 	runGit(t, "clone", "-q", "--bare", src, filepath.Join(parent, "my-org", "my-repo.git"))
+	return parent
+}
+
+// setupRemote creates a bare repo with newBareRepo and rewrites the Copia
+// URLs CloneRun builds to point at it via git's environment config. It then
+// chdirs into an empty work dir.
+func setupRemote(t *testing.T) string {
+	t.Helper()
+	isolateGit(t)
+	parent := newBareRepo(t)
 
 	base := "url.file://" + filepath.ToSlash(parent) + "/.insteadOf"
-	t.Setenv("GIT_CONFIG_COUNT", "3")
+	t.Setenv("GIT_CONFIG_COUNT", "2")
 	t.Setenv("GIT_CONFIG_KEY_0", base)
-	t.Setenv("GIT_CONFIG_VALUE_0", "https://token:test-token@app.copia.io/")
+	t.Setenv("GIT_CONFIG_VALUE_0", "https://app.copia.io/")
 	t.Setenv("GIT_CONFIG_KEY_1", base)
-	t.Setenv("GIT_CONFIG_VALUE_1", "https://app.copia.io/")
-	t.Setenv("GIT_CONFIG_KEY_2", base)
-	t.Setenv("GIT_CONFIG_VALUE_2", "git@app.copia.io:")
+	t.Setenv("GIT_CONFIG_VALUE_1", "git@app.copia.io:")
 
 	work := t.TempDir()
 	t.Chdir(work)
@@ -148,6 +168,17 @@ func TestCloneRun_NoToken(t *testing.T) {
 	assert.Equal(t, "https://app.copia.io/my-org/my-repo.git", storedOrigin(t, filepath.Join(work, "my-repo")))
 }
 
+func TestCloneRun_InvalidConfigCount(t *testing.T) {
+	work := setupRemote(t)
+	t.Setenv("GIT_CONFIG_COUNT", "bogus")
+	ios, _, _, _ := iostreams.Test()
+
+	err := CloneRun(&CloneOptions{IO: ios, Host: "app.copia.io", Token: "test-token", Repo: "my-org/my-repo"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `GIT_CONFIG_COUNT "bogus"`)
+	assert.NoDirExists(t, filepath.Join(work, "my-repo"))
+}
+
 func TestCloneRun_SSHKeepsURL(t *testing.T) {
 	work := setupRemote(t)
 	ios, _, _, _ := iostreams.Test()
@@ -163,9 +194,194 @@ func TestCloneRun_SSHKeepsURL(t *testing.T) {
 	assert.Equal(t, "git@app.copia.io:my-org/my-repo.git", storedOrigin(t, filepath.Join(work, "ssh-clone")))
 }
 
-func TestBuildAuthCloneURL(t *testing.T) {
-	assert.Equal(t, "https://token:tok@app.copia.io/my-org/my-repo.git",
-		buildAuthCloneURL("app.copia.io", "tok", "my-org/my-repo"))
-	assert.Equal(t, "https://token:tok@app.copia.io/my-org/my-repo.git",
-		buildAuthCloneURL("app.copia.io", "tok", "https://app.copia.io/my-org/my-repo.git"))
+
+// TestCloneCommand_GitScopesCredential checks with the real git that the
+// helper cloneCommand configures answers for the configured host only,
+// replaces the user's helpers there and nowhere else, and stores nothing.
+func TestCloneCommand_GitScopesCredential(t *testing.T) {
+	isolateGit(t)
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "credential.helper")
+	t.Setenv("GIT_CONFIG_VALUE_0", "!f() { echo username=user; echo password=user-secret; }; f")
+
+	_, env, err := cloneCommand(&CloneOptions{Host: "app.copia.io", Token: "test-token", Repo: "o/r"}, 1)
+	require.NoError(t, err)
+
+	credential := func(action, input string) string {
+		cmd := exec.Command("git", "credential", action)
+		cmd.Dir = t.TempDir()
+		cmd.Env = append(os.Environ(), env...)
+		cmd.Stdin = strings.NewReader(input)
+		out, _ := cmd.Output()
+		return string(out)
+	}
+	fill := func(target string) string { return credential("fill", "url="+target+"\n\n") }
+
+	for _, target := range []string{
+		"https://app.copia.io/o/r.git",
+		"https://APP.copia.io/o/r.git",
+		"https://app.copia.io:443/o/r.git",
+	} {
+		got := fill(target)
+		assert.Contains(t, got, "username=token\n", target)
+		assert.Contains(t, got, "password=test-token\n", target)
+		assert.NotContains(t, got, "user-secret", target)
+	}
+	for _, target := range []string{
+		"https://other.example/o/r.git",
+		"https://app.copia.io.evil.example/o/r.git",
+		"http://app.copia.io/o/r.git",
+		"https://app.copia.io:8443/o/r.git",
+	} {
+		got := fill(target)
+		assert.NotContains(t, got, "test-token", target)
+		assert.Contains(t, got, "password=user-secret\n", target)
+	}
+
+	for _, action := range []string{"approve", "reject"} {
+		assert.Empty(t, credential(action, "url=https://app.copia.io/o/r.git\nusername=token\npassword=test-token\n\n"), action)
+	}
+}
+
+// gitBackend serves the repositories under root through git http-backend.
+func gitBackend(t *testing.T, root string) http.Handler {
+	t.Helper()
+	// Run git-http-backend directly: the CGI environment has no
+	// GIT_EXEC_PATH, and some git packages (Alpine) only ship it with
+	// git-daemon.
+	backend := filepath.Join(runGit(t, "--exec-path"), "git-http-backend")
+	return &cgi.Handler{
+		Path: backend,
+		Env:  []string{"GIT_PROJECT_ROOT=" + root, "GIT_HTTP_EXPORT_ALL=1", "GIT_CONFIG_NOSYSTEM=1"},
+	}
+}
+
+func unauthorized(w http.ResponseWriter) {
+	w.Header().Set("WWW-Authenticate", `Basic realm="copia"`)
+	http.Error(w, "unauthorized", http.StatusUnauthorized)
+}
+
+// trustTestCert makes git trust the certificate httptest.NewTLSServer uses
+// (the same for every test server) through a GIT_CONFIG_* entry, which
+// CloneRun must keep.
+func trustTestCert(t *testing.T, srv *httptest.Server) {
+	t.Helper()
+	caFile := filepath.Join(t.TempDir(), "ca.pem")
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+	require.NoError(t, os.WriteFile(caFile, pemBytes, 0o600))
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "http.sslCAInfo")
+	t.Setenv("GIT_CONFIG_VALUE_0", caFile)
+}
+
+var testBasicAuth = "Basic " + base64.StdEncoding.EncodeToString([]byte("token:test-token"))
+
+func TestCloneRun_TokenToConfiguredHost(t *testing.T) {
+	isolateGit(t)
+	backend := gitBackend(t, newBareRepo(t))
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != testBasicAuth {
+			unauthorized(w)
+			return
+		}
+		backend.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+	trustTestCert(t, srv)
+	work := t.TempDir()
+	t.Chdir(work)
+	ios, _, _, _ := iostreams.Test()
+
+	host := strings.TrimPrefix(srv.URL, "https://")
+	err := CloneRun(&CloneOptions{IO: ios, Host: host, Token: "test-token", Repo: "my-org/my-repo"})
+	require.NoError(t, err)
+	assert.Equal(t, srv.URL+"/my-org/my-repo.git", storedOrigin(t, filepath.Join(work, "my-repo")))
+}
+
+// TestCloneRun_RedirectGetsNoToken pins that a redirect from the configured
+// host to another origin does not carry the token: not on the redirected
+// request and not on the requests git then sends to the new origin. The
+// configured host may ask for the token before redirecting (authFirst), and
+// the other origin may serve the repository anonymously or ask for
+// credentials (otherAuth), which git must then have none for.
+func TestCloneRun_RedirectGetsNoToken(t *testing.T) {
+	for _, tt := range []struct{ authFirst, otherAuth bool }{
+		{false, false}, {true, false}, {false, true}, {true, true},
+	} {
+		t.Run(fmt.Sprintf("authFirst=%v/otherAuth=%v", tt.authFirst, tt.otherAuth), func(t *testing.T) {
+			isolateGit(t)
+			backend := gitBackend(t, newBareRepo(t))
+
+			var mu sync.Mutex
+			var leaked []string
+			other := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if auth := r.Header.Get("Authorization"); auth != "" {
+					mu.Lock()
+					leaked = append(leaked, r.Method+" "+r.URL.Path+": "+auth)
+					mu.Unlock()
+				} else if tt.otherAuth {
+					unauthorized(w)
+					return
+				}
+				backend.ServeHTTP(w, r)
+			}))
+			defer other.Close()
+
+			var authed atomic.Bool
+			configured := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get("Authorization") == testBasicAuth {
+					authed.Store(true)
+				} else if tt.authFirst {
+					unauthorized(w)
+					return
+				}
+				http.Redirect(w, r, other.URL+r.URL.RequestURI(), http.StatusFound)
+			}))
+			defer configured.Close()
+
+			trustTestCert(t, configured)
+			work := t.TempDir()
+			t.Chdir(work)
+			ios, _, _, stderr := iostreams.Test()
+
+			host := strings.TrimPrefix(configured.URL, "https://")
+			err := CloneRun(&CloneOptions{IO: ios, Host: host, Token: "test-token", Repo: "my-org/my-repo"})
+			switch {
+			case tt.otherAuth:
+				// git has no credential for the other origin and may not prompt.
+				require.Error(t, err, stderr.String())
+			case !tt.authFirst:
+				// The anonymous redirect is followed, without the token.
+				require.NoError(t, err, stderr.String())
+			}
+			// With authFirst and an anonymous other origin, git POSTs to the
+			// configured host again, which redirects, so the clone fails;
+			// only the leak check matters there.
+			assert.Equal(t, tt.authFirst, authed.Load(), "token sent to the configured host")
+			mu.Lock()
+			defer mu.Unlock()
+			assert.Empty(t, leaked, "Authorization sent to the other origin")
+		})
+	}
+}
+
+// TestCloneCommand_GitScopesCredentialIPv6 checks with the real git that the
+// bracketed IPv6 key matches the configured address and port only.
+func TestCloneCommand_GitScopesCredentialIPv6(t *testing.T) {
+	isolateGit(t)
+	_, env, err := cloneCommand(&CloneOptions{Host: "[::1]:8443", Token: "test-token", Repo: "o/r"}, 0)
+	require.NoError(t, err)
+
+	fill := func(target string) string {
+		cmd := exec.Command("git", "credential", "fill")
+		cmd.Dir = t.TempDir()
+		cmd.Env = append(os.Environ(), env...)
+		cmd.Stdin = strings.NewReader("url=" + target + "\n\n")
+		out, _ := cmd.Output()
+		return string(out)
+	}
+
+	assert.Contains(t, fill("https://[::1]:8443/o/r.git"), "password=test-token\n")
+	assert.NotContains(t, fill("https://[::1]:9443/o/r.git"), "test-token")
+	assert.NotContains(t, fill("https://[::1]/o/r.git"), "test-token")
 }
