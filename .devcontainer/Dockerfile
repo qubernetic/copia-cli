@@ -4,7 +4,7 @@ FROM golang:1.26.9-alpine
 
 ARG GOLANGCI_LINT_VERSION=v2.15.0
 
-RUN apk add --no-cache git build-base
+RUN apk add --no-cache git git-daemon build-base
 
 # Built with the image's Go, so the linter understands the go.mod Go version. The module proxy
 # checksum database verifies the pinned version.
