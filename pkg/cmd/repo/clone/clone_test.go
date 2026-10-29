@@ -2,6 +2,7 @@ package clone
 
 import (
 	"encoding/base64"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -31,7 +32,19 @@ func TestBuildCloneURL_OtherSchemePassthrough(t *testing.T) {
 
 const testToken = "s3cret-tok"
 
-var wantHeader = "Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte("token:"+testToken))
+// helperEnv is the environment cloneCommand adds for a token sent to the
+// host whose credential config key is key, after existing entries.
+func helperEnv(key string, existing int) []string {
+	return []string{
+		"GIT_TERMINAL_PROMPT=0",
+		"COPIA_CLONE_TOKEN=" + testToken,
+		fmt.Sprintf("GIT_CONFIG_COUNT=%d", existing+2),
+		fmt.Sprintf("GIT_CONFIG_KEY_%d=%s", existing, key),
+		fmt.Sprintf("GIT_CONFIG_VALUE_%d=", existing),
+		fmt.Sprintf("GIT_CONFIG_KEY_%d=%s", existing+1, key),
+		fmt.Sprintf("GIT_CONFIG_VALUE_%d=%s", existing+1, credentialHelper),
+	}
+}
 
 func assertNoToken(t *testing.T, args, env []string) {
 	t.Helper()
@@ -64,7 +77,7 @@ func TestCloneCommand_TokenOnlyForConfiguredHost(t *testing.T) {
 	}
 }
 
-func TestCloneCommand_HeaderForConfiguredHost(t *testing.T) {
+func TestCloneCommand_HelperForConfiguredHost(t *testing.T) {
 	tests := []struct {
 		host    string
 		repo    string
@@ -72,11 +85,11 @@ func TestCloneCommand_HeaderForConfiguredHost(t *testing.T) {
 		wantURL string
 		wantKey string
 	}{
-		{host: "app.copia.io", repo: "my-org/my-repo", wantURL: "https://app.copia.io/my-org/my-repo.git", wantKey: "http.https://app.copia.io/.extraHeader"},
-		{host: "app.copia.io", repo: "https://APP.copia.io/o/r.git", wantURL: "https://APP.copia.io/o/r.git", wantKey: "http.https://app.copia.io/.extraHeader"},
-		{host: "app.copia.io", repo: "https://app.copia.io:443/o/r.git", dir: "target", wantURL: "https://app.copia.io:443/o/r.git", wantKey: "http.https://app.copia.io/.extraHeader"},
-		{host: "App.Copia.io", repo: "https://app.copia.io/o/r.git", wantURL: "https://app.copia.io/o/r.git", wantKey: "http.https://app.copia.io/.extraHeader"},
-		{host: "copia.local:8443", repo: "https://copia.local:8443/o/r.git", wantURL: "https://copia.local:8443/o/r.git", wantKey: "http.https://copia.local:8443/.extraHeader"},
+		{host: "app.copia.io", repo: "my-org/my-repo", wantURL: "https://app.copia.io/my-org/my-repo.git", wantKey: "credential.https://app.copia.io.helper"},
+		{host: "app.copia.io", repo: "https://APP.copia.io/o/r.git", wantURL: "https://APP.copia.io/o/r.git", wantKey: "credential.https://app.copia.io.helper"},
+		{host: "app.copia.io", repo: "https://app.copia.io:443/o/r.git", dir: "target", wantURL: "https://app.copia.io:443/o/r.git", wantKey: "credential.https://app.copia.io.helper"},
+		{host: "App.Copia.io", repo: "https://app.copia.io/o/r.git", wantURL: "https://app.copia.io/o/r.git", wantKey: "credential.https://app.copia.io.helper"},
+		{host: "copia.local:8443", repo: "https://copia.local:8443/o/r.git", wantURL: "https://copia.local:8443/o/r.git", wantKey: "credential.https://copia.local:8443.helper"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.repo, func(t *testing.T) {
@@ -90,24 +103,14 @@ func TestCloneCommand_HeaderForConfiguredHost(t *testing.T) {
 			for _, a := range args {
 				assert.NotContains(t, a, testToken)
 			}
-			assert.Equal(t, []string{
-				"GIT_TERMINAL_PROMPT=0",
-				"GIT_CONFIG_COUNT=1",
-				"GIT_CONFIG_KEY_0=" + tt.wantKey,
-				"GIT_CONFIG_VALUE_0=" + wantHeader,
-			}, env)
+			assert.Equal(t, helperEnv(tt.wantKey, 0), env)
 		})
 	}
 }
 
 func TestCloneCommand_KeepsExistingConfigEntries(t *testing.T) {
 	_, env := cloneCommand(&CloneOptions{Host: "app.copia.io", Token: testToken, Repo: "o/r"}, 3)
-	assert.Equal(t, []string{
-		"GIT_TERMINAL_PROMPT=0",
-		"GIT_CONFIG_COUNT=4",
-		"GIT_CONFIG_KEY_3=http.https://app.copia.io/.extraHeader",
-		"GIT_CONFIG_VALUE_3=" + wantHeader,
-	}, env)
+	assert.Equal(t, helperEnv("credential.https://app.copia.io.helper", 3), env)
 }
 
 func TestCloneCommand_NoTokenConfigured(t *testing.T) {
@@ -115,7 +118,7 @@ func TestCloneCommand_NoTokenConfigured(t *testing.T) {
 		args, env := cloneCommand(&CloneOptions{Host: "app.copia.io", Repo: repo}, 0)
 		assert.Equal(t, []string{"GIT_TERMINAL_PROMPT=0"}, env)
 		for _, s := range append(args, env...) {
-			assert.False(t, strings.Contains(s, "extraHeader") || strings.Contains(s, "Authorization") || strings.Contains(s, "@app.copia.io"), s)
+			assert.False(t, strings.Contains(s, "credential") || strings.Contains(s, "COPIA_CLONE_TOKEN") || strings.Contains(s, "@app.copia.io"), s)
 		}
 	}
 }

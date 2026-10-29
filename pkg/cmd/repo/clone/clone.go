@@ -1,7 +1,6 @@
 package clone
 
 import (
-	"encoding/base64"
 	"fmt"
 	"net/url"
 	"os"
@@ -82,11 +81,19 @@ func CloneRun(opts *CloneOptions) error {
 	return gitCmd.Run()
 }
 
+// credentialHelper answers git's `get` with the token from
+// COPIA_CLONE_TOKEN and ignores `store` and `erase`, so git keeps no copy
+// of it. The token is read from the environment, never the command line.
+const credentialHelper = `!f() { test "$1" = get || return 0; printf 'username=token\npassword=%s\n' "$COPIA_CLONE_TOKEN"; }; f`
+
 // cloneCommand returns the git arguments and the environment entries to add
 // for a clone. The token never goes into the arguments: when the URL points
-// at the configured host over https, it travels as an Authorization header
-// that git's config scopes to that host. existing is the number of
-// GIT_CONFIG_* entries already in the environment, which are kept.
+// at the configured host over https, git gets it from credentialHelper,
+// which git's config scopes to that host. The first, empty helper entry
+// drops the user's helpers for that host only. git asks for the credential
+// per origin, so after a redirect to another origin it has none to send.
+// existing is the number of GIT_CONFIG_* entries already in the
+// environment, which are kept.
 func cloneCommand(opts *CloneOptions, existing int) (args, env []string) {
 	cloneURL := buildCloneURL(opts.Host, opts.Repo)
 
@@ -100,11 +107,14 @@ func cloneCommand(opts *CloneOptions, existing int) (args, env []string) {
 		return args, env
 	}
 
-	credential := base64.StdEncoding.EncodeToString([]byte("token:" + opts.Token))
+	key := fmt.Sprintf("credential.https://%s.helper", strings.ToLower(opts.Host))
 	env = append(env,
-		fmt.Sprintf("GIT_CONFIG_COUNT=%d", existing+1),
-		fmt.Sprintf("GIT_CONFIG_KEY_%d=http.https://%s/.extraHeader", existing, strings.ToLower(opts.Host)),
-		fmt.Sprintf("GIT_CONFIG_VALUE_%d=Authorization: Basic %s", existing, credential),
+		"COPIA_CLONE_TOKEN="+opts.Token,
+		fmt.Sprintf("GIT_CONFIG_COUNT=%d", existing+2),
+		fmt.Sprintf("GIT_CONFIG_KEY_%d=%s", existing, key),
+		fmt.Sprintf("GIT_CONFIG_VALUE_%d=", existing),
+		fmt.Sprintf("GIT_CONFIG_KEY_%d=%s", existing+1, key),
+		fmt.Sprintf("GIT_CONFIG_VALUE_%d=%s", existing+1, credentialHelper),
 	)
 	return args, env
 }
