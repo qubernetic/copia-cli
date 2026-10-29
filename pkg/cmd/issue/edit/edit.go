@@ -91,7 +91,7 @@ fails before the issue is changed.`,
 			}
 			opts.Owner = owner
 			opts.Repo = repo
-			opts.HTTPClient = &http.Client{}
+			opts.HTTPClient = cmdutil.NewHTTPClient()
 			return EditRun(opts)
 		},
 	}

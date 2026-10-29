@@ -33,7 +33,7 @@ func NewCmdStatus(f *cmdutil.Factory) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.IO = f.IOStreams
 			opts.ConfigPath = config.DefaultPath()
-			opts.HTTPClient = &http.Client{}
+			opts.HTTPClient = cmdutil.NewHTTPClient()
 			opts.Host = f.Host
 			return StatusRun(opts)
 		},

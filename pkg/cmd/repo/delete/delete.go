@@ -43,7 +43,7 @@ func NewCmdDelete(f *cmdutil.Factory) *cobra.Command {
 				return err
 			}
 			opts.Owner, opts.Repo = owner, repo
-			opts.HTTPClient = &http.Client{}
+			opts.HTTPClient = cmdutil.NewHTTPClient()
 			return DeleteRun(opts)
 		},
 	}

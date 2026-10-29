@@ -61,7 +61,7 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 			}
 			opts.Host = host
 			opts.Token = token
-			opts.HTTPClient = &http.Client{}
+			opts.HTTPClient = cmdutil.NewHTTPClient()
 			return CreateRun(opts)
 		},
 	}

@@ -134,8 +134,8 @@ func StringResponse(status int, body string) Responder {
 }
 
 // ReplaceDefaultTransport routes http.DefaultTransport through rt for the
-// duration of the test, so commands that build a plain &http.Client{} hit the
-// registry. Tests that use it must not run in parallel.
+// duration of the test, so commands whose client has no Transport (such as
+// cmdutil.NewHTTPClient) hit the registry. Tests that use it must not run in parallel.
 func ReplaceDefaultTransport(t *testing.T, rt http.RoundTripper) {
 	t.Helper()
 	orig := http.DefaultTransport

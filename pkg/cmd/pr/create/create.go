@@ -129,7 +129,7 @@ command exits with an error.`,
 			}
 			opts.Owner = owner
 			opts.Repo = repo
-			opts.HTTPClient = &http.Client{}
+			opts.HTTPClient = cmdutil.NewHTTPClient()
 			return CreateRun(opts)
 		},
 	}

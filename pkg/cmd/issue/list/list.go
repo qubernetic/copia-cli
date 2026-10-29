@@ -85,7 +85,7 @@ Use --limit to control how many issues are returned (default 30).`,
 			}
 			opts.Owner = owner
 			opts.Repo = repo
-			opts.HTTPClient = &http.Client{}
+			opts.HTTPClient = cmdutil.NewHTTPClient()
 			return ListRun(opts)
 		},
 	}

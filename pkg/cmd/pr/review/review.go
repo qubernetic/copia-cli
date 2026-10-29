@@ -82,7 +82,7 @@ func NewCmdReview(f *cmdutil.Factory) *cobra.Command {
 				return fmt.Errorf("specify --approve, --request-changes, or --comment")
 			}
 
-			opts.HTTPClient = &http.Client{}
+			opts.HTTPClient = cmdutil.NewHTTPClient()
 			return ReviewRun(opts)
 		},
 	}

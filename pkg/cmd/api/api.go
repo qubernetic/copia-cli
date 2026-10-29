@@ -127,7 +127,7 @@ An error response is printed unfiltered.`,
 			}
 			opts.Host = host
 			opts.Token = token
-			opts.HTTPClient = &http.Client{}
+			opts.HTTPClient = cmdutil.NewHTTPClient()
 			return APIRun(opts)
 		},
 	}

@@ -58,7 +58,7 @@ Use --limit to control how many notifications are returned (default 30).`,
 			}
 			opts.Host = host
 			opts.Token = token
-			opts.HTTPClient = &http.Client{}
+			opts.HTTPClient = cmdutil.NewHTTPClient()
 			return ListRun(opts)
 		},
 	}
