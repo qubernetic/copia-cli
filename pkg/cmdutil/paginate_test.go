@@ -3,6 +3,7 @@ package cmdutil
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -245,4 +246,125 @@ func TestFetchFilteredPages_StopsOnShortPageWithoutLink(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []item{{N: 2}, {N: 4}, {N: 6}}, items)
 	assert.Equal(t, []string{"1/50"}, requestedPages(reg))
+}
+
+const linkedURL = "https://app.copia.io/api/v1/repos/o/r/issues?state=open"
+
+// linkedPage registers page n of a listing whose Link header names next as
+// the following page; next 0 ends the listing.
+func linkedPage(reg *httpmock.Registry, n, next int, body string) {
+	query := url.Values{"page": nil}
+	if n > 1 {
+		query = url.Values{"page": {fmt.Sprint(n)}}
+	}
+	responder := httpmock.StringResponse(http.StatusOK, body)
+	if next > 0 {
+		responder = httpmock.WithHeader(responder, "Link", fmt.Sprintf(
+			`<https://app.copia.io/api/v1/repos/o/r/issues?state=open&page=%d>; rel="next",<https://app.copia.io/api/v1/repos/o/r/issues?state=open&page=9>; rel="last"`, next))
+	}
+	reg.Register(httpmock.QueryMatcher("GET", "/issues", query), responder)
+}
+
+func newLinkedRequest(t *testing.T) *http.Request {
+	t.Helper()
+	req, err := http.NewRequest("GET", linkedURL, nil)
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "token test-token")
+	req.Header.Set("X-Custom", "kept")
+	return req
+}
+
+// collectBodies is a page callback that keeps every body.
+func collectBodies(bodies *[]string) func(*http.Response) error {
+	return func(resp *http.Response) error {
+		b, err := io.ReadAll(resp.Body)
+		*bodies = append(*bodies, string(b))
+		return err
+	}
+}
+
+func TestFollowLinkPages_FollowsNextUntilNone(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	linkedPage(reg, 1, 2, `[1]`)
+	linkedPage(reg, 2, 3, `[2]`)
+	linkedPage(reg, 3, 0, `[3]`)
+
+	var bodies []string
+	err := FollowLinkPages(&http.Client{Transport: reg}, newLinkedRequest(t), collectBodies(&bodies))
+	require.NoError(t, err)
+	assert.Equal(t, []string{`[1]`, `[2]`, `[3]`}, bodies)
+	require.Len(t, reg.Requests, 3)
+	for _, req := range reg.Requests {
+		assert.Equal(t, "GET", req.Method)
+		assert.Equal(t, "open", req.URL.Query().Get("state"))
+		assert.Equal(t, "token test-token", req.Header.Get("Authorization"))
+		assert.Equal(t, "kept", req.Header.Get("X-Custom"))
+	}
+}
+
+func TestFollowLinkPages_SinglePageWithoutLink(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	linkedPage(reg, 1, 0, `{"a":1}`)
+
+	var bodies []string
+	err := FollowLinkPages(&http.Client{Transport: reg}, newLinkedRequest(t), collectBodies(&bodies))
+	require.NoError(t, err)
+	assert.Equal(t, []string{`{"a":1}`}, bodies)
+}
+
+func TestFollowLinkPages_ResolvesRelativeLink(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	reg.Register(httpmock.QueryMatcher("GET", "/issues", url.Values{"page": nil}),
+		httpmock.WithHeader(httpmock.StringResponse(http.StatusOK, `[1]`), "Link", `</api/v1/repos/o/r/issues?page=9>; rel="last", </api/v1/repos/o/r/issues?page=2>; rel="next"`))
+	linkedPage(reg, 2, 0, `[2]`)
+
+	var bodies []string
+	err := FollowLinkPages(&http.Client{Transport: reg}, newLinkedRequest(t), collectBodies(&bodies))
+	require.NoError(t, err)
+	assert.Equal(t, []string{`[1]`, `[2]`}, bodies)
+	assert.Equal(t, "app.copia.io", reg.Requests[1].URL.Host)
+}
+
+func TestFollowLinkPages_RefusesOtherHost(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	reg.Register(httpmock.QueryMatcher("GET", "/issues", url.Values{"page": nil}),
+		httpmock.WithHeader(httpmock.StringResponse(http.StatusOK, `[1]`), "Link", `<https://evil.example/api/v1/repos/o/r/issues?page=2>; rel="next"`))
+
+	var bodies []string
+	err := FollowLinkPages(&http.Client{Transport: reg}, newLinkedRequest(t), collectBodies(&bodies))
+	require.EqualError(t, err, `refusing to follow the next page link to another host: "https://evil.example/api/v1/repos/o/r/issues?page=2"`)
+	assert.Equal(t, []string{`[1]`}, bodies, "the first page is still handed over")
+	assert.Len(t, reg.Requests, 1, "the token is never sent to the other host")
+}
+
+func TestFollowLinkPages_StopsOnCallbackError(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	linkedPage(reg, 1, 2, `[1]`)
+
+	err := FollowLinkPages(&http.Client{Transport: reg}, newLinkedRequest(t), func(*http.Response) error { return assert.AnError })
+	require.ErrorIs(t, err, assert.AnError)
+	assert.Len(t, reg.Requests, 1)
+}
+
+func TestFollowLinkPages_ConnectionError(t *testing.T) {
+	reg := &httpmock.Registry{}
+	err := FollowLinkPages(&http.Client{Transport: reg}, newLinkedRequest(t), func(*http.Response) error { return nil })
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "connecting to app.copia.io")
+}
+
+func TestFollowLinkPages_InvalidLink(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	reg.Register(httpmock.QueryMatcher("GET", "/issues", url.Values{"page": nil}),
+		httpmock.WithHeader(httpmock.StringResponse(http.StatusOK, `[1]`), "Link", "<http://[::1>; rel=\"next\""))
+
+	err := FollowLinkPages(&http.Client{Transport: reg}, newLinkedRequest(t), func(*http.Response) error { return nil })
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "parsing the next page link")
 }

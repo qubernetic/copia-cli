@@ -59,13 +59,40 @@ $ copia-cli repo list
 $ copia-cli repo list --visibility private
 
 # Create an issue
-$ copia-cli issue create --title "Fix sensor mapping" --label bug
+$ copia-cli issue create --title "Fix sensor mapping" --label bug --assignee @me --milestone v1.0
+
+# List the issues assigned to you in that milestone
+$ copia-cli issue list --assignee @me --milestone v1.0 --search "sensor"
+
+# Print only some fields as JSON, filter them with a jq expression, or format them with a Go template
+$ copia-cli issue list --json number,title
+$ copia-cli issue list --json number,title --jq '.[].title'
+$ copia-cli issue list --json number,title --template '{{range .}}{{tablerow .number .title}}{{end}}'
+
+# Move it to another milestone, by name or ID
+$ copia-cli issue edit 13 --milestone v1.1
+
+# Hand it over and drop a label
+$ copia-cli issue edit 13 --add-assignee jane --remove-assignee john --remove-label triage
 
 # Open a PR
 $ copia-cli pr create --title "feat: add safety interlock" --base develop
 
+# Open a draft PR from the current branch, title and body filled from its commits
+$ copia-cli pr create --fill --draft --base develop
+
+# Take the PR body from a file (or "-" for standard input)
+$ copia-cli pr create --title "docs: add manual" --base develop --body-file notes.md
+
+# Open a PR with metadata and request reviews from a person and a team
+$ copia-cli pr create --title "feat: add safety interlock" --base develop \
+    --assignee @me --label plc --milestone v1.0 --reviewer jane --reviewer my-org/controls
+
 # Merge it
 $ copia-cli pr merge 7 --merge --delete-branch --body "Tested on the line 3 PLC"
+
+# Call any API endpoint: fetch every page and keep only the titles
+$ copia-cli api --paginate /repos/my-org/my-repo/issues --jq '.[].title'
 ```
 
 ## Shell Completion

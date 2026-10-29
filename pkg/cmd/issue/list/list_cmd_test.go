@@ -64,6 +64,28 @@ func TestNewCmdList_Flags(t *testing.T) {
 	assert.Equal(t, "closed", q.Get("state"))
 	assert.Equal(t, "5", q.Get("limit"))
 	assert.Equal(t, "bug", q.Get("labels"))
+	assert.False(t, q.Has("assigned_by"))
+	assert.False(t, q.Has("q"))
+}
+
+func TestNewCmdList_FilterFlags(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+	reg.Register(httpmock.REST("GET", "/api/v1/user"), httpmock.StringResponse(http.StatusOK, `{"login":"me"}`))
+	reg.Register(httpmock.REST("GET", issuesPath), httpmock.StringResponse(http.StatusOK, `[]`))
+
+	ios, _, _, _ := iostreams.Test()
+	err := runCmd(t, readyFactory(ios), "-a", "@me", "-A", "jane", "--mention", "joe", "-m", "v1.0", "-S", "plc timeout")
+	require.NoError(t, err)
+
+	require.Len(t, reg.Requests, 2)
+	q := reg.Requests[1].URL.Query()
+	assert.Equal(t, "me", q.Get("assigned_by"))
+	assert.Equal(t, "jane", q.Get("created_by"))
+	assert.Equal(t, "joe", q.Get("mentioned_by"))
+	assert.Equal(t, "v1.0", q.Get("milestones"))
+	assert.Equal(t, "plc timeout", q.Get("q"))
 }
 
 func TestNewCmdList_AuthFailure(t *testing.T) {
@@ -148,4 +170,65 @@ func TestListRun_TableJoinsLabels(t *testing.T) {
 	require.NoError(t, ListRun(opts))
 	assert.Equal(t, "#7  Timer drift  closed  bug, plc, p1\n", stdout.String())
 	assert.Equal(t, "all", reg.Requests[0].URL.Query().Get("state"))
+}
+
+func TestNewCmdList_JSONFieldsAndJQ(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+	reg.Register(httpmock.REST("GET", issuesPath), httpmock.StringResponse(http.StatusOK,
+		`[{"number":3,"title":"T","state":"open","updated_at":"2026-03-30T10:00:00Z","labels":[]},
+		  {"number":4,"title":"U","state":"open","updated_at":"2026-03-30T10:00:00Z","labels":[]}]`))
+
+	ios, _, stdout, _ := iostreams.Test()
+	require.NoError(t, runCmd(t, readyFactory(ios), "--json", "number,title", "--jq", ".[].title"))
+	assert.Equal(t, "T\nU\n", stdout.String())
+
+	stdout.Reset()
+	require.NoError(t, runCmd(t, readyFactory(ios), "--json", "number,title"))
+	assert.Equal(t, `[
+  {
+    "number": 3,
+    "title": "T"
+  },
+  {
+    "number": 4,
+    "title": "U"
+  }
+]
+`, stdout.String())
+}
+
+func TestNewCmdList_JSONErrors(t *testing.T) {
+	ios, _, _, _ := iostreams.Test()
+	err := runCmd(t, readyFactory(ios), "--json", "number,author")
+	require.ErrorContains(t, err, "unknown JSON field: \"author\"\nAvailable fields:\n  number\n  title\n  state\n  labels\n  updated_at")
+
+	err = runCmd(t, readyFactory(ios), "--jq", ".[].title")
+	require.EqualError(t, err, "cannot use `--jq` without specifying `--json`")
+
+	err = runCmd(t, readyFactory(ios), "--json", "title", "--jq", ".[")
+	require.ErrorContains(t, err, "invalid --jq expression")
+}
+
+func TestNewCmdList_JSONTemplate(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+	reg.Register(httpmock.REST("GET", issuesPath), httpmock.StringResponse(http.StatusOK,
+		`[{"number":3,"title":"T","state":"open","updated_at":"2026-03-30T10:00:00Z","labels":[]},
+		  {"number":4,"title":"U","state":"open","updated_at":"2026-03-30T10:00:00Z","labels":[]}]`))
+
+	ios, _, stdout, _ := iostreams.Test()
+	require.NoError(t, runCmd(t, readyFactory(ios), "--json", "number", "--template", `{{range .}}{{.number}}{{"\n"}}{{end}}`))
+	assert.Equal(t, "3\n4\n", stdout.String())
+
+	err := runCmd(t, readyFactory(ios), "--template", "{{.}}")
+	require.EqualError(t, err, "cannot use `--template` without specifying `--json`")
+
+	err = runCmd(t, readyFactory(ios), "--json", "title", "--jq", ".", "--template", "{{.}}")
+	require.EqualError(t, err, "cannot use `--jq` and `--template` together")
+
+	err = runCmd(t, readyFactory(ios), "--json", "title", "--template", "{{range .}}")
+	require.ErrorContains(t, err, "invalid --template")
 }

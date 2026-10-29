@@ -224,3 +224,15 @@ func TestNewCmdView_CommentsWithJSON(t *testing.T) {
 	require.EqualError(t, err, "specify only one of --comments or --json")
 	assert.Empty(t, reg.Requests)
 }
+
+func TestNewCmdView_JSONFieldsAndJQ(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+	reg.Register(httpmock.REST("GET", issuePath), httpmock.StringResponse(http.StatusOK,
+		`{"number":12,"title":"Bug","state":"open","body":"b","html_url":"https://x/12","user":{"login":"amy"},"labels":[],"comments":2}`))
+
+	ios, _, stdout, _ := iostreams.Test()
+	require.NoError(t, runCmd(t, readyFactory(ios), "12", "--json", "user,html_url,comments", "--jq", ".user.login, .html_url, .comments"))
+	assert.Equal(t, "amy\nhttps://x/12\n2\n", stdout.String())
+}

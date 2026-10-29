@@ -101,7 +101,7 @@ func TestListRun_JSON(t *testing.T) {
 		Host:       "app.copia.io",
 		Token:      "test-token",
 		Limit:      30,
-		JSON:       cmdutil.JSONFlags{Fields: []string{"fullName", "description"}},
+		JSON:       cmdutil.JSONFlags{Fields: []string{"full_name", "description"}},
 	}
 
 	err := ListRun(opts)

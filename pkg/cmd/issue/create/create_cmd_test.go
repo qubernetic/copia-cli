@@ -47,6 +47,21 @@ func TestNewCmdCreate_RunsWithFlags(t *testing.T) {
 	assert.Equal(t, "Created issue #13: Fix sensor mapping\nhttps://app.copia.io/my-org/my-repo/issues/13\n", stdout.String())
 }
 
+func TestNewCmdCreate_AssigneeAndMilestoneFlags(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+
+	reg.Register(httpmock.REST("GET", "/api/v1/repos/my-org/my-repo/milestones/1"), httpmock.StringResponse(http.StatusOK, `{"id":1,"title":"Sprint 1"}`))
+	var posted string
+	reg.Register(httpmock.REST("POST", issuesPath), recordBody(&posted, httpmock.StringResponse(http.StatusCreated, createdIssue)))
+
+	ios, _, _, _ := iostreams.Test()
+	err := runCmd(t, readyFactory(ios), "--title", "Fix sensor mapping", "-a", "john", "--assignee", "jane", "-m", "1")
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"title":"Fix sensor mapping","assignees":["john","jane"],"milestone":1}`, posted)
+}
+
 func TestNewCmdCreate_AuthFailure(t *testing.T) {
 	t.Setenv("COPIA_TOKEN", "")
 	t.Setenv("COPIA_HOST", "")

@@ -11,7 +11,7 @@ import (
 	"github.com/qubernetic/copia-cli/pkg/iostreams"
 )
 
-var validJSONFields = []string{"full_name", "description", "private", "default_branch", "stars", "forks", "open_issues_count"}
+var validJSONFields = []string{"full_name", "description", "html_url", "private", "default_branch", "stars_count", "forks_count", "open_issues_count"}
 
 // ViewOptions holds all inputs for the repo view command.
 type ViewOptions struct {
@@ -117,7 +117,7 @@ func ViewRun(opts *ViewOptions) error {
 	}
 
 	if opts.JSON.IsJSON() {
-		return cmdutil.PrintJSON(opts.IO.Out, repo)
+		return opts.JSON.Print(opts.IO.Out, repo)
 	}
 
 	visibility := "public"

@@ -23,6 +23,7 @@ You can find installation instructions on our [README](https://github.com/qubern
 
 ```bash
 $ copia-cli issue list
+$ copia-cli issue list --assignee @me --milestone v1.0
 $ copia-cli issue create --label bug
 $ copia-cli repo view my-org/my-repo
 ```

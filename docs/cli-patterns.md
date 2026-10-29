@@ -733,3 +733,31 @@ Apply these patterns:
 - ✓ Makefile: build via Go script with `-ldflags` for version
 - ✓ GoReleaser: multi-arch builds with version injection
 
+### Output flags: `--json`, `--jq` and `--template`
+
+Every command with machine-readable output registers the three flags with one call and prints through the exporter in `pkg/cmdutil/json.go`:
+
+```go
+var validJSONFields = []string{"number", "title", "state", "labels", "updated_at"}
+
+cmdutil.AddJSONFlags(cmd, &opts.JSON, validJSONFields)
+
+// in the Run function
+if opts.JSON.IsJSON() {
+	return opts.JSON.Print(opts.IO.Out, issues)
+}
+```
+
+- The valid fields are the JSON keys the command prints (the tags of its output struct), so `--json user` prints the `user` key. Keep the list in step with the struct.
+- `--json` takes a comma-separated list and can be repeated. An unknown field fails while the flags are parsed, before any request, with the list of available fields.
+- `Print` keeps only the requested keys: an array of objects for a list, one object for a view. Numbers keep every digit (the output is decoded with `json.Number`).
+- `--jq/-q` runs the expression with `github.com/itchyny/gojq`, the library `gh` uses, on that filtered output. Each result goes on its own line: a string raw, `null` as an empty line, anything else as compact JSON, as in `gh`. `--jq` without `--json` and an expression that does not parse fail before any request (a `PreRunE` that `AddJSONFlags` adds in front of any existing one).
+- `cmdutil.FilterJQ(w, input, expr)` is the `--jq` part on its own, for output that does not come from `--json` (for example `api`).
+- `--template/-t` runs a Go `text/template` (`missingkey=zero`) on the same filtered output, as `gh` does, with the `gh` helpers that do not print color, in `pkg/cmdutil/template.go`:
+  - `join <sep> <list>` joins the scalars of a list, skipping `null`;
+  - `pluck <field> <list>` takes one field of each object in a list;
+  - `truncate <width> <string>` cuts to `width` characters, ending in `...` from a width of 5;
+  - `timeago <RFC 3339 time>` prints `just now`, `5 minutes ago`, `2 days ago` and so on;
+  - `tablerow <field>...` adds a row to a table whose columns are aligned with two spaces, printed by `tablerender` or, without it, at the end.
+- `--template` without `--json`, `--template` with `--jq`, and a template that does not parse (an unknown helper included) fail before any request. `cmdutil.ExecuteTemplate(w, data, tpl)` is the `--template` part on its own.
+

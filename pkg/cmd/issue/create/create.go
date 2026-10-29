@@ -24,12 +24,16 @@ type CreateOptions struct {
 	Title      string
 	Body       string
 	Labels     []string
+	Assignees  []string
+	Milestone  string
 }
 
 type createRequest struct {
-	Title  string   `json:"title"`
-	Body   string   `json:"body,omitempty"`
-	Labels []int64  `json:"labels,omitempty"`
+	Title     string   `json:"title"`
+	Body      string   `json:"body,omitempty"`
+	Labels    []int64  `json:"labels,omitempty"`
+	Assignees []string `json:"assignees,omitempty"`
+	Milestone int64    `json:"milestone,omitempty"`
 }
 
 type createResponse struct {
@@ -45,12 +49,20 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create an issue",
-		Long:  "Create an issue on Copia. The title is required; body and labels are optional.",
+		Long: `Create an issue on Copia. The title is required; body, labels, assignees and
+milestone are optional.
+
+--assignee takes a login and can be repeated; @me stands for the authenticated
+user. --milestone takes a milestone name or its numeric ID; an unknown
+milestone fails before the issue is created.`,
 		Example: `  # Create an issue with a label
   $ copia-cli issue create --title "Fix sensor mapping" --label bug
 
   # Create an issue with a body
-  $ copia-cli issue create --title "Add feature" --body "Description here"`,
+  $ copia-cli issue create --title "Add feature" --body "Description here"
+
+  # Assign yourself and set a milestone by name
+  $ copia-cli issue create --title "Fix sensor mapping" --assignee @me --milestone v1.0`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.IO = f.IOStreams
 			host, token, err := f.ResolveAuth()
@@ -74,6 +86,8 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 	cmd.Flags().StringVarP(&opts.Title, "title", "t", "", "Issue title (required)")
 	cmd.Flags().StringVarP(&opts.Body, "body", "b", "", "Issue body")
 	cmd.Flags().StringSliceVarP(&opts.Labels, "label", "l", nil, "Add labels by name (repository or organization labels)")
+	cmd.Flags().StringSliceVarP(&opts.Assignees, "assignee", "a", nil, "Assign people by their login. Use \"@me\" to self-assign")
+	cmd.Flags().StringVarP(&opts.Milestone, "milestone", "m", "", "Add the issue to a milestone by name or ID")
 
 	return cmd
 }
@@ -94,6 +108,20 @@ func CreateRun(opts *CreateOptions) error {
 			return err
 		}
 		payload.Labels = ids
+	}
+	if len(opts.Assignees) > 0 {
+		assignees, err := shared.ResolveAssignees(opts.HTTPClient, opts.Host, opts.Token, opts.Assignees)
+		if err != nil {
+			return err
+		}
+		payload.Assignees = assignees
+	}
+	if opts.Milestone != "" {
+		id, err := shared.ResolveMilestoneID(opts.HTTPClient, opts.Host, opts.Token, opts.Owner, opts.Repo, opts.Milestone)
+		if err != nil {
+			return err
+		}
+		payload.Milestone = id
 	}
 
 	body, err := json.Marshal(payload)

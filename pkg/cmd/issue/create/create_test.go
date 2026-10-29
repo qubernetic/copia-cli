@@ -138,3 +138,50 @@ func TestCreateRun_Labels_UnknownLabel(t *testing.T) {
 	require.EqualError(t, err, `label "x" not found in repository or organization`)
 	assert.Len(t, reg.Requests, 2, "no issue is created")
 }
+
+func TestCreateRun_AssigneesAndMilestone(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	reg.Register(httpmock.REST("GET", "/api/v1/user"), httpmock.StringResponse(http.StatusOK, `{"login":"dennis"}`))
+	reg.Register(httpmock.REST("GET", "/api/v1/repos/my-org/my-repo/milestones/v1.0"), httpmock.StringResponse(http.StatusOK, `{"id":4,"title":"v1.0"}`))
+	var posted string
+	reg.Register(
+		httpmock.REST("POST", "/api/v1/repos/my-org/my-repo/issues"),
+		recordBody(&posted, httpmock.StringResponse(http.StatusCreated, createdIssue)),
+	)
+
+	opts := labelOpts(reg)
+	opts.Assignees = []string{"@me", "jane"}
+	opts.Milestone = "v1.0"
+	err := CreateRun(opts)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"title":"Fix sensor mapping","assignees":["dennis","jane"],"milestone":4}`, posted)
+	assert.Len(t, reg.Requests, 3, "one GET /user, one milestone lookup, one create")
+}
+
+func TestCreateRun_AssigneeMeError(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	reg.Register(httpmock.REST("GET", "/api/v1/user"), httpmock.StringResponse(http.StatusUnauthorized, ``))
+
+	opts := labelOpts(reg)
+	opts.Assignees = []string{"@me"}
+	err := CreateRun(opts)
+	require.EqualError(t, err, "failed to resolve @me (HTTP 401)")
+	assert.Len(t, reg.Requests, 1, "no issue is created")
+}
+
+func TestCreateRun_UnknownMilestone(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	reg.Register(httpmock.REST("GET", "/api/v1/repos/my-org/my-repo/milestones/v9"), httpmock.StringResponse(http.StatusNotFound, `{"message":"not found"}`))
+
+	opts := labelOpts(reg)
+	opts.Milestone = "v9"
+	err := CreateRun(opts)
+	require.EqualError(t, err, `milestone "v9" not found in my-org/my-repo`)
+	assert.Len(t, reg.Requests, 1, "no issue is created")
+}

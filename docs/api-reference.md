@@ -93,6 +93,10 @@ POST   /repos/{owner}/{repo}/pulls/{index}/reviews/{id}     # Submit pending rev
 POST   /repos/{owner}/{repo}/pulls/{index}/requested_reviewers  # Request review
 ```
 
+`pr create --assignee`, `--label` and `--milestone` resolve `@me`, label names and the milestone like `issue create` (see Labels and Milestones) and send `assignees`, `labels` (IDs) and `milestone` (ID) in the create body. `pr create --reviewer` sends one `requested_reviewers` request after the create, with `reviewers` (logins) and `team_reviewers` (the team part of each `org/team` value); it works on older Gitea than the `reviewers` field of the create body.
+
+The create body has no draft field: Gitea treats a pull request as work in progress when its title starts with a WIP prefix (`WIP:` and `[WIP]` by default, case-insensitive). `pr create --draft` adds `WIP: ` to the title unless one of these is already there. `--body-file` and `--fill` are client-side: they only change the `title` and `body` that are sent.
+
 ### Issues
 
 ```
@@ -122,16 +126,21 @@ PATCH  /repos/{owner}/{repo}/labels/{id}           # Update label
 DELETE /repos/{owner}/{repo}/labels/{id}           # Delete label
 ```
 
-Issue endpoints take label IDs, not names. `issue create --label` and `issue edit --add-label` read every page of both the repo labels and the org labels and map names to IDs; a repo label wins over an org label of the same name. For a user-owned repository `/orgs/{owner}/labels` answers 404 and only repo labels are used.
+Issue endpoints take label IDs, not names. `issue create --label`, `issue edit --add-label`, `issue edit --remove-label` and `pr create --label` read every page of both the repo labels and the org labels and map names to IDs; a repo label wins over an org label of the same name. For a user-owned repository `/orgs/{owner}/labels` answers 404 and only repo labels are used.
 
 ### Milestones
 
 ```
 GET    /repos/{owner}/{repo}/milestones            # List milestones
+GET    /repos/{owner}/{repo}/milestones/{id}       # Get milestone (by ID or name)
 POST   /repos/{owner}/{repo}/milestones            # Create milestone
 PATCH  /repos/{owner}/{repo}/milestones/{id}       # Update milestone
 DELETE /repos/{owner}/{repo}/milestones/{id}       # Delete milestone
 ```
+
+Issue endpoints take a milestone ID. `issue create --milestone` and `issue edit --milestone` accept a name or an ID and resolve it with one `GET /repos/{owner}/{repo}/milestones/{name}`, which Gitea answers for both; a 404 fails before the issue is created or changed. `issue create --assignee @me` reads the login of the authenticated user with one `GET /user`.
+
+Gitea has no endpoint that adds or removes one assignee: `PATCH /repos/{owner}/{repo}/issues/{index}` replaces the `assignees` list. `issue edit --add-assignee` and `--remove-assignee` read the current list with `GET /repos/{owner}/{repo}/issues/{index}`, change it and send it whole; removing the last assignee sends `"assignees": []`.
 
 ### Releases
 

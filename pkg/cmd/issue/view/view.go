@@ -13,7 +13,7 @@ import (
 	"github.com/qubernetic/copia-cli/pkg/iostreams"
 )
 
-var validJSONFields = []string{"number", "title", "body", "state", "author", "labels", "created_at", "comments"}
+var validJSONFields = []string{"number", "title", "body", "state", "user", "labels", "created_at", "comments", "html_url"}
 
 // ViewOptions holds all inputs for the issue view command.
 type ViewOptions struct {
@@ -135,7 +135,7 @@ func ViewRun(opts *ViewOptions) error {
 	}
 
 	if opts.JSON.IsJSON() {
-		return cmdutil.PrintJSON(opts.IO.Out, issue)
+		return opts.JSON.Print(opts.IO.Out, issue)
 	}
 
 	var comments []shared.Comment

@@ -276,3 +276,24 @@ func TestNewCmdView_CommentsWithJSON(t *testing.T) {
 	require.EqualError(t, err, "specify only one of --comments or --json")
 	assert.Empty(t, reg.Requests)
 }
+
+func TestNewCmdView_JSONFieldsAndJQ(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+	registerPRWithBody(reg)
+
+	ios, _, stdout, _ := iostreams.Test()
+	require.NoError(t, runView(t, readyFactory(ios), "7", "--json", "number,user,html_url"))
+	assert.Equal(t, `{
+  "html_url": "https://app.copia.io/my-org/my-repo/pulls/7",
+  "number": 7,
+  "user": {
+    "login": "john"
+  }
+}
+`, stdout.String())
+
+	err := runView(t, readyFactory(ios), "7", "--json", "author")
+	require.ErrorContains(t, err, "unknown JSON field: \"author\"")
+}
