@@ -53,6 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `script/check-go-version.sh` prints a rejected value with the workflow-command encoding (`%` as `%25`, CR as `%0D`, LF as `%0A`), so a value with a line break can no longer put a second workflow command into the runner log. It also rejects version components with a leading zero or more than four digits, such as `01.27` (#271)
 - `script/check-sha256.sh` and `script/check-release-version.sh` print a rejected value with the same workflow-command encoding, so duplicate lines in `checksums.txt` can no longer put a second workflow command into the runner log. All three `script/check-*.sh` guards share the encoding in `script/lib/workflow-escape.sh` (#278)
 - `close-issues-on-merge.yml` moves to revision 2 of the organisation's canonical text (horde-ci baseline item 11): a closing keyword counts only at the start of a line of the PR body, optionally after a `-` or `*` list marker, so `security fix #32` inside a sentence no longer closes #32; an issue that cannot be closed fails the run instead of leaving a warning (#303)
+- `release upload` fails with `API error (HTTP <status>)` when the release lookup answers anything other than 200 or 404, as `release delete` does. A 401, 403 or 500 lookup no longer posts the file to `/releases/0/assets` and reports a misleading `uploading <file>: HTTP <status>` (#254)
 
 ### Changed
 
