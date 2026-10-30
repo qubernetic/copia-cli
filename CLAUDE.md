@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Copia CLI is a command-line interface for [Copia](https://copia.io) — the source control platform for industrial automation. Modeled after GitHub CLI (`gh`), built on the Gitea-compatible REST API. Phase 1-3 complete with 35+ subcommands across 11 command groups.
+Copia CLI is a command-line interface for [Copia](https://copia.io) — the source control platform for industrial automation. Modeled after GitHub CLI (`gh`), built on the Gitea-compatible REST API. Phase 1-3 complete with 35+ subcommands across 11 command groups plus `browse`.
 
 **Owner:** Qubernetic (AGPL-3.0 + Commercial)
 
@@ -81,7 +81,7 @@ copia-cli/
 Phase 1 (MVP): auth, repo list/view/clone, issue CRUD, pr CRUD, label list/create — **DONE**
 Phase 2: release CRUD, repo create/delete/fork, pr review/diff/checkout, issue edit, Homebrew tap — **DONE**
 Phase 3: `copia-cli api` escape hatch, search, orgs, notifications, `-R` flag, completion, Jekyll manual, AGPL license — **DONE**
-Phase 4: ~~winget~~, ~~COPR~~, ~~AUR~~, ~~Snap~~, OS keyring, aliases, browse, status dashboard, ssh-key, pr checks, changelog, collaborators
+Phase 4: ~~winget~~, ~~COPR~~, ~~AUR~~, ~~Snap~~, OS keyring, aliases, ~~browse~~, status dashboard, ssh-key, pr checks, changelog, collaborators
 
 **Out of scope:** workflow/run, codespace, copilot, project, cache, GUI
 

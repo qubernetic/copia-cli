@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--include/-i` on `api` prints the status line (such as `HTTP/1.1 200 OK`), the response headers sorted by name and a blank line before the body; a `204 No Content` response prints only these lines (#167)
 - `--paginate` on `api` follows the `rel="next"` entry of the `Link` header until there is none and prints the items of array pages as one array, as `gh api --paginate` does without `--slurp`; any other response is printed as is. A next link to another host is refused, so the token is never sent there. `--paginate` with a method other than GET, also the POST that fields default to, fails before any request (#322)
 - `--jq/-q <expression>` on `api` filters the response like `--jq` on the `--json` commands; with `--paginate` it runs on each page. An expression that does not compile fails before any request, and an error response is printed unfiltered (#322)
+- `browse [<number>]` opens the repository's web page, or with a number (`42` or `#42`) that issue or pull request (`/issues/<n>`, which Copia redirects for a pull request), as `gh browse` does. It takes `-R` and the host from `--host`, `COPIA_HOST` or the config, makes no API call and needs no token. `--no-browser/-n` prints the URL instead; on a terminal the command names the URL it opens. The browser is the command in `COPIA_BROWSER` or `BROWSER`, otherwise `xdg-open`, `open` or `rundll32` on Windows. File paths, `--branch`, `--commit`, `--settings` and `--wiki` are not supported (#43)
 
 ### Security
 
