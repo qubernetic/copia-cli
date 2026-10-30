@@ -39,7 +39,8 @@ port match it. Any other URL (another host, http, SSH) is cloned without
 credentials, and so is any other host the configured one redirects to. git
 gets the token from a credential helper scoped to the configured host,
 never from the clone URL or the command line, so it is not stored in the
-remote or in your credential store.`,
+remote or in your credential store. A token with a character outside
+printable ASCII, such as a line break, is refused before git runs.`,
 		Example: `  # Clone by owner/repo
   $ copia-cli repo clone my-org/my-repo
 
@@ -105,6 +106,9 @@ func cloneCommand(opts *CloneOptions, existing int) (args, env []string, err err
 	if err != nil {
 		return nil, nil, err
 	}
+	if !isPrintableASCII(opts.Token) {
+		return nil, nil, fmt.Errorf("invalid token: it may contain only printable ASCII characters")
+	}
 	cloneURL := buildCloneURL(opts.Host, opts.Repo)
 
 	args = []string{"clone", "--", cloneURL}
@@ -143,6 +147,18 @@ func parseHost(host string) (*url.URL, error) {
 		return nil, invalid
 	}
 	return u, nil
+}
+
+// isPrintableASCII reports whether s holds only characters from space to
+// tilde. credentialHelper prints the token as one password= line, so a line
+// break would add credential lines such as host= or url=.
+func isPrintableASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < ' ' || s[i] > '~' {
+			return false
+		}
+	}
+	return true
 }
 
 // credentialKey returns the git config key that scopes a credential helper
