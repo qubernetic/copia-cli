@@ -109,6 +109,55 @@ func isGitHubScript(uses string) bool {
 	return strings.HasPrefix(strings.ToLower(uses), "actions/github-script@")
 }
 
+var (
+	pinnedRef      = regexp.MustCompile(`^[^@\s]+@[0-9a-f]{40}$`)
+	versionComment = regexp.MustCompile(`^#\s*v\S+`)
+)
+
+// unpinnedUses returns one message per remote `uses:` of a workflow or action
+// (a job's reusable workflow, a job step or a `runs` step) that does not name
+// a full 40-character commit SHA followed by a `# v<version>` comment. Local
+// actions (`./`) and docker images (`docker://`) are left out.
+func unpinnedUses(file string, data []byte) ([]string, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil, fmt.Errorf("%s: %w", file, err)
+	}
+	if len(doc.Content) == 0 {
+		return nil, nil
+	}
+	var out []string
+	check := func(where string, uses *yaml.Node) {
+		if uses == nil || uses.Value == "" || strings.HasPrefix(uses.Value, "./") || strings.HasPrefix(uses.Value, "docker://") {
+			return
+		}
+		comment := strings.TrimSpace(uses.LineComment)
+		if pinnedRef.MatchString(uses.Value) && versionComment.MatchString(comment) {
+			return
+		}
+		out = append(out, fmt.Sprintf("%s: %s uses %s; pin it to a full 40-character commit SHA followed by a # v<version> comment", file, where, strings.TrimSpace(uses.Value+" "+comment)))
+	}
+	checkSteps := func(where string, steps *yaml.Node) {
+		if steps == nil {
+			return
+		}
+		for i, s := range steps.Content {
+			check(fmt.Sprintf("%s step %d", where, i+1), mappingValue(s, "uses"))
+		}
+	}
+
+	root := doc.Content[0]
+	if jobs := mappingValue(root, "jobs"); jobs != nil && jobs.Kind == yaml.MappingNode {
+		for j := 0; j+1 < len(jobs.Content); j += 2 {
+			where := fmt.Sprintf("job %q", jobs.Content[j].Value)
+			check(where, mappingValue(jobs.Content[j+1], "uses"))
+			checkSteps(where, mappingValue(jobs.Content[j+1], "steps"))
+		}
+	}
+	checkSteps("runs", mappingValue(mappingValue(root, "runs"), "steps"))
+	return out, nil
+}
+
 // localUses returns every `uses: ./<path>` of a workflow or action: the steps
 // of its jobs and of `runs`, and reusable workflows called by a job.
 func localUses(f actionFile) []string {
@@ -163,12 +212,32 @@ func localTargets(repo, file, uses string) ([]string, string) {
 	return targets, ""
 }
 
-// scanRepo checks every workflow under .github/workflows, every action under
-// .github/actions/* and every local action or reusable workflow they use,
-// following local actions that use local actions in turn. It returns one
-// message per expression in script source and per `uses: ./<path>` that names
-// no file.
+// scanRepo checks every file walkRepo visits. It returns one message per
+// expression in script source and per `uses: ./<path>` that names no file.
 func scanRepo(repo string) ([]string, error) {
+	return walkRepo(repo, func(file string, _ []byte, f actionFile) ([]string, error) {
+		return expressions(file, f), nil
+	})
+}
+
+// scanPins returns one message per remote `uses:` that is not pinned to a full
+// commit SHA with a version comment, in every file walkRepo visits. A local
+// path that names no file is left to scanRepo.
+func scanPins(repo string) ([]string, error) {
+	var offenders []string
+	_, err := walkRepo(repo, func(file string, data []byte, _ actionFile) ([]string, error) {
+		found, err := unpinnedUses(file, data)
+		offenders = append(offenders, found...)
+		return nil, err
+	})
+	return offenders, err
+}
+
+// walkRepo calls visit on every workflow under .github/workflows, every action
+// under .github/actions/* and every local action or reusable workflow they
+// use, following local actions that use local actions in turn. It returns the
+// messages visit returns and one per `uses: ./<path>` that names no file.
+func walkRepo(repo string, visit func(file string, data []byte, f actionFile) ([]string, error)) ([]string, error) {
 	var queue []string
 	for _, pattern := range []string{".github/workflows/*.y*ml", ".github/actions/*/action.y*ml"} {
 		matches, err := filepath.Glob(filepath.Join(repo, filepath.FromSlash(pattern)))
@@ -205,7 +274,11 @@ func scanRepo(repo string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		offenders = append(offenders, expressions(file, f)...)
+		found, err := visit(file, data, f)
+		if err != nil {
+			return nil, err
+		}
+		offenders = append(offenders, found...)
 		for _, uses := range localUses(f) {
 			targets, problem := localTargets(repo, file, uses)
 			if problem != "" {
@@ -461,6 +534,133 @@ jobs:
 				}
 			}
 		})
+	}
+}
+
+// TestRemoteActionsArePinned keeps every remote action and reusable workflow
+// on a full commit SHA with its release in a `# v<version>` comment: a tag or
+// a branch can be moved to other code after review, and a short SHA can
+// become ambiguous. The check covers every local action a workflow uses.
+func TestRemoteActionsArePinned(t *testing.T) {
+	offenders, err := scanPins(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range offenders {
+		t.Error(o)
+	}
+}
+
+func TestScanPins(t *testing.T) {
+	got, err := scanPins(writeRepo(t, map[string]string{
+		".github/workflows/ci.yml": `
+jobs:
+  build:
+    steps:
+      - uses: ./.github/actions/outer
+      - uses: ./missing
+`,
+		".github/actions/outer/action.yml": `
+runs:
+  using: composite
+  steps:
+    - uses: ./nested
+`,
+		"nested/action.yml": `
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v4
+`,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `nested/action.yml: runs step 1 uses actions/checkout@v4; pin it to a full 40-character commit SHA followed by a # v<version> comment`
+	if strings.Join(got, "\n") != want {
+		t.Errorf("scanPins() =\n%s\nwant:\n%s", strings.Join(got, "\n"), want)
+	}
+	if _, err := scanPins(t.TempDir()); err == nil {
+		t.Error("scanPins() succeeded without workflow files, want error")
+	}
+}
+
+func TestUnpinnedUses(t *testing.T) {
+	const sha = "3d3c42e5aac5ba805825da76410c181273ba90b1"
+	step := func(uses string) string {
+		return `
+jobs:
+  build:
+    steps:
+      - uses: ` + uses + `
+`
+	}
+	tests := []struct {
+		name string
+		yaml string
+		want []string
+	}{
+		{"full sha with version comment", step("actions/checkout@" + sha + " # v7.0.1"), nil},
+		{"tag", step("actions/checkout@v4"), []string{
+			`test.yml: job "build" step 1 uses actions/checkout@v4; pin it to a full 40-character commit SHA followed by a # v<version> comment`,
+		}},
+		{"no ref", step("actions/checkout"), []string{
+			`test.yml: job "build" step 1 uses actions/checkout; pin it to a full 40-character commit SHA followed by a # v<version> comment`,
+		}},
+		{"short sha", step("actions/checkout@3d3c42e # v7.0.1"), []string{
+			`test.yml: job "build" step 1 uses actions/checkout@3d3c42e # v7.0.1; pin it to a full 40-character commit SHA followed by a # v<version> comment`,
+		}},
+		{"full sha without comment", step("actions/checkout@" + sha), []string{
+			`test.yml: job "build" step 1 uses actions/checkout@` + sha + `; pin it to a full 40-character commit SHA followed by a # v<version> comment`,
+		}},
+		{"full sha with another comment", step("actions/checkout@" + sha + " # main"), []string{
+			`test.yml: job "build" step 1 uses actions/checkout@` + sha + ` # main; pin it to a full 40-character commit SHA followed by a # v<version> comment`,
+		}},
+		{"upper-case sha", step("actions/checkout@" + strings.ToUpper(sha) + " # v7.0.1"), []string{
+			`test.yml: job "build" step 1 uses actions/checkout@` + strings.ToUpper(sha) + ` # v7.0.1; pin it to a full 40-character commit SHA followed by a # v<version> comment`,
+		}},
+		{"local action and docker image", `
+jobs:
+  build:
+    steps:
+      - uses: ./.github/actions/setup
+      - uses: docker://alpine:3.22
+`, nil},
+		{"reusable workflow of another repository", `
+jobs:
+  call:
+    uses: example/workflows/.github/workflows/build.yml@main
+  local:
+    uses: ./.github/workflows/reusable.yml
+`, []string{
+			`test.yml: job "call" uses example/workflows/.github/workflows/build.yml@main; pin it to a full 40-character commit SHA followed by a # v<version> comment`,
+		}},
+		{"composite action step", `
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v6
+    - uses: actions/checkout@` + sha + ` # v7.0.1
+`, []string{
+			`test.yml: runs step 1 uses actions/setup-go@v6; pin it to a full 40-character commit SHA followed by a # v<version> comment`,
+		}},
+		{"steps without uses", step("") + `      - run: go test ./...
+`, nil},
+		{"empty file", ``, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := unpinnedUses("test.yml", []byte(tt.yaml))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Join(got, "\n") != strings.Join(tt.want, "\n") {
+				t.Errorf("unpinnedUses() =\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(tt.want, "\n"))
+			}
+		})
+	}
+	if _, err := unpinnedUses("test.yml", []byte("jobs: [")); err == nil {
+		t.Error("unpinnedUses() succeeded on invalid YAML, want error")
 	}
 }
 
@@ -1193,24 +1393,302 @@ func TestRunBlocksPinTools(t *testing.T) {
 	}
 }
 
-// TestNoStepUsesLatestVersion keeps every tool an action installs from its
-// `with.version` input on a fixed version: `latest` runs whatever was
-// published last, and Dependabot does not track the input.
-func TestNoStepUsesLatestVersion(t *testing.T) {
-	files, err := filepath.Glob(filepath.Join("..", "..", ".github", "workflows", "*.yml"))
-	if err != nil {
-		t.Fatal(err)
+var exactVersion = regexp.MustCompile(`^v\d+\.\d+\.\d+$`)
+
+// versionedActions install a tool chosen by their `with.version` input and
+// fall back to `latest` when it is missing or empty.
+var versionedActions = []string{
+	"codecov/codecov-action@",
+	"goreleaser/goreleaser-action@",
+}
+
+func isVersionedAction(uses string) bool {
+	for _, prefix := range versionedActions {
+		if strings.HasPrefix(strings.ToLower(uses), prefix) {
+			return true
+		}
 	}
-	for _, file := range files {
-		name := filepath.Base(file)
-		wf := loadWorkflow(t, name)
-		for _, job := range sortedJobs(wf) {
-			for i, s := range wf.Jobs[job].Steps {
-				if strings.EqualFold(strings.TrimSpace(s.With.Version), "latest") {
-					t.Errorf("%s: job %q step %d (%q): with.version is latest, pin the exact version", name, job, i+1, s.Name)
+	return false
+}
+
+// codecovSkipInputs are the codecov/codecov-action inputs that skip the GPG
+// signature and SHA256 check of the Codecov CLI; `binary` also runs a file
+// of any version in place of the pinned one. Each counts unless it is
+// `false`; `binary` counts with any value.
+var codecovSkipInputs = []string{"skip_validation", "binary", "use_pypi"}
+
+// unpinnedVersions returns one message per step of a workflow or action, in
+// the steps of its jobs and of `runs`, whose tool version can float: a
+// versionedActions step without an exact `with.version` (v<x.y.z>), any other
+// step whose `with.version` is not exact, any step with `with.version-file`,
+// and a codecov/codecov-action step with one of codecovSkipInputs. Input
+// names match regardless of case, as on the runner.
+func unpinnedVersions(file string, data []byte) ([]string, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil, fmt.Errorf("%s: %w", file, err)
+	}
+	if len(doc.Content) == 0 {
+		return nil, nil
+	}
+	var out []string
+	checkSteps := func(where string, steps *yaml.Node) {
+		if steps == nil {
+			return
+		}
+		for i, s := range steps.Content {
+			at := fmt.Sprintf("%s: %s step %d", file, where, i+1)
+			if uses := mappingValue(s, "uses"); uses != nil {
+				at += " (" + uses.Value + ")"
+			}
+			with := mappingValue(s, "with")
+			if inputValue(with, "version-file") != nil {
+				out = append(out, at+": with.version-file reads the version at run time, set with.version to v<x.y.z>")
+			}
+			version := inputValue(with, "version")
+			switch {
+			case version == nil:
+				if uses := mappingValue(s, "uses"); uses != nil && isVersionedAction(uses.Value) {
+					out = append(out, at+": with.version is missing and defaults to latest, set it to v<x.y.z>")
+				}
+			case !exactVersion.MatchString(version.Value):
+				out = append(out, fmt.Sprintf("%s: with.version %q is not an exact version, set it to v<x.y.z>", at, version.Value))
+			}
+			if uses := mappingValue(s, "uses"); uses != nil && strings.HasPrefix(strings.ToLower(uses.Value), "codecov/codecov-action@") {
+				for _, input := range codecovSkipInputs {
+					if v := inputValue(with, input); v != nil && (input == "binary" || v.Value != "false") {
+						out = append(out, fmt.Sprintf("%s: with.%s %q skips the signature and checksum check of the Codecov CLI, remove it", at, input, v.Value))
+					}
 				}
 			}
 		}
+	}
+	root := doc.Content[0]
+	if jobs := mappingValue(root, "jobs"); jobs != nil && jobs.Kind == yaml.MappingNode {
+		for j := 0; j+1 < len(jobs.Content); j += 2 {
+			checkSteps(fmt.Sprintf("job %q", jobs.Content[j].Value), mappingValue(jobs.Content[j+1], "steps"))
+		}
+	}
+	checkSteps("runs", mappingValue(mappingValue(root, "runs"), "steps"))
+	return out, nil
+}
+
+// scanVersions returns the unpinnedVersions messages of every file walkRepo
+// visits. A local path that names no file is left to scanRepo.
+func scanVersions(repo string) ([]string, error) {
+	var offenders []string
+	_, err := walkRepo(repo, func(file string, data []byte, _ actionFile) ([]string, error) {
+		found, err := unpinnedVersions(file, data)
+		offenders = append(offenders, found...)
+		return nil, err
+	})
+	return offenders, err
+}
+
+// TestNoStepUsesLatestVersion keeps every tool an action installs from its
+// `with.version` input on a fixed version: `latest`, a missing or empty input,
+// a range (`~> v2`), a major version, `nightly` or a version file runs
+// whatever was published last, and Dependabot does not track the input. A
+// Codecov step may not skip the CLI's signature and checksum check either.
+// The check covers every local action a workflow uses.
+func TestNoStepUsesLatestVersion(t *testing.T) {
+	offenders, err := scanVersions(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range offenders {
+		t.Error(o)
+	}
+}
+
+func TestUnpinnedVersions(t *testing.T) {
+	const (
+		goreleaser = "goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0"
+		codecov    = "codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1"
+	)
+	step := func(uses, with string) string {
+		return `
+jobs:
+  release:
+    steps:
+      - uses: ` + uses + `
+        with:
+          distribution: goreleaser` + with + `
+`
+	}
+	at := `test.yml: job "release" step 1 (` + strings.SplitN(goreleaser, " ", 2)[0] + `)`
+	notExact := func(v string) []string {
+		return []string{fmt.Sprintf("%s: with.version %q is not an exact version, set it to v<x.y.z>", at, v)}
+	}
+	missing := []string{at + ": with.version is missing and defaults to latest, set it to v<x.y.z>"}
+	codecovStep := func(with string) string {
+		return `
+jobs:
+  test:
+    steps:
+      - uses: ` + codecov + `
+        with:
+          use_oidc: true
+          version: v11.3.2` + with + `
+`
+	}
+	codecovSkips := func(input, v string) []string {
+		return []string{fmt.Sprintf(`test.yml: job "test" step 1 (%s): with.%s %q skips the signature and checksum check of the Codecov CLI, remove it`,
+			strings.SplitN(codecov, " ", 2)[0], input, v)}
+	}
+	tests := []struct {
+		name string
+		yaml string
+		want []string
+	}{
+		{"exact version", step(goreleaser, "\n          version: v2.18.3"), nil},
+		{"missing version", step(goreleaser, ""), missing},
+		{"empty version", step(goreleaser, "\n          version:"), notExact("")},
+		{"empty string version", step(goreleaser, "\n          version: ''"), notExact("")},
+		{"latest", step(goreleaser, "\n          version: latest"), notExact("latest")},
+		{"major version", step(goreleaser, "\n          version: v2"), notExact("v2")},
+		{"range", step(goreleaser, "\n          version: '~> v2'"), notExact("~> v2")},
+		{"nightly", step(goreleaser, "\n          version: nightly"), notExact("nightly")},
+		{"without v", step(goreleaser, "\n          version: 2.18.3"), notExact("2.18.3")},
+		{"expression", step(goreleaser, "\n          version: ${{ env.GORELEASER }}"), notExact("${{ env.GORELEASER }}")},
+		{"version file", step(goreleaser, "\n          version-file: .goreleaser-version"), []string{
+			at + ": with.version-file reads the version at run time, set with.version to v<x.y.z>",
+			at + ": with.version is missing and defaults to latest, set it to v<x.y.z>",
+		}},
+		{"version file next to a version", step(goreleaser, "\n          version: v2.18.3\n          version-file: .goreleaser-version"), []string{
+			at + ": with.version-file reads the version at run time, set with.version to v<x.y.z>",
+		}},
+		{"upper-case action", step("GoReleaser/GoReleaser-Action@v7", ""), []string{
+			`test.yml: job "release" step 1 (GoReleaser/GoReleaser-Action@v7): with.version is missing and defaults to latest, set it to v<x.y.z>`,
+		}},
+		{"codecov without version", `
+jobs:
+  test:
+    steps:
+      - uses: ` + codecov + `
+        with:
+          use_oidc: true
+      - uses: ` + codecov + `
+        with:
+          use_oidc: true
+          version: v11.3.2
+`, []string{
+			`test.yml: job "test" step 1 (` + strings.SplitN(codecov, " ", 2)[0] + `): with.version is missing and defaults to latest, set it to v<x.y.z>`,
+		}},
+		{"codecov without with", `
+jobs:
+  test:
+    steps:
+      - uses: ` + codecov + `
+`, []string{
+			`test.yml: job "test" step 1 (` + strings.SplitN(codecov, " ", 2)[0] + `): with.version is missing and defaults to latest, set it to v<x.y.z>`,
+		}},
+		{"other action with a floating version", `
+jobs:
+  lint:
+    steps:
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: latest
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.15.0
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: go test ./...
+`, []string{
+			`test.yml: job "lint" step 1 (golangci/golangci-lint-action@v9): with.version "latest" is not an exact version, set it to v<x.y.z>`,
+		}},
+		{"upper-case input names", `
+jobs:
+  lint:
+    steps:
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          Version: latest
+      - uses: actions/setup-go@v6
+        with:
+          Version-File: .v
+      - uses: ` + goreleaser + `
+        with:
+          VERSION: v2.18.3
+`, []string{
+			`test.yml: job "lint" step 1 (golangci/golangci-lint-action@v9): with.version "latest" is not an exact version, set it to v<x.y.z>`,
+			`test.yml: job "lint" step 2 (actions/setup-go@v6): with.version-file reads the version at run time, set with.version to v<x.y.z>`,
+		}},
+		{"codecov skip validation", codecovStep("\n          skip_validation: true"), codecovSkips("skip_validation", "true")},
+		{"codecov skip validation one", codecovStep("\n          skip_validation: '1'"), codecovSkips("skip_validation", "1")},
+		{"codecov skip validation expression", codecovStep("\n          skip_validation: ${{ env.X }}"), codecovSkips("skip_validation", "${{ env.X }}")},
+		{"codecov upper-case skip validation", codecovStep("\n          Skip_Validation: true"), codecovSkips("skip_validation", "true")},
+		{"codecov skip validation false", codecovStep("\n          skip_validation: false"), nil},
+		{"codecov binary", codecovStep("\n          binary: ./codecov"), codecovSkips("binary", "./codecov")},
+		{"codecov empty binary", codecovStep("\n          binary: ''"), codecovSkips("binary", "")},
+		{"codecov use pypi", codecovStep("\n          use_pypi: true"), codecovSkips("use_pypi", "true")},
+		{"codecov use pypi false", codecovStep("\n          use_pypi: false"), nil},
+		{"other action with skip validation", step(goreleaser, "\n          version: v2.18.3\n          skip_validation: true"), nil},
+		{"composite action step", `
+runs:
+  using: composite
+  steps:
+    - uses: ` + codecov + `
+`, []string{
+			`test.yml: runs step 1 (` + strings.SplitN(codecov, " ", 2)[0] + `): with.version is missing and defaults to latest, set it to v<x.y.z>`,
+		}},
+		{"empty file", ``, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := unpinnedVersions("test.yml", []byte(tt.yaml))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Join(got, "\n") != strings.Join(tt.want, "\n") {
+				t.Errorf("unpinnedVersions() =\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(tt.want, "\n"))
+			}
+		})
+	}
+	if _, err := unpinnedVersions("test.yml", []byte("jobs: [")); err == nil {
+		t.Error("unpinnedVersions() succeeded on invalid YAML, want error")
+	}
+}
+
+func TestScanVersions(t *testing.T) {
+	got, err := scanVersions(writeRepo(t, map[string]string{
+		".github/workflows/release.yaml": `
+jobs:
+  release:
+    steps:
+      - uses: ./.github/actions/outer
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          version: '~> v2'
+`,
+		".github/actions/outer/action.yml": `
+runs:
+  using: composite
+  steps:
+    - uses: ./nested
+`,
+		"nested/action.yml": `
+runs:
+  using: composite
+  steps:
+    - uses: codecov/codecov-action@v7
+      with:
+        version: latest
+`,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `.github/workflows/release.yaml: job "release" step 2 (goreleaser/goreleaser-action@v7): with.version "~> v2" is not an exact version, set it to v<x.y.z>
+nested/action.yml: runs step 1 (codecov/codecov-action@v7): with.version "latest" is not an exact version, set it to v<x.y.z>`
+	if strings.Join(got, "\n") != want {
+		t.Errorf("scanVersions() =\n%s\nwant:\n%s", strings.Join(got, "\n"), want)
+	}
+	if _, err := scanVersions(t.TempDir()); err == nil {
+		t.Error("scanVersions() succeeded without workflow files, want error")
 	}
 }
 
@@ -1227,10 +1705,29 @@ func mappingValue(n *yaml.Node, key string) *yaml.Node {
 	return nil
 }
 
-// codeqlVersionMismatches lists every github/codeql-action step of a workflow
-// whose ref or trailing version comment differs from the first such step: the
-// sub-actions refuse to run next to a different version of each other.
-func codeqlVersionMismatches(file string, data []byte) ([]string, error) {
+// inputValue returns the value node of the input name in a step's `with`
+// mapping, or nil. The runner matches input names regardless of case.
+func inputValue(with *yaml.Node, name string) *yaml.Node {
+	if with == nil || with.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(with.Content); i += 2 {
+		if strings.EqualFold(with.Content[i].Value, name) {
+			return with.Content[i+1]
+		}
+	}
+	return nil
+}
+
+// codeqlUse is one github/codeql-action step: where it is, and its ref with
+// the trailing version comment.
+type codeqlUse struct {
+	at, version string
+}
+
+// codeqlUses returns every github/codeql-action step of a workflow or action,
+// in the steps of its jobs and of `runs`.
+func codeqlUses(file string, data []byte) ([]codeqlUse, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("%s: %w", file, err)
@@ -1238,17 +1735,10 @@ func codeqlVersionMismatches(file string, data []byte) ([]string, error) {
 	if len(doc.Content) == 0 {
 		return nil, nil
 	}
-	jobs := mappingValue(doc.Content[0], "jobs")
-	if jobs == nil || jobs.Kind != yaml.MappingNode {
-		return nil, nil
-	}
-	var first, firstAt string
-	var out []string
-	for j := 0; j+1 < len(jobs.Content); j += 2 {
-		job := jobs.Content[j].Value
-		steps := mappingValue(jobs.Content[j+1], "steps")
+	var out []codeqlUse
+	add := func(where string, steps *yaml.Node) {
 		if steps == nil {
-			continue
+			return
 		}
 		for i, s := range steps.Content {
 			uses := mappingValue(s, "uses")
@@ -1256,40 +1746,56 @@ func codeqlVersionMismatches(file string, data []byte) ([]string, error) {
 				continue
 			}
 			_, ref, _ := strings.Cut(uses.Value, "@")
-			version := ref + " " + strings.TrimSpace(uses.LineComment)
-			at := fmt.Sprintf("job %q step %d (%s)", job, i+1, strings.TrimSpace(uses.Value+" "+uses.LineComment))
-			if first == "" {
-				first, firstAt = version, at
-				continue
-			}
-			if version != first {
-				out = append(out, fmt.Sprintf("%s: %s differs from %s", file, at, firstAt))
-			}
+			out = append(out, codeqlUse{
+				at:      fmt.Sprintf("%s: %s step %d (%s)", file, where, i+1, strings.TrimSpace(uses.Value+" "+uses.LineComment)),
+				version: ref + " " + strings.TrimSpace(uses.LineComment),
+			})
 		}
 	}
+	root := doc.Content[0]
+	if jobs := mappingValue(root, "jobs"); jobs != nil && jobs.Kind == yaml.MappingNode {
+		for j := 0; j+1 < len(jobs.Content); j += 2 {
+			add(fmt.Sprintf("job %q", jobs.Content[j].Value), mappingValue(jobs.Content[j+1], "steps"))
+		}
+	}
+	add("runs", mappingValue(mappingValue(root, "runs"), "steps"))
 	return out, nil
 }
 
-// TestCodeQLStepsShareOneVersion keeps every github/codeql-action step of a
-// workflow on one version: init writes a configuration that autobuild and
-// analyze reject from any other version, so a bump of one step alone fails.
+// codeqlVersionMismatches lists every github/codeql-action step, in every file
+// walkRepo visits, whose ref or trailing version comment differs from the
+// first such step: the sub-actions refuse to run next to a different version
+// of each other, and upload-sarif follows the same release.
+func codeqlVersionMismatches(repo string) ([]string, error) {
+	var first *codeqlUse
+	var out []string
+	_, err := walkRepo(repo, func(file string, data []byte, _ actionFile) ([]string, error) {
+		uses, err := codeqlUses(file, data)
+		for _, u := range uses {
+			if first == nil {
+				first = &u
+				continue
+			}
+			if u.version != first.version {
+				out = append(out, fmt.Sprintf("%s differs from %s", u.at, first.at))
+			}
+		}
+		return nil, err
+	})
+	return out, err
+}
+
+// TestCodeQLStepsShareOneVersion keeps every github/codeql-action step on one
+// version, across all workflows and the local actions they use: init writes a
+// configuration that autobuild and analyze reject from any other version, so
+// a bump of one step alone fails.
 func TestCodeQLStepsShareOneVersion(t *testing.T) {
-	files, err := filepath.Glob(filepath.Join("..", "..", ".github", "workflows", "*.yml"))
+	offenders, err := codeqlVersionMismatches(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, file := range files {
-		data, err := os.ReadFile(file)
-		if err != nil {
-			t.Fatal(err)
-		}
-		offenders, err := codeqlVersionMismatches(filepath.Base(file), data)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, o := range offenders {
-			t.Error(o)
-		}
+	for _, o := range offenders {
+		t.Error(o)
 	}
 }
 
@@ -1297,6 +1803,7 @@ func TestCodeQLVersionMismatches(t *testing.T) {
 	const (
 		v390 = "6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0"
 		v391 = "9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1"
+		wf   = ".github/workflows/codeql.yml"
 	)
 	workflow := func(init, autobuild, analyze string) string {
 		return `
@@ -1312,23 +1819,31 @@ jobs:
         uses: github/codeql-action/analyze@` + analyze + `
 `
 	}
+	sarif := func(version string) string {
+		return `
+jobs:
+  scan:
+    steps:
+      - uses: github/codeql-action/upload-sarif@` + version + `
+`
+	}
 	tests := []struct {
-		name string
-		yaml string
-		want []string
+		name  string
+		files map[string]string
+		want  []string
 	}{
-		{"all on one version", workflow(v391, v391, v391), nil},
-		{"init bumped alone (#308)", workflow(v391, v390, v390), []string{
-			`codeql.yml: job "analyze" step 3 (github/codeql-action/autobuild@` + v390 + `) differs from job "analyze" step 2 (github/codeql-action/init@` + v391 + `)`,
-			`codeql.yml: job "analyze" step 4 (github/codeql-action/analyze@` + v390 + `) differs from job "analyze" step 2 (github/codeql-action/init@` + v391 + `)`,
+		{"all on one version", map[string]string{wf: workflow(v391, v391, v391)}, nil},
+		{"init bumped alone (#308)", map[string]string{wf: workflow(v391, v390, v390)}, []string{
+			wf + `: job "analyze" step 3 (github/codeql-action/autobuild@` + v390 + `) differs from ` + wf + `: job "analyze" step 2 (github/codeql-action/init@` + v391 + `)`,
+			wf + `: job "analyze" step 4 (github/codeql-action/analyze@` + v390 + `) differs from ` + wf + `: job "analyze" step 2 (github/codeql-action/init@` + v391 + `)`,
 		}},
-		{"analyze bumped alone (#310)", workflow(v390, v390, v391), []string{
-			`codeql.yml: job "analyze" step 4 (github/codeql-action/analyze@` + v391 + `) differs from job "analyze" step 2 (github/codeql-action/init@` + v390 + `)`,
+		{"analyze bumped alone (#310)", map[string]string{wf: workflow(v390, v390, v391)}, []string{
+			wf + `: job "analyze" step 4 (github/codeql-action/analyze@` + v391 + `) differs from ` + wf + `: job "analyze" step 2 (github/codeql-action/init@` + v390 + `)`,
 		}},
-		{"same ref, different comment", workflow(v391, v391, "9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.0"), []string{
-			`codeql.yml: job "analyze" step 4 (github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.0) differs from job "analyze" step 2 (github/codeql-action/init@` + v391 + `)`,
+		{"same ref, different comment", map[string]string{wf: workflow(v391, v391, "9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.0")}, []string{
+			wf + `: job "analyze" step 4 (github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.0) differs from ` + wf + `: job "analyze" step 2 (github/codeql-action/init@` + v391 + `)`,
 		}},
-		{"across jobs", `
+		{"across jobs", map[string]string{wf: `
 jobs:
   a:
     steps:
@@ -1336,20 +1851,67 @@ jobs:
   b:
     steps:
       - uses: github/codeql-action/upload-sarif@` + v390 + `
-`, []string{
-			`codeql.yml: job "b" step 1 (github/codeql-action/upload-sarif@` + v390 + `) differs from job "a" step 1 (github/codeql-action/init@` + v391 + `)`,
+`}, []string{
+			wf + `: job "b" step 1 (github/codeql-action/upload-sarif@` + v390 + `) differs from ` + wf + `: job "a" step 1 (github/codeql-action/init@` + v391 + `)`,
 		}},
-		{"no codeql steps", `
+		{".yaml workflow", map[string]string{".github/workflows/codeql.yaml": workflow(v391, v391, v390)}, []string{
+			`.github/workflows/codeql.yaml: job "analyze" step 4 (github/codeql-action/analyze@` + v390 + `) differs from .github/workflows/codeql.yaml: job "analyze" step 2 (github/codeql-action/init@` + v391 + `)`,
+		}},
+		{"composite action", map[string]string{
+			".github/workflows/ci.yml": `
+jobs:
+  build:
+    steps:
+      - run: go test ./...
+`,
+			".github/actions/codeql/action.yml": `
+runs:
+  using: composite
+  steps:
+    - uses: github/codeql-action/init@` + v391 + `
+    - uses: github/codeql-action/analyze@` + v390 + `
+`,
+		}, []string{
+			`.github/actions/codeql/action.yml: runs step 2 (github/codeql-action/analyze@` + v390 + `) differs from .github/actions/codeql/action.yml: runs step 1 (github/codeql-action/init@` + v391 + `)`,
+		}},
+		{"local action used by a workflow", map[string]string{
+			wf: workflow(v391, v391, v391),
+			".github/workflows/scan.yml": `
+jobs:
+  scan:
+    steps:
+      - uses: ./nested
+`,
+			"nested/action.yaml": `
+runs:
+  using: composite
+  steps:
+    - uses: github/codeql-action/upload-sarif@` + v390 + `
+`,
+		}, []string{
+			`nested/action.yaml: runs step 1 (github/codeql-action/upload-sarif@` + v390 + `) differs from ` + wf + `: job "analyze" step 2 (github/codeql-action/init@` + v391 + `)`,
+		}},
+		{"two files", map[string]string{
+			wf:                                  workflow(v391, v391, v391),
+			".github/workflows/govulncheck.yml": sarif(v390),
+		}, []string{
+			`.github/workflows/govulncheck.yml: job "scan" step 1 (github/codeql-action/upload-sarif@` + v390 + `) differs from ` + wf + `: job "analyze" step 2 (github/codeql-action/init@` + v391 + `)`,
+		}},
+		{"two files on one version", map[string]string{
+			wf:                                  workflow(v391, v391, v391),
+			".github/workflows/govulncheck.yml": sarif(v391),
+		}, nil},
+		{"no codeql steps", map[string]string{wf: `
 jobs:
   test:
     steps:
       - run: go test ./...
-`, nil},
-		{"empty file", ``, nil},
+`}, nil},
+		{"empty file", map[string]string{wf: ``}, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := codeqlVersionMismatches("codeql.yml", []byte(tt.yaml))
+			got, err := codeqlVersionMismatches(writeRepo(t, tt.files))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1358,8 +1920,11 @@ jobs:
 			}
 		})
 	}
-	if _, err := codeqlVersionMismatches("codeql.yml", []byte("jobs: [")); err == nil {
+	if _, err := codeqlVersionMismatches(writeRepo(t, map[string]string{wf: "jobs: ["})); err == nil {
 		t.Error("codeqlVersionMismatches() succeeded on invalid YAML, want error")
+	}
+	if _, err := codeqlVersionMismatches(t.TempDir()); err == nil {
+		t.Error("codeqlVersionMismatches() succeeded without workflow files, want error")
 	}
 }
 
@@ -1505,6 +2070,75 @@ func TestChecksumsAreChecked(t *testing.T) {
 	}
 }
 
+// goOutputVar matches a shell variable written to GITHUB_OUTPUT, as in
+// echo "current=$CURRENT" >> "$GITHUB_OUTPUT".
+var goOutputVar = regexp.MustCompile(`=\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?" >> "\$GITHUB_OUTPUT"`)
+
+// uncheckedGoVersions lists every shell variable the run block writes to
+// GITHUB_OUTPUT without running script/check-go-version.sh on it before the
+// first write to GITHUB_OUTPUT.
+func uncheckedGoVersions(run string) []string {
+	first := strings.Index(run, `>> "$GITHUB_OUTPUT"`)
+	var unchecked []string
+	seen := map[string]bool{}
+	for _, m := range goOutputVar.FindAllStringSubmatch(run, -1) {
+		v := m[1]
+		if seen[v] {
+			continue
+		}
+		seen[v] = true
+		guard := strings.Index(run, `script/check-go-version.sh "$`+v+`"`)
+		if guard < 0 || guard > first {
+			unchecked = append(unchecked, v)
+		}
+	}
+	return unchecked
+}
+
+// TestGoVersionsAreChecked keeps both versions bump-go.yml writes to
+// GITHUB_OUTPUT, the one from go.dev and the one from go.mod, out of the
+// branch name and the PR unless they passed script/check-go-version.sh.
+func TestGoVersionsAreChecked(t *testing.T) {
+	run := stepRun(t, "bump-go.yml", "Check latest Go version")
+	if len(goOutputVar.FindAllString(run, -1)) == 0 {
+		t.Fatal("bump-go.yml: Check latest Go version writes no shell variable to GITHUB_OUTPUT")
+	}
+	for _, v := range uncheckedGoVersions(run) {
+		t.Errorf("bump-go.yml: Check latest Go version writes $%s to GITHUB_OUTPUT without running script/check-go-version.sh \"$%s\" first", v, v)
+	}
+
+	for _, tc := range []struct {
+		name, run string
+		want      []string
+	}{
+		{"both checked", `script/check-go-version.sh "$LATEST"
+script/check-go-version.sh "$CURRENT"
+echo "latest=$LATEST" >> "$GITHUB_OUTPUT"
+echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+`, nil},
+		{"current unchecked", `script/check-go-version.sh "$LATEST"
+echo "latest=$LATEST" >> "$GITHUB_OUTPUT"
+echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+`, []string{"CURRENT"}},
+		{"current checked after the first write", `script/check-go-version.sh "$LATEST"
+echo "latest=$LATEST" >> "$GITHUB_OUTPUT"
+script/check-go-version.sh "$CURRENT"
+echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+`, []string{"CURRENT"}},
+		{"braced variable unchecked", `script/check-go-version.sh "$LATEST"
+echo "latest=$LATEST" >> "$GITHUB_OUTPUT"
+echo "current=${CURRENT}" >> "$GITHUB_OUTPUT"
+`, []string{"CURRENT"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := uncheckedGoVersions(tc.run)
+			if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+				t.Errorf("uncheckedGoVersions: %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestAURKeyIsPrivate keeps the AUR SSH key from existing with the default
 // umask, even for the moment before chmod 600.
 func TestAURKeyIsPrivate(t *testing.T) {
@@ -1581,8 +2215,8 @@ func TestAURHostKeyIsPinned(t *testing.T) {
 	}
 }
 
-// TestCheckGoVersion covers the guard bump-go.yml runs on the version it reads
-// from go.dev before writing it to GITHUB_OUTPUT.
+// TestCheckGoVersion covers the guard bump-go.yml runs on the versions it reads
+// from go.dev and go.mod before writing them to GITHUB_OUTPUT.
 func TestCheckGoVersion(t *testing.T) {
 	script := filepath.Join("..", "..", "script", "check-go-version.sh")
 

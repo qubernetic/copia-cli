@@ -91,6 +91,9 @@ func UploadRun(opts *UploadOptions) error {
 	if lookupResp.StatusCode == http.StatusNotFound {
 		return fmt.Errorf("release %s not found", opts.Tag)
 	}
+	if lookupResp.StatusCode != http.StatusOK {
+		return fmt.Errorf("API error (HTTP %d)", lookupResp.StatusCode)
+	}
 
 	lookupBody, err := io.ReadAll(lookupResp.Body)
 	if err != nil {

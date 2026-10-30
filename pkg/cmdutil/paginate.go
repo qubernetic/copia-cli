@@ -103,10 +103,14 @@ var linkRE = regexp.MustCompile(`<([^>]+)>;\s*rel="([^"]+)"`)
 // header names a rel="next" page, a copy of req for that page without a
 // body. page gets every response in order and must not close its body;
 // an error from page ends the walk. A next link to another scheme or host
-// is refused, so the Authorization header of req never leaves its host.
+// is refused, so the Authorization header of req never leaves its host, and
+// a next link to a page already fetched is an error, so a looping server
+// cannot keep the walk going forever.
 func FollowLinkPages(client *http.Client, req *http.Request, page func(*http.Response) error) error {
 	origin := req.URL
+	fetched := map[string]bool{}
 	for {
+		fetched[req.URL.String()] = true
 		resp, err := client.Do(req)
 		if err != nil {
 			return fmt.Errorf("connecting to %s: %w", req.URL.Host, err)
@@ -123,6 +127,9 @@ func FollowLinkPages(client *http.Client, req *http.Request, page func(*http.Res
 		}
 		if next.Scheme != origin.Scheme || next.Host != origin.Host {
 			return fmt.Errorf("refusing to follow the next page link to another host: %q", next.String())
+		}
+		if fetched[next.String()] {
+			return fmt.Errorf("the next page link repeats an already fetched page: %q", next.String())
 		}
 		req = req.Clone(req.Context())
 		req.URL = next

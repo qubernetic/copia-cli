@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Copia CLI is a command-line interface for [Copia](https://copia.io) — the source control platform for industrial automation. Modeled after GitHub CLI (`gh`), built on the Gitea-compatible REST API. Phase 1-3 complete with 35+ subcommands across 11 command groups.
+Copia CLI is a command-line interface for [Copia](https://copia.io) — the source control platform for industrial automation. Modeled after GitHub CLI (`gh`), built on the Gitea-compatible REST API. Phase 1-3 complete with 35+ subcommands across 11 command groups plus `browse`.
 
 **Owner:** Qubernetic (AGPL-3.0 + Commercial)
 
@@ -31,7 +31,7 @@ just down         # Stop containers
 
 **Horde sandbox:** `.devcontainer/compose.yaml` (service `dev`, image `.devcontainer/Dockerfile`) is the environment `horde-dev up` starts on the sandbox; run commands there with `horde-dev run go test ./...`, `horde-dev run golangci-lint run ./...`. It is separate from the local workflow above, which it does not change.
 
-**CI coverage:** `ci.yml` runs the unit tests through gotestsum and uploads `coverage.out` and `unit.junit.xml` (Test Analytics) to Codecov with GitHub OIDC (`use_oidc: true`, `id-token: write` on the `test` job), no token. PRs get `codecov/patch` (80% of changed lines) and `codecov/project` (at most 1% drop); never soften them in `codecov.yml`. The `copr-install` job runs the hash-pinned `Install copr-cli` step of `copr.yml` (release-only) on every PR, without secrets; `test/workflows` keeps both run blocks identical, so change them together. A job that holds a secret or a write token (any `write` permission other than `id-token`), or that such a job lists in `needs:` at any depth (`docs.yml` `build`, whose output `deploy` publishes), sets `cache: false` on `actions/setup-go`, so it never builds from the cache `test` saves; `test` keeps its cache, no privileged job needs it (`integration` runs in parallel), and `test/workflows` enforces the rule. `test` runs only pinned tools: golangci-lint `version:` equals `GOLANGCI_LINT_VERSION` in `.devcontainer/Dockerfile`, govulncheck runs at a fixed `@version` in `ci.yml` and `govulncheck.yml`, both bumped by hand (Dependabot does not track them), and no workflow `run:` block may use `@latest`. The `release` job of `release.yml` runs goreleaser at a fixed `version:` (`v2.18.3`), also bumped by hand, and no workflow step may set `with.version: latest`. Every `github/codeql-action` step of a workflow uses one SHA and version comment (`test/workflows` enforces it), and Dependabot bumps them as one grouped PR (`codeql-action` group in `.github/dependabot.yml`, read from `main`, so until a release a split bump is moved by hand in one PR). See `CONTRIBUTING.md`.
+**CI coverage:** `ci.yml` runs the unit tests through gotestsum and uploads `coverage.out` and `unit.junit.xml` (Test Analytics) to Codecov with GitHub OIDC (`use_oidc: true`, `id-token: write` on the `test` job), no token. PRs get `codecov/patch` (80% of changed lines) and `codecov/project` (at most 1% drop); never soften them in `codecov.yml`. The `copr-install` job runs the hash-pinned `Install copr-cli` step of `copr.yml` (release-only) on every PR, without secrets; `test/workflows` keeps both run blocks identical, so change them together. A job that holds a secret or a write token (any `write` permission other than `id-token`), or that such a job lists in `needs:` at any depth (`docs.yml` `build`, whose output `deploy` publishes), sets `cache: false` on `actions/setup-go`, so it never builds from the cache `test` saves; `test` keeps its cache, no privileged job needs it (`integration` runs in parallel), and `test/workflows` enforces the rule. `test` runs only pinned tools: golangci-lint `version:` equals `GOLANGCI_LINT_VERSION` in `.devcontainer/Dockerfile`, govulncheck runs at a fixed `@version` in `ci.yml` and `govulncheck.yml`, both Codecov steps pin the Codecov CLI `version:` (`v11.3.2`), all bumped by hand (Dependabot does not track them), and no workflow `run:` block may use `@latest`. The `release` job of `release.yml` runs goreleaser at a fixed `version:` (`v2.18.3`), also bumped by hand. Every `codecov/codecov-action` and `goreleaser/goreleaser-action` step, and any other step that sets `with.version`, needs a `version:` matching `^v\d+\.\d+\.\d+$`, no step may set `with.version-file`, input names match regardless of case, and no `codecov/codecov-action` step may set `binary`, or `skip_validation` or `use_pypi` to anything but `false`, since each skips the CLI's signature and checksum check (`test/workflows` enforces it in every workflow and local action). Every `github/codeql-action` step of every workflow and local action uses one SHA and version comment, `upload-sarif` in `govulncheck.yml` included (`test/workflows` enforces it), and Dependabot bumps them as one grouped PR (`codeql-action` group in `.github/dependabot.yml`, read from `main`, so until a release a split bump is moved by hand in one PR). See `CONTRIBUTING.md`.
 
 ## Architecture
 
@@ -71,7 +71,7 @@ copia-cli/
 ## Key Design Constraints
 
 - **Auth-first:** Every API call requires authentication. `copia-cli auth login` is mandatory before any operation.
-- **Same-origin redirects:** every command builds its HTTP client with `cmdutil.NewHTTPClient()`, which refuses a redirect that changes scheme, host or port; a guard test fails on `&http.Client{}` or `http.DefaultClient` in non-test code under `pkg/` and `internal/`.
+- **Same-origin redirects:** every command builds its HTTP client with `cmdutil.NewHTTPClient()`, which refuses a redirect that changes scheme, host or port; a guard test parses non-test code under `pkg/`, `internal/` and `cmd/` and fails on an `http.Client` literal or `new(http.Client)` outside `pkg/cmdutil/httpclient.go`, and on `http.DefaultClient`, `http.Get`, `Head`, `Post` or `PostForm`, also under an aliased `net/http` import.
 - **Auth precedence:** `--token` flag > `COPIA_TOKEN` env var > config file
 - **Multi-instance support:** Config supports multiple hosts; active instance resolved by `--host` flag > `COPIA_HOST` env > git remote URL > first config entry
 - **Config location:** `~/.config/copia/config.yml` (Windows: `%USERPROFILE%\.config\copia\config.yml`), file permissions `600`
@@ -81,7 +81,7 @@ copia-cli/
 Phase 1 (MVP): auth, repo list/view/clone, issue CRUD, pr CRUD, label list/create — **DONE**
 Phase 2: release CRUD, repo create/delete/fork, pr review/diff/checkout, issue edit, Homebrew tap — **DONE**
 Phase 3: `copia-cli api` escape hatch, search, orgs, notifications, `-R` flag, completion, Jekyll manual, AGPL license — **DONE**
-Phase 4: ~~winget~~, ~~COPR~~, ~~AUR~~, ~~Snap~~, OS keyring, aliases, browse, status dashboard, ssh-key, pr checks, changelog, collaborators
+Phase 4: ~~winget~~, ~~COPR~~, ~~AUR~~, ~~Snap~~, OS keyring, aliases, ~~browse~~, status dashboard, ssh-key, pr checks, changelog, collaborators
 
 **Out of scope:** workflow/run, codespace, copilot, project, cache, GUI
 

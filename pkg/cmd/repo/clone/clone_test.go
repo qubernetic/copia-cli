@@ -158,6 +158,50 @@ func TestCloneCommand_RejectsInvalidHost(t *testing.T) {
 	}
 }
 
+// The helper prints the token as one password= line, so a line break or
+// any other character outside printable ASCII is refused before git runs.
+func TestCloneCommand_RejectsTokenWithControlCharacters(t *testing.T) {
+	tests := []struct {
+		name  string
+		token string
+	}{
+		{name: "line feed", token: "tok\nhost=other.example"},
+		{name: "carriage return", token: "tok\rurl=https://other.example"},
+		{name: "tab", token: "tok\tx"},
+		{name: "NUL", token: "tok\x00x"},
+		{name: "DEL", token: "tok\x7fx"},
+		{name: "non-ASCII", token: "tokéx"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := &CloneOptions{Host: "app.copia.io", Token: tt.token, Repo: "o/r"}
+			args, env, err := cloneCommand(opts, 0)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "invalid token")
+			assert.NotContains(t, err.Error(), tt.token)
+			assert.Nil(t, args)
+			for _, e := range env {
+				assert.NotContains(t, e, "COPIA_CLONE_TOKEN")
+			}
+
+			// CloneRun returns the error before it starts git; opts.IO is
+			// nil, so reaching exec would panic.
+			require.Error(t, CloneRun(opts))
+		})
+	}
+}
+
+func TestCloneCommand_AcceptsPrintableToken(t *testing.T) {
+	var b strings.Builder
+	for c := byte(' '); c <= '~'; c++ {
+		b.WriteByte(c)
+	}
+	token := b.String()
+	_, env, err := cloneCommand(&CloneOptions{Host: "app.copia.io", Token: token, Repo: "o/r"}, 0)
+	require.NoError(t, err)
+	assert.Contains(t, env, "COPIA_CLONE_TOKEN="+token)
+}
+
 func TestConfigCount(t *testing.T) {
 	for value, want := range map[string]int{"": 0, "0": 0, "3": 3} {
 		got, err := configCount(value)

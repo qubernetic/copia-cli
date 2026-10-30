@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/qubernetic/copia-cli/internal/config"
@@ -172,6 +173,27 @@ func TestUploadRun_Errors(t *testing.T) {
 			wantErr: "release v1.0.0 not found",
 		},
 		{
+			name: "lookup unauthorized",
+			stubs: func(reg *httpmock.Registry) {
+				reg.Register(httpmock.REST("GET", lookupPath), httpmock.StringResponse(http.StatusUnauthorized, `{}`))
+			},
+			wantErr: "API error (HTTP 401)",
+		},
+		{
+			name: "lookup forbidden",
+			stubs: func(reg *httpmock.Registry) {
+				reg.Register(httpmock.REST("GET", lookupPath), httpmock.StringResponse(http.StatusForbidden, `{}`))
+			},
+			wantErr: "API error (HTTP 403)",
+		},
+		{
+			name: "lookup server error",
+			stubs: func(reg *httpmock.Registry) {
+				reg.Register(httpmock.REST("GET", lookupPath), httpmock.StringResponse(http.StatusInternalServerError, `{}`))
+			},
+			wantErr: "API error (HTTP 500)",
+		},
+		{
 			name: "lookup body read error",
 			stubs: func(reg *httpmock.Registry) {
 				reg.Register(httpmock.REST("GET", lookupPath), func(*http.Request) (*http.Response, error) {
@@ -222,6 +244,11 @@ func TestUploadRun_Errors(t *testing.T) {
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.wantErr)
 			assert.Empty(t, stdout())
+			if strings.HasPrefix(tt.name, "lookup") {
+				for _, req := range reg.Requests {
+					assert.NotContains(t, req.URL.Path, "/assets")
+				}
+			}
 		})
 	}
 }

@@ -35,6 +35,7 @@ graph TB
         search[search: issues/repos]
         org[org: list/view]
         notification[notification: list/read]
+        browse[browse: open repo/issue/PR URL]
         completion[completion: bash/zsh/fish/powershell]
     end
     subgraph API
@@ -51,8 +52,9 @@ graph TB
     copiacmd --> build
     copiacmd --> config
     factory --> iostreams
-    copiacmd --> auth & repo & issue & pr & label & release & apicmd & search & org & notification & completion
+    copiacmd --> auth & repo & issue & pr & label & release & apicmd & search & org & notification & browse & completion
     auth & repo & issue & pr & label & release & apicmd & search & org & notification --> factory
+    browse --> factory
     completion --> iostreams
     auth & repo & issue & pr & label & release & apicmd & search & org & notification -.-> client
     client --> gitea
@@ -83,9 +85,11 @@ copia-cli/
 │   │   ├── search/                # issues, repos
 │   │   ├── org/                   # list, view
 │   │   ├── notification/          # list, read
+│   │   ├── browse/                # single command: browse [<number>]
 │   │   └── completion/            # single command: completion <shell> (bash, zsh, fish, powershell)
 │   ├── cmdutil/
 │   │   ├── factory.go             # Factory dependency injection
+│   │   ├── browser.go             # Browser opener (COPIA_BROWSER, BROWSER, OS default)
 │   │   ├── json.go                # --json field filter, --jq (gojq), --template, PrintJSON
 │   │   └── template.go            # --template execution and its gh helpers
 │   ├── iostreams/iostreams.go     # TTY-aware I/O, Test() helper
@@ -178,6 +182,7 @@ func xxxRun(opts *XxxOptions) error { ... }  // unexported, testable
 | `search` | issues, repos | Raw HTTP |
 | `org` | list, view | Raw HTTP |
 | `notification` | list, read | Raw HTTP (read: PATCH one thread, PUT with `--all`) |
+| `browse` | none (single command `browse [<number>]`) | No API call; URL built client-side, opened with `cmdutil.Browser` |
 | `completion` | none (single command `completion <shell>`: bash, zsh, fish, powershell) | No API call; Cobra script generation |
 
 ### `test/integration/`
@@ -216,7 +221,7 @@ sequenceDiagram
 ## Gotchas
 
 - **Auth commands use raw HTTP** — not the Gitea SDK, because `gitea.NewClient` tries to connect on init
-- **Never build an HTTP client by hand:** use `cmdutil.NewHTTPClient()`; a guard test fails on `&http.Client{}` or `http.DefaultClient` in non-test code under `pkg/` and `internal/`
+- **Never build an HTTP client by hand:** use `cmdutil.NewHTTPClient()`; a guard test parses non-test code under `pkg/`, `internal/` and `cmd/` and fails on an `http.Client` literal or `new(http.Client)` outside `pkg/cmdutil/httpclient.go`, and on `http.DefaultClient`, `http.Get`, `Head`, `Post` or `PostForm`, also under an aliased `net/http` import
 - **`f.BaseRepo` can be nil** — commands that don't need repo context (auth, repo create) must check before calling
 - **Gitea returns 403 (not 401) for invalid tokens** — integration tests use `Contains([]int{401, 403})`
 - **PR checkout doesn't use auth** — pure git shell-out, relies on git credential config

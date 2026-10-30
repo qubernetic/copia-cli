@@ -16,6 +16,7 @@ type Factory struct {
 	IOStreams *iostreams.IOStreams
 	Config   func() (*config.Config, error)
 	BaseRepo func() (string, string, error) // returns owner, repo
+	Browser  Browser
 
 	// Overrides (flags only ��� env vars resolved in ResolveAuth)
 	Token string
@@ -64,6 +65,27 @@ func (f *Factory) ResolveAuth() (host, token string, err error) {
 		return "", "", fmt.Errorf("no token configured for %s. Run 'copia auth login' first", host)
 	}
 	return host, token, nil
+}
+
+// ResolveHost returns the host in the order of ResolveAuth (--host flag,
+// COPIA_HOST, the config's default host) without requiring a token, for
+// commands that make no API call.
+func (f *Factory) ResolveHost() (string, error) {
+	host := f.Host
+	if host == "" {
+		host = os.Getenv("COPIA_HOST")
+	}
+	if host == "" {
+		cfg, err := f.Config()
+		if err != nil {
+			return "", err
+		}
+		host, _ = cfg.DefaultHost()
+	}
+	if host == "" {
+		return "", fmt.Errorf("no host configured. Run 'copia auth login' first")
+	}
+	return host, nil
 }
 
 // ResolveRepo returns owner and repo, resolving in order:

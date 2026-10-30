@@ -116,6 +116,45 @@ func TestStatusRun_ShowToken(t *testing.T) {
 	}
 }
 
+func TestStatusRun_ShowTokenWarnsWhenNotTTY(t *testing.T) {
+	tests := []struct {
+		name      string
+		tty       bool
+		showToken bool
+		wantWarn  bool
+	}{
+		{name: "show token to a pipe", showToken: true, wantWarn: true},
+		{name: "show token to a terminal", tty: true, showToken: true},
+		{name: "masked token to a pipe"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configPath := setTempConfig(t, map[string]*config.HostConfig{
+				"app.copia.io":   {Token: "abc123", User: "john"},
+				"other.copia.io": {Token: "xyz789", User: "jane"},
+			})
+
+			ios, _, stdout, stderr := iostreams.Test()
+			ios.SetStdoutTTY(tt.tty)
+			err := StatusRun(&StatusOptions{
+				IO:         ios,
+				ConfigPath: configPath,
+				ShowToken:  tt.showToken,
+			})
+			require.NoError(t, err)
+
+			if !tt.wantWarn {
+				assert.Empty(t, stderr.String())
+				return
+			}
+			assert.Equal(t, "warning: printing the token to a non-terminal output; it may end up in a log or a file\n", stderr.String())
+			assert.Contains(t, stdout.String(), "Token: abc123\n")
+			assert.Contains(t, stdout.String(), "Token: xyz789\n")
+		})
+	}
+}
+
 func TestStatusRun_SpecificHostMasksToken(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
