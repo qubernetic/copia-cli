@@ -1427,10 +1427,15 @@ func mappingValue(n *yaml.Node, key string) *yaml.Node {
 	return nil
 }
 
-// codeqlVersionMismatches lists every github/codeql-action step of a workflow
-// whose ref or trailing version comment differs from the first such step: the
-// sub-actions refuse to run next to a different version of each other.
-func codeqlVersionMismatches(file string, data []byte) ([]string, error) {
+// codeqlUse is one github/codeql-action step: where it is, and its ref with
+// the trailing version comment.
+type codeqlUse struct {
+	at, version string
+}
+
+// codeqlUses returns every github/codeql-action step of a workflow or action,
+// in the steps of its jobs and of `runs`.
+func codeqlUses(file string, data []byte) ([]codeqlUse, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("%s: %w", file, err)
@@ -1438,17 +1443,10 @@ func codeqlVersionMismatches(file string, data []byte) ([]string, error) {
 	if len(doc.Content) == 0 {
 		return nil, nil
 	}
-	jobs := mappingValue(doc.Content[0], "jobs")
-	if jobs == nil || jobs.Kind != yaml.MappingNode {
-		return nil, nil
-	}
-	var first, firstAt string
-	var out []string
-	for j := 0; j+1 < len(jobs.Content); j += 2 {
-		job := jobs.Content[j].Value
-		steps := mappingValue(jobs.Content[j+1], "steps")
+	var out []codeqlUse
+	add := func(where string, steps *yaml.Node) {
 		if steps == nil {
-			continue
+			return
 		}
 		for i, s := range steps.Content {
 			uses := mappingValue(s, "uses")
@@ -1456,40 +1454,56 @@ func codeqlVersionMismatches(file string, data []byte) ([]string, error) {
 				continue
 			}
 			_, ref, _ := strings.Cut(uses.Value, "@")
-			version := ref + " " + strings.TrimSpace(uses.LineComment)
-			at := fmt.Sprintf("job %q step %d (%s)", job, i+1, strings.TrimSpace(uses.Value+" "+uses.LineComment))
-			if first == "" {
-				first, firstAt = version, at
-				continue
-			}
-			if version != first {
-				out = append(out, fmt.Sprintf("%s: %s differs from %s", file, at, firstAt))
-			}
+			out = append(out, codeqlUse{
+				at:      fmt.Sprintf("%s: %s step %d (%s)", file, where, i+1, strings.TrimSpace(uses.Value+" "+uses.LineComment)),
+				version: ref + " " + strings.TrimSpace(uses.LineComment),
+			})
 		}
 	}
+	root := doc.Content[0]
+	if jobs := mappingValue(root, "jobs"); jobs != nil && jobs.Kind == yaml.MappingNode {
+		for j := 0; j+1 < len(jobs.Content); j += 2 {
+			add(fmt.Sprintf("job %q", jobs.Content[j].Value), mappingValue(jobs.Content[j+1], "steps"))
+		}
+	}
+	add("runs", mappingValue(mappingValue(root, "runs"), "steps"))
 	return out, nil
 }
 
-// TestCodeQLStepsShareOneVersion keeps every github/codeql-action step of a
-// workflow on one version: init writes a configuration that autobuild and
-// analyze reject from any other version, so a bump of one step alone fails.
+// codeqlVersionMismatches lists every github/codeql-action step, in every file
+// walkRepo visits, whose ref or trailing version comment differs from the
+// first such step: the sub-actions refuse to run next to a different version
+// of each other, and upload-sarif follows the same release.
+func codeqlVersionMismatches(repo string) ([]string, error) {
+	var first *codeqlUse
+	var out []string
+	_, err := walkRepo(repo, func(file string, data []byte, _ actionFile) ([]string, error) {
+		uses, err := codeqlUses(file, data)
+		for _, u := range uses {
+			if first == nil {
+				first = &u
+				continue
+			}
+			if u.version != first.version {
+				out = append(out, fmt.Sprintf("%s differs from %s", u.at, first.at))
+			}
+		}
+		return nil, err
+	})
+	return out, err
+}
+
+// TestCodeQLStepsShareOneVersion keeps every github/codeql-action step on one
+// version, across all workflows and the local actions they use: init writes a
+// configuration that autobuild and analyze reject from any other version, so
+// a bump of one step alone fails.
 func TestCodeQLStepsShareOneVersion(t *testing.T) {
-	files, err := filepath.Glob(filepath.Join("..", "..", ".github", "workflows", "*.yml"))
+	offenders, err := codeqlVersionMismatches(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, file := range files {
-		data, err := os.ReadFile(file)
-		if err != nil {
-			t.Fatal(err)
-		}
-		offenders, err := codeqlVersionMismatches(filepath.Base(file), data)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, o := range offenders {
-			t.Error(o)
-		}
+	for _, o := range offenders {
+		t.Error(o)
 	}
 }
 
@@ -1497,6 +1511,7 @@ func TestCodeQLVersionMismatches(t *testing.T) {
 	const (
 		v390 = "6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0"
 		v391 = "9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1"
+		wf   = ".github/workflows/codeql.yml"
 	)
 	workflow := func(init, autobuild, analyze string) string {
 		return `
@@ -1512,23 +1527,31 @@ jobs:
         uses: github/codeql-action/analyze@` + analyze + `
 `
 	}
+	sarif := func(version string) string {
+		return `
+jobs:
+  scan:
+    steps:
+      - uses: github/codeql-action/upload-sarif@` + version + `
+`
+	}
 	tests := []struct {
-		name string
-		yaml string
-		want []string
+		name  string
+		files map[string]string
+		want  []string
 	}{
-		{"all on one version", workflow(v391, v391, v391), nil},
-		{"init bumped alone (#308)", workflow(v391, v390, v390), []string{
-			`codeql.yml: job "analyze" step 3 (github/codeql-action/autobuild@` + v390 + `) differs from job "analyze" step 2 (github/codeql-action/init@` + v391 + `)`,
-			`codeql.yml: job "analyze" step 4 (github/codeql-action/analyze@` + v390 + `) differs from job "analyze" step 2 (github/codeql-action/init@` + v391 + `)`,
+		{"all on one version", map[string]string{wf: workflow(v391, v391, v391)}, nil},
+		{"init bumped alone (#308)", map[string]string{wf: workflow(v391, v390, v390)}, []string{
+			wf + `: job "analyze" step 3 (github/codeql-action/autobuild@` + v390 + `) differs from ` + wf + `: job "analyze" step 2 (github/codeql-action/init@` + v391 + `)`,
+			wf + `: job "analyze" step 4 (github/codeql-action/analyze@` + v390 + `) differs from ` + wf + `: job "analyze" step 2 (github/codeql-action/init@` + v391 + `)`,
 		}},
-		{"analyze bumped alone (#310)", workflow(v390, v390, v391), []string{
-			`codeql.yml: job "analyze" step 4 (github/codeql-action/analyze@` + v391 + `) differs from job "analyze" step 2 (github/codeql-action/init@` + v390 + `)`,
+		{"analyze bumped alone (#310)", map[string]string{wf: workflow(v390, v390, v391)}, []string{
+			wf + `: job "analyze" step 4 (github/codeql-action/analyze@` + v391 + `) differs from ` + wf + `: job "analyze" step 2 (github/codeql-action/init@` + v390 + `)`,
 		}},
-		{"same ref, different comment", workflow(v391, v391, "9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.0"), []string{
-			`codeql.yml: job "analyze" step 4 (github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.0) differs from job "analyze" step 2 (github/codeql-action/init@` + v391 + `)`,
+		{"same ref, different comment", map[string]string{wf: workflow(v391, v391, "9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.0")}, []string{
+			wf + `: job "analyze" step 4 (github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.0) differs from ` + wf + `: job "analyze" step 2 (github/codeql-action/init@` + v391 + `)`,
 		}},
-		{"across jobs", `
+		{"across jobs", map[string]string{wf: `
 jobs:
   a:
     steps:
@@ -1536,20 +1559,67 @@ jobs:
   b:
     steps:
       - uses: github/codeql-action/upload-sarif@` + v390 + `
-`, []string{
-			`codeql.yml: job "b" step 1 (github/codeql-action/upload-sarif@` + v390 + `) differs from job "a" step 1 (github/codeql-action/init@` + v391 + `)`,
+`}, []string{
+			wf + `: job "b" step 1 (github/codeql-action/upload-sarif@` + v390 + `) differs from ` + wf + `: job "a" step 1 (github/codeql-action/init@` + v391 + `)`,
 		}},
-		{"no codeql steps", `
+		{".yaml workflow", map[string]string{".github/workflows/codeql.yaml": workflow(v391, v391, v390)}, []string{
+			`.github/workflows/codeql.yaml: job "analyze" step 4 (github/codeql-action/analyze@` + v390 + `) differs from .github/workflows/codeql.yaml: job "analyze" step 2 (github/codeql-action/init@` + v391 + `)`,
+		}},
+		{"composite action", map[string]string{
+			".github/workflows/ci.yml": `
+jobs:
+  build:
+    steps:
+      - run: go test ./...
+`,
+			".github/actions/codeql/action.yml": `
+runs:
+  using: composite
+  steps:
+    - uses: github/codeql-action/init@` + v391 + `
+    - uses: github/codeql-action/analyze@` + v390 + `
+`,
+		}, []string{
+			`.github/actions/codeql/action.yml: runs step 2 (github/codeql-action/analyze@` + v390 + `) differs from .github/actions/codeql/action.yml: runs step 1 (github/codeql-action/init@` + v391 + `)`,
+		}},
+		{"local action used by a workflow", map[string]string{
+			wf: workflow(v391, v391, v391),
+			".github/workflows/scan.yml": `
+jobs:
+  scan:
+    steps:
+      - uses: ./nested
+`,
+			"nested/action.yaml": `
+runs:
+  using: composite
+  steps:
+    - uses: github/codeql-action/upload-sarif@` + v390 + `
+`,
+		}, []string{
+			`nested/action.yaml: runs step 1 (github/codeql-action/upload-sarif@` + v390 + `) differs from ` + wf + `: job "analyze" step 2 (github/codeql-action/init@` + v391 + `)`,
+		}},
+		{"two files", map[string]string{
+			wf:                                  workflow(v391, v391, v391),
+			".github/workflows/govulncheck.yml": sarif(v390),
+		}, []string{
+			`.github/workflows/govulncheck.yml: job "scan" step 1 (github/codeql-action/upload-sarif@` + v390 + `) differs from ` + wf + `: job "analyze" step 2 (github/codeql-action/init@` + v391 + `)`,
+		}},
+		{"two files on one version", map[string]string{
+			wf:                                  workflow(v391, v391, v391),
+			".github/workflows/govulncheck.yml": sarif(v391),
+		}, nil},
+		{"no codeql steps", map[string]string{wf: `
 jobs:
   test:
     steps:
       - run: go test ./...
-`, nil},
-		{"empty file", ``, nil},
+`}, nil},
+		{"empty file", map[string]string{wf: ``}, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := codeqlVersionMismatches("codeql.yml", []byte(tt.yaml))
+			got, err := codeqlVersionMismatches(writeRepo(t, tt.files))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1558,8 +1628,11 @@ jobs:
 			}
 		})
 	}
-	if _, err := codeqlVersionMismatches("codeql.yml", []byte("jobs: [")); err == nil {
+	if _, err := codeqlVersionMismatches(writeRepo(t, map[string]string{wf: "jobs: ["})); err == nil {
 		t.Error("codeqlVersionMismatches() succeeded on invalid YAML, want error")
+	}
+	if _, err := codeqlVersionMismatches(t.TempDir()); err == nil {
+		t.Error("codeqlVersionMismatches() succeeded without workflow files, want error")
 	}
 }
 
