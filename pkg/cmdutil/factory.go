@@ -16,6 +16,7 @@ type Factory struct {
 	IOStreams *iostreams.IOStreams
 	Config   func() (*config.Config, error)
 	BaseRepo func() (string, string, error) // returns owner, repo
+	Browser  Browser
 
 	// Overrides (flags only ��� env vars resolved in ResolveAuth)
 	Token string

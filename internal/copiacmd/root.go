@@ -66,6 +66,7 @@ func Main() int {
 			return config.Load(config.DefaultPath())
 		},
 		BaseRepo: cmdutil.DetectBaseRepo(),
+		Browser:  cmdutil.NewBrowser(),
 	}
 
 	// Note: env vars (COPIA_TOKEN, COPIA_HOST) are resolved in
