@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qubernetic/copia-cli/internal/config"
 	"github.com/qubernetic/copia-cli/pkg/cmdutil"
@@ -694,6 +696,37 @@ func TestNewCmdAPI_JQErrors(t *testing.T) {
 			}
 			assert.Equal(t, tt.wantOut, stdout.String())
 		})
+	}
+}
+
+// TestNewCmdAPI_JQUsesCommandContext pins that --jq runs with the command's
+// context: the responder cancels it after the request, so only the filter
+// can see the cancellation, and a filter that never ends must stop.
+func TestNewCmdAPI_JQUsesCommandContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+	reg.Register(httpmock.REST("GET", "/api/v1/user"), func(req *http.Request) (*http.Response, error) {
+		cancel()
+		return httpmock.StringResponse(http.StatusOK, `[]`)(req)
+	})
+
+	ios, _, _, _ := iostreams.Test()
+	f := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Token: "test-token"}
+	cmd := NewCmdAPI(f)
+	cmd.SetArgs([]string{"/user", "--jq", "last(repeat(.))"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.ExecuteContext(ctx) }()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("--jq did not stop on a canceled command context")
 	}
 }
 
