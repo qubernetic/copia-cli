@@ -1411,11 +1411,18 @@ func isVersionedAction(uses string) bool {
 	return false
 }
 
+// codecovSkipInputs are the codecov/codecov-action inputs that skip the GPG
+// signature and SHA256 check of the Codecov CLI; `binary` also runs a file
+// of any version in place of the pinned one. Each counts unless it is
+// `false`; `binary` counts with any value.
+var codecovSkipInputs = []string{"skip_validation", "binary", "use_pypi"}
+
 // unpinnedVersions returns one message per step of a workflow or action, in
 // the steps of its jobs and of `runs`, whose tool version can float: a
 // versionedActions step without an exact `with.version` (v<x.y.z>), any other
-// step whose `with.version` is not exact, and any step with
-// `with.version-file`.
+// step whose `with.version` is not exact, any step with `with.version-file`,
+// and a codecov/codecov-action step with one of codecovSkipInputs. Input
+// names match regardless of case, as on the runner.
 func unpinnedVersions(file string, data []byte) ([]string, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
@@ -1447,6 +1454,13 @@ func unpinnedVersions(file string, data []byte) ([]string, error) {
 			case !exactVersion.MatchString(version.Value):
 				out = append(out, fmt.Sprintf("%s: with.version %q is not an exact version, set it to v<x.y.z>", at, version.Value))
 			}
+			if uses := mappingValue(s, "uses"); uses != nil && strings.HasPrefix(strings.ToLower(uses.Value), "codecov/codecov-action@") {
+				for _, input := range codecovSkipInputs {
+					if v := inputValue(with, input); v != nil && (input == "binary" || v.Value != "false") {
+						out = append(out, fmt.Sprintf("%s: with.%s %q skips the signature and checksum check of the Codecov CLI, remove it", at, input, v.Value))
+					}
+				}
+			}
 		}
 	}
 	root := doc.Content[0]
@@ -1474,8 +1488,9 @@ func scanVersions(repo string) ([]string, error) {
 // TestNoStepUsesLatestVersion keeps every tool an action installs from its
 // `with.version` input on a fixed version: `latest`, a missing or empty input,
 // a range (`~> v2`), a major version, `nightly` or a version file runs
-// whatever was published last, and Dependabot does not track the input. The
-// check covers every local action a workflow uses.
+// whatever was published last, and Dependabot does not track the input. A
+// Codecov step may not skip the CLI's signature and checksum check either.
+// The check covers every local action a workflow uses.
 func TestNoStepUsesLatestVersion(t *testing.T) {
 	offenders, err := scanVersions(filepath.Join("..", ".."))
 	if err != nil {
@@ -1506,6 +1521,21 @@ jobs:
 		return []string{fmt.Sprintf("%s: with.version %q is not an exact version, set it to v<x.y.z>", at, v)}
 	}
 	missing := []string{at + ": with.version is missing and defaults to latest, set it to v<x.y.z>"}
+	codecovStep := func(with string) string {
+		return `
+jobs:
+  test:
+    steps:
+      - uses: ` + codecov + `
+        with:
+          use_oidc: true
+          version: v11.3.2` + with + `
+`
+	}
+	codecovSkips := func(input, v string) []string {
+		return []string{fmt.Sprintf(`test.yml: job "test" step 1 (%s): with.%s %q skips the signature and checksum check of the Codecov CLI, remove it`,
+			strings.SplitN(codecov, " ", 2)[0], input, v)}
+	}
 	tests := []struct {
 		name string
 		yaml string
@@ -1587,6 +1617,16 @@ jobs:
 			`test.yml: job "lint" step 1 (golangci/golangci-lint-action@v9): with.version "latest" is not an exact version, set it to v<x.y.z>`,
 			`test.yml: job "lint" step 2 (actions/setup-go@v6): with.version-file reads the version at run time, set with.version to v<x.y.z>`,
 		}},
+		{"codecov skip validation", codecovStep("\n          skip_validation: true"), codecovSkips("skip_validation", "true")},
+		{"codecov skip validation one", codecovStep("\n          skip_validation: '1'"), codecovSkips("skip_validation", "1")},
+		{"codecov skip validation expression", codecovStep("\n          skip_validation: ${{ env.X }}"), codecovSkips("skip_validation", "${{ env.X }}")},
+		{"codecov upper-case skip validation", codecovStep("\n          Skip_Validation: true"), codecovSkips("skip_validation", "true")},
+		{"codecov skip validation false", codecovStep("\n          skip_validation: false"), nil},
+		{"codecov binary", codecovStep("\n          binary: ./codecov"), codecovSkips("binary", "./codecov")},
+		{"codecov empty binary", codecovStep("\n          binary: ''"), codecovSkips("binary", "")},
+		{"codecov use pypi", codecovStep("\n          use_pypi: true"), codecovSkips("use_pypi", "true")},
+		{"codecov use pypi false", codecovStep("\n          use_pypi: false"), nil},
+		{"other action with skip validation", step(goreleaser, "\n          version: v2.18.3\n          skip_validation: true"), nil},
 		{"composite action step", `
 runs:
   using: composite
