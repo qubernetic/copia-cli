@@ -293,13 +293,19 @@ func TestFilterJQ_NoOutsideAccess(t *testing.T) {
 		expr    string
 		want    string
 		wantErr bool
+		// errMsg, when set, is the exact error: gojq's own message for a
+		// module without a module loader, so a loader that fails to find
+		// the file does not pass.
+		errMsg string
 	}{
 		{name: "$ENV", expr: "$ENV", want: "{}\n"},
 		{name: "env", expr: "env", want: "{}\n"},
 		{name: "input", expr: "input", wantErr: true},
 		{name: "inputs", expr: "[inputs]", wantErr: true},
-		{name: "import", expr: `import "x" as x; .`, wantErr: true},
-		{name: "include", expr: `include "x"; .`, wantErr: true},
+		{name: "import", expr: `import "x" as x; .`, wantErr: true,
+			errMsg: `invalid --jq expression: cannot load module: "x"`},
+		{name: "include", expr: `include "x"; .`, wantErr: true,
+			errMsg: `invalid --jq expression: cannot load module: "x"`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -307,6 +313,9 @@ func TestFilterJQ_NoOutsideAccess(t *testing.T) {
 			err := FilterJQ(context.Background(), &out, map[string]any{}, tt.expr)
 			if tt.wantErr {
 				require.Error(t, err)
+				if tt.errMsg != "" {
+					require.EqualError(t, err, tt.errMsg)
+				}
 				assert.NotContains(t, out.String(), "secret-token")
 				return
 			}
