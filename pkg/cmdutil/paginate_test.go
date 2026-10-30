@@ -328,17 +328,89 @@ func TestFollowLinkPages_ResolvesRelativeLink(t *testing.T) {
 	assert.Equal(t, "app.copia.io", reg.Requests[1].URL.Host)
 }
 
-func TestFollowLinkPages_RefusesOtherHost(t *testing.T) {
-	reg := &httpmock.Registry{}
-	defer reg.Verify(t)
-	reg.Register(httpmock.QueryMatcher("GET", "/issues", url.Values{"page": nil}),
-		httpmock.WithHeader(httpmock.StringResponse(http.StatusOK, `[1]`), "Link", `<https://evil.example/api/v1/repos/o/r/issues?page=2>; rel="next"`))
+func TestFollowLinkPages_StopsOnRepeatedLink(t *testing.T) {
+	tests := []struct {
+		name     string
+		register func(reg *httpmock.Registry)
+		repeated string
+		requests int
+	}{
+		{
+			name: "self link",
+			register: func(reg *httpmock.Registry) {
+				reg.Register(httpmock.QueryMatcher("GET", "/issues", url.Values{"page": nil}),
+					httpmock.WithHeader(httpmock.StringResponse(http.StatusOK, `[1]`), "Link", `<`+linkedURL+`>; rel="next"`))
+			},
+			repeated: linkedURL,
+			requests: 1,
+		},
+		{
+			name: "page 2 links back to page 1",
+			register: func(reg *httpmock.Registry) {
+				linkedPage(reg, 1, 2, `[1]`)
+				reg.Register(httpmock.QueryMatcher("GET", "/issues", url.Values{"page": {"2"}}),
+					httpmock.WithHeader(httpmock.StringResponse(http.StatusOK, `[2]`), "Link", `<`+linkedURL+`>; rel="next"`))
+			},
+			repeated: linkedURL,
+			requests: 2,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			defer reg.Verify(t)
+			tt.register(reg)
 
-	var bodies []string
-	err := FollowLinkPages(&http.Client{Transport: reg}, newLinkedRequest(t), collectBodies(&bodies))
-	require.EqualError(t, err, `refusing to follow the next page link to another host: "https://evil.example/api/v1/repos/o/r/issues?page=2"`)
-	assert.Equal(t, []string{`[1]`}, bodies, "the first page is still handed over")
-	assert.Len(t, reg.Requests, 1, "the token is never sent to the other host")
+			var bodies []string
+			err := FollowLinkPages(&http.Client{Transport: reg}, newLinkedRequest(t), collectBodies(&bodies))
+			require.EqualError(t, err, fmt.Sprintf("the next page link repeats an already fetched page: %q", tt.repeated))
+			assert.Len(t, bodies, tt.requests, "every fetched page is still handed over")
+			assert.Len(t, reg.Requests, tt.requests)
+		})
+	}
+}
+
+func TestFollowLinkPages_ChecksNextLinkOrigin(t *testing.T) {
+	tests := []struct {
+		name    string
+		link    string
+		refused string
+	}{
+		{name: "other host", link: "https://evil.example/api/v1/repos/o/r/issues?page=2", refused: "https://evil.example/api/v1/repos/o/r/issues?page=2"},
+		{name: "plain http on the same host", link: "http://app.copia.io/api/v1/repos/o/r/issues?page=2", refused: "http://app.copia.io/api/v1/repos/o/r/issues?page=2"},
+		{name: "same host on another port", link: "https://app.copia.io:8443/api/v1/repos/o/r/issues?page=2", refused: "https://app.copia.io:8443/api/v1/repos/o/r/issues?page=2"},
+		{name: "scheme-relative link to another host", link: "//other.example/api/v1/repos/o/r/issues?page=2", refused: "https://other.example/api/v1/repos/o/r/issues?page=2"},
+		{name: "upper-case host", link: "https://APP.COPIA.IO/api/v1/repos/o/r/issues?page=2", refused: "https://APP.COPIA.IO/api/v1/repos/o/r/issues?page=2"},
+		{name: "trailing dot", link: "https://app.copia.io./api/v1/repos/o/r/issues?page=2", refused: "https://app.copia.io./api/v1/repos/o/r/issues?page=2"},
+		{name: "user info on the same host", link: "https://user@app.copia.io/api/v1/repos/o/r/issues?page=2"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			defer reg.Verify(t)
+			reg.Register(httpmock.QueryMatcher("GET", "/issues", url.Values{"page": nil}),
+				httpmock.WithHeader(httpmock.StringResponse(http.StatusOK, `[1]`), "Link", `<`+tt.link+`>; rel="next"`))
+			if tt.refused == "" {
+				linkedPage(reg, 2, 0, `[2]`)
+			}
+
+			var bodies []string
+			err := FollowLinkPages(&http.Client{Transport: reg}, newLinkedRequest(t), collectBodies(&bodies))
+
+			if tt.refused != "" {
+				require.EqualError(t, err, fmt.Sprintf("refusing to follow the next page link to another host: %q", tt.refused))
+				assert.Equal(t, []string{`[1]`}, bodies, "the first page is still handed over")
+				assert.Len(t, reg.Requests, 1, "the token is never sent to the other origin")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, []string{`[1]`, `[2]`}, bodies)
+			require.Len(t, reg.Requests, 2)
+			auth := reg.Requests[1].Header.Get("Authorization")
+			assert.Equal(t, "token test-token", auth)
+			assert.NotContains(t, auth, "Basic")
+		})
+	}
 }
 
 func TestFollowLinkPages_StopsOnCallbackError(t *testing.T) {
