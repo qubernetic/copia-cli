@@ -1,6 +1,6 @@
 # Dev image for the sandbox (.devcontainer/compose.yaml). The source is bind-mounted, not copied,
 # and the image runs as 1000:100, so nothing here writes git config as root.
-FROM golang:1.26.9-alpine
+FROM golang:1.27.3-alpine
 
 ARG GOLANGCI_LINT_VERSION=v2.15.0
 

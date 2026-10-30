@@ -101,7 +101,7 @@ copia-cli/
 │   └── Dockerfile                 # Sandbox dev image with pinned golangci-lint
 ├── .goreleaser.yml                # Cross-platform release config
 ├── justfile                       # Command runner (build, test, lint, dev)
-├── Dockerfile                     # Go 1.26.9 dev image
+├── Dockerfile                     # Go dev image (Go version of go.mod)
 ├── docker-compose.yml             # Base compose config
 └── docker-compose.dev.yaml        # Dev overlay (source mount + caches)
 ```
