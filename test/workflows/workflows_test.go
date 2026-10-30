@@ -2070,6 +2070,75 @@ func TestChecksumsAreChecked(t *testing.T) {
 	}
 }
 
+// goOutputVar matches a shell variable written to GITHUB_OUTPUT, as in
+// echo "current=$CURRENT" >> "$GITHUB_OUTPUT".
+var goOutputVar = regexp.MustCompile(`=\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?" >> "\$GITHUB_OUTPUT"`)
+
+// uncheckedGoVersions lists every shell variable the run block writes to
+// GITHUB_OUTPUT without running script/check-go-version.sh on it before the
+// first write to GITHUB_OUTPUT.
+func uncheckedGoVersions(run string) []string {
+	first := strings.Index(run, `>> "$GITHUB_OUTPUT"`)
+	var unchecked []string
+	seen := map[string]bool{}
+	for _, m := range goOutputVar.FindAllStringSubmatch(run, -1) {
+		v := m[1]
+		if seen[v] {
+			continue
+		}
+		seen[v] = true
+		guard := strings.Index(run, `script/check-go-version.sh "$`+v+`"`)
+		if guard < 0 || guard > first {
+			unchecked = append(unchecked, v)
+		}
+	}
+	return unchecked
+}
+
+// TestGoVersionsAreChecked keeps both versions bump-go.yml writes to
+// GITHUB_OUTPUT, the one from go.dev and the one from go.mod, out of the
+// branch name and the PR unless they passed script/check-go-version.sh.
+func TestGoVersionsAreChecked(t *testing.T) {
+	run := stepRun(t, "bump-go.yml", "Check latest Go version")
+	if len(goOutputVar.FindAllString(run, -1)) == 0 {
+		t.Fatal("bump-go.yml: Check latest Go version writes no shell variable to GITHUB_OUTPUT")
+	}
+	for _, v := range uncheckedGoVersions(run) {
+		t.Errorf("bump-go.yml: Check latest Go version writes $%s to GITHUB_OUTPUT without running script/check-go-version.sh \"$%s\" first", v, v)
+	}
+
+	for _, tc := range []struct {
+		name, run string
+		want      []string
+	}{
+		{"both checked", `script/check-go-version.sh "$LATEST"
+script/check-go-version.sh "$CURRENT"
+echo "latest=$LATEST" >> "$GITHUB_OUTPUT"
+echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+`, nil},
+		{"current unchecked", `script/check-go-version.sh "$LATEST"
+echo "latest=$LATEST" >> "$GITHUB_OUTPUT"
+echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+`, []string{"CURRENT"}},
+		{"current checked after the first write", `script/check-go-version.sh "$LATEST"
+echo "latest=$LATEST" >> "$GITHUB_OUTPUT"
+script/check-go-version.sh "$CURRENT"
+echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+`, []string{"CURRENT"}},
+		{"braced variable unchecked", `script/check-go-version.sh "$LATEST"
+echo "latest=$LATEST" >> "$GITHUB_OUTPUT"
+echo "current=${CURRENT}" >> "$GITHUB_OUTPUT"
+`, []string{"CURRENT"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := uncheckedGoVersions(tc.run)
+			if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+				t.Errorf("uncheckedGoVersions: %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestAURKeyIsPrivate keeps the AUR SSH key from existing with the default
 // umask, even for the moment before chmod 600.
 func TestAURKeyIsPrivate(t *testing.T) {
@@ -2146,8 +2215,8 @@ func TestAURHostKeyIsPinned(t *testing.T) {
 	}
 }
 
-// TestCheckGoVersion covers the guard bump-go.yml runs on the version it reads
-// from go.dev before writing it to GITHUB_OUTPUT.
+// TestCheckGoVersion covers the guard bump-go.yml runs on the versions it reads
+// from go.dev and go.mod before writing them to GITHUB_OUTPUT.
 func TestCheckGoVersion(t *testing.T) {
 	script := filepath.Join("..", "..", "script", "check-go-version.sh")
 
