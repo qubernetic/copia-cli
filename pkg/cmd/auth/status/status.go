@@ -61,6 +61,11 @@ func StatusRun(opts *StatusOptions) error {
 		}
 	}
 
+	// Piping the token on purpose is valid, so warn instead of refusing.
+	if opts.ShowToken && !opts.IO.IsStdoutTTY() {
+		_, _ = fmt.Fprintln(opts.IO.ErrOut, "warning: printing the token to a non-terminal output; it may end up in a log or a file")
+	}
+
 	for host, hc := range cfg.Hosts {
 		if opts.Host != "" && host != opts.Host {
 			continue
