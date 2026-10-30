@@ -1435,10 +1435,10 @@ func unpinnedVersions(file string, data []byte) ([]string, error) {
 				at += " (" + uses.Value + ")"
 			}
 			with := mappingValue(s, "with")
-			if mappingValue(with, "version-file") != nil {
+			if inputValue(with, "version-file") != nil {
 				out = append(out, at+": with.version-file reads the version at run time, set with.version to v<x.y.z>")
 			}
-			version := mappingValue(with, "version")
+			version := inputValue(with, "version")
 			switch {
 			case version == nil:
 				if uses := mappingValue(s, "uses"); uses != nil && isVersionedAction(uses.Value) {
@@ -1570,6 +1570,23 @@ jobs:
 `, []string{
 			`test.yml: job "lint" step 1 (golangci/golangci-lint-action@v9): with.version "latest" is not an exact version, set it to v<x.y.z>`,
 		}},
+		{"upper-case input names", `
+jobs:
+  lint:
+    steps:
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          Version: latest
+      - uses: actions/setup-go@v6
+        with:
+          Version-File: .v
+      - uses: ` + goreleaser + `
+        with:
+          VERSION: v2.18.3
+`, []string{
+			`test.yml: job "lint" step 1 (golangci/golangci-lint-action@v9): with.version "latest" is not an exact version, set it to v<x.y.z>`,
+			`test.yml: job "lint" step 2 (actions/setup-go@v6): with.version-file reads the version at run time, set with.version to v<x.y.z>`,
+		}},
 		{"composite action step", `
 runs:
   using: composite
@@ -1643,6 +1660,20 @@ func mappingValue(n *yaml.Node, key string) *yaml.Node {
 	for i := 0; i+1 < len(n.Content); i += 2 {
 		if n.Content[i].Value == key {
 			return n.Content[i+1]
+		}
+	}
+	return nil
+}
+
+// inputValue returns the value node of the input name in a step's `with`
+// mapping, or nil. The runner matches input names regardless of case.
+func inputValue(with *yaml.Node, name string) *yaml.Node {
+	if with == nil || with.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(with.Content); i += 2 {
+		if strings.EqualFold(with.Content[i].Value, name) {
+			return with.Content[i+1]
 		}
 	}
 	return nil
