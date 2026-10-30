@@ -49,6 +49,8 @@ hosts:
 
 `copia-cli auth status` lists every host in the config file with its user, its token and whether Copia accepts the token. `--host` limits the output to one host.
 
+`auth status` reads only the config file and the `--host` flag. It does not read `COPIA_HOST` or `COPIA_TOKEN`, so when either is set, the other commands may use a different host or token than the one `auth status` reports on.
+
 ```console
 $ copia-cli auth status
 app.copia.io
@@ -64,7 +66,7 @@ copia-cli auth status --show-token
 copia-cli auth status --host app.copia.io --show-token
 ```
 
-**The output then contains the secret.** Do not run it where the terminal is recorded or shared, or in a CI log. The flag changes the output only; the config file is not touched.
+**The output then contains the secret.** Do not run it where the terminal is recorded or shared, or in a CI log. The flag changes the output only; the config file is not touched. When standard output is not a terminal (a pipe, a redirect or a CI log), `auth status --show-token` still prints the token and writes one warning line to standard error.
 
 ## Auth Precedence
 
