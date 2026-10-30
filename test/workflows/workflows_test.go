@@ -1393,24 +1393,302 @@ func TestRunBlocksPinTools(t *testing.T) {
 	}
 }
 
-// TestNoStepUsesLatestVersion keeps every tool an action installs from its
-// `with.version` input on a fixed version: `latest` runs whatever was
-// published last, and Dependabot does not track the input.
-func TestNoStepUsesLatestVersion(t *testing.T) {
-	files, err := filepath.Glob(filepath.Join("..", "..", ".github", "workflows", "*.yml"))
-	if err != nil {
-		t.Fatal(err)
+var exactVersion = regexp.MustCompile(`^v\d+\.\d+\.\d+$`)
+
+// versionedActions install a tool chosen by their `with.version` input and
+// fall back to `latest` when it is missing or empty.
+var versionedActions = []string{
+	"codecov/codecov-action@",
+	"goreleaser/goreleaser-action@",
+}
+
+func isVersionedAction(uses string) bool {
+	for _, prefix := range versionedActions {
+		if strings.HasPrefix(strings.ToLower(uses), prefix) {
+			return true
+		}
 	}
-	for _, file := range files {
-		name := filepath.Base(file)
-		wf := loadWorkflow(t, name)
-		for _, job := range sortedJobs(wf) {
-			for i, s := range wf.Jobs[job].Steps {
-				if strings.EqualFold(strings.TrimSpace(s.With.Version), "latest") {
-					t.Errorf("%s: job %q step %d (%q): with.version is latest, pin the exact version", name, job, i+1, s.Name)
+	return false
+}
+
+// codecovSkipInputs are the codecov/codecov-action inputs that skip the GPG
+// signature and SHA256 check of the Codecov CLI; `binary` also runs a file
+// of any version in place of the pinned one. Each counts unless it is
+// `false`; `binary` counts with any value.
+var codecovSkipInputs = []string{"skip_validation", "binary", "use_pypi"}
+
+// unpinnedVersions returns one message per step of a workflow or action, in
+// the steps of its jobs and of `runs`, whose tool version can float: a
+// versionedActions step without an exact `with.version` (v<x.y.z>), any other
+// step whose `with.version` is not exact, any step with `with.version-file`,
+// and a codecov/codecov-action step with one of codecovSkipInputs. Input
+// names match regardless of case, as on the runner.
+func unpinnedVersions(file string, data []byte) ([]string, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil, fmt.Errorf("%s: %w", file, err)
+	}
+	if len(doc.Content) == 0 {
+		return nil, nil
+	}
+	var out []string
+	checkSteps := func(where string, steps *yaml.Node) {
+		if steps == nil {
+			return
+		}
+		for i, s := range steps.Content {
+			at := fmt.Sprintf("%s: %s step %d", file, where, i+1)
+			if uses := mappingValue(s, "uses"); uses != nil {
+				at += " (" + uses.Value + ")"
+			}
+			with := mappingValue(s, "with")
+			if inputValue(with, "version-file") != nil {
+				out = append(out, at+": with.version-file reads the version at run time, set with.version to v<x.y.z>")
+			}
+			version := inputValue(with, "version")
+			switch {
+			case version == nil:
+				if uses := mappingValue(s, "uses"); uses != nil && isVersionedAction(uses.Value) {
+					out = append(out, at+": with.version is missing and defaults to latest, set it to v<x.y.z>")
+				}
+			case !exactVersion.MatchString(version.Value):
+				out = append(out, fmt.Sprintf("%s: with.version %q is not an exact version, set it to v<x.y.z>", at, version.Value))
+			}
+			if uses := mappingValue(s, "uses"); uses != nil && strings.HasPrefix(strings.ToLower(uses.Value), "codecov/codecov-action@") {
+				for _, input := range codecovSkipInputs {
+					if v := inputValue(with, input); v != nil && (input == "binary" || v.Value != "false") {
+						out = append(out, fmt.Sprintf("%s: with.%s %q skips the signature and checksum check of the Codecov CLI, remove it", at, input, v.Value))
+					}
 				}
 			}
 		}
+	}
+	root := doc.Content[0]
+	if jobs := mappingValue(root, "jobs"); jobs != nil && jobs.Kind == yaml.MappingNode {
+		for j := 0; j+1 < len(jobs.Content); j += 2 {
+			checkSteps(fmt.Sprintf("job %q", jobs.Content[j].Value), mappingValue(jobs.Content[j+1], "steps"))
+		}
+	}
+	checkSteps("runs", mappingValue(mappingValue(root, "runs"), "steps"))
+	return out, nil
+}
+
+// scanVersions returns the unpinnedVersions messages of every file walkRepo
+// visits. A local path that names no file is left to scanRepo.
+func scanVersions(repo string) ([]string, error) {
+	var offenders []string
+	_, err := walkRepo(repo, func(file string, data []byte, _ actionFile) ([]string, error) {
+		found, err := unpinnedVersions(file, data)
+		offenders = append(offenders, found...)
+		return nil, err
+	})
+	return offenders, err
+}
+
+// TestNoStepUsesLatestVersion keeps every tool an action installs from its
+// `with.version` input on a fixed version: `latest`, a missing or empty input,
+// a range (`~> v2`), a major version, `nightly` or a version file runs
+// whatever was published last, and Dependabot does not track the input. A
+// Codecov step may not skip the CLI's signature and checksum check either.
+// The check covers every local action a workflow uses.
+func TestNoStepUsesLatestVersion(t *testing.T) {
+	offenders, err := scanVersions(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range offenders {
+		t.Error(o)
+	}
+}
+
+func TestUnpinnedVersions(t *testing.T) {
+	const (
+		goreleaser = "goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0"
+		codecov    = "codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1"
+	)
+	step := func(uses, with string) string {
+		return `
+jobs:
+  release:
+    steps:
+      - uses: ` + uses + `
+        with:
+          distribution: goreleaser` + with + `
+`
+	}
+	at := `test.yml: job "release" step 1 (` + strings.SplitN(goreleaser, " ", 2)[0] + `)`
+	notExact := func(v string) []string {
+		return []string{fmt.Sprintf("%s: with.version %q is not an exact version, set it to v<x.y.z>", at, v)}
+	}
+	missing := []string{at + ": with.version is missing and defaults to latest, set it to v<x.y.z>"}
+	codecovStep := func(with string) string {
+		return `
+jobs:
+  test:
+    steps:
+      - uses: ` + codecov + `
+        with:
+          use_oidc: true
+          version: v11.3.2` + with + `
+`
+	}
+	codecovSkips := func(input, v string) []string {
+		return []string{fmt.Sprintf(`test.yml: job "test" step 1 (%s): with.%s %q skips the signature and checksum check of the Codecov CLI, remove it`,
+			strings.SplitN(codecov, " ", 2)[0], input, v)}
+	}
+	tests := []struct {
+		name string
+		yaml string
+		want []string
+	}{
+		{"exact version", step(goreleaser, "\n          version: v2.18.3"), nil},
+		{"missing version", step(goreleaser, ""), missing},
+		{"empty version", step(goreleaser, "\n          version:"), notExact("")},
+		{"empty string version", step(goreleaser, "\n          version: ''"), notExact("")},
+		{"latest", step(goreleaser, "\n          version: latest"), notExact("latest")},
+		{"major version", step(goreleaser, "\n          version: v2"), notExact("v2")},
+		{"range", step(goreleaser, "\n          version: '~> v2'"), notExact("~> v2")},
+		{"nightly", step(goreleaser, "\n          version: nightly"), notExact("nightly")},
+		{"without v", step(goreleaser, "\n          version: 2.18.3"), notExact("2.18.3")},
+		{"expression", step(goreleaser, "\n          version: ${{ env.GORELEASER }}"), notExact("${{ env.GORELEASER }}")},
+		{"version file", step(goreleaser, "\n          version-file: .goreleaser-version"), []string{
+			at + ": with.version-file reads the version at run time, set with.version to v<x.y.z>",
+			at + ": with.version is missing and defaults to latest, set it to v<x.y.z>",
+		}},
+		{"version file next to a version", step(goreleaser, "\n          version: v2.18.3\n          version-file: .goreleaser-version"), []string{
+			at + ": with.version-file reads the version at run time, set with.version to v<x.y.z>",
+		}},
+		{"upper-case action", step("GoReleaser/GoReleaser-Action@v7", ""), []string{
+			`test.yml: job "release" step 1 (GoReleaser/GoReleaser-Action@v7): with.version is missing and defaults to latest, set it to v<x.y.z>`,
+		}},
+		{"codecov without version", `
+jobs:
+  test:
+    steps:
+      - uses: ` + codecov + `
+        with:
+          use_oidc: true
+      - uses: ` + codecov + `
+        with:
+          use_oidc: true
+          version: v11.3.2
+`, []string{
+			`test.yml: job "test" step 1 (` + strings.SplitN(codecov, " ", 2)[0] + `): with.version is missing and defaults to latest, set it to v<x.y.z>`,
+		}},
+		{"codecov without with", `
+jobs:
+  test:
+    steps:
+      - uses: ` + codecov + `
+`, []string{
+			`test.yml: job "test" step 1 (` + strings.SplitN(codecov, " ", 2)[0] + `): with.version is missing and defaults to latest, set it to v<x.y.z>`,
+		}},
+		{"other action with a floating version", `
+jobs:
+  lint:
+    steps:
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: latest
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.15.0
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: go test ./...
+`, []string{
+			`test.yml: job "lint" step 1 (golangci/golangci-lint-action@v9): with.version "latest" is not an exact version, set it to v<x.y.z>`,
+		}},
+		{"upper-case input names", `
+jobs:
+  lint:
+    steps:
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          Version: latest
+      - uses: actions/setup-go@v6
+        with:
+          Version-File: .v
+      - uses: ` + goreleaser + `
+        with:
+          VERSION: v2.18.3
+`, []string{
+			`test.yml: job "lint" step 1 (golangci/golangci-lint-action@v9): with.version "latest" is not an exact version, set it to v<x.y.z>`,
+			`test.yml: job "lint" step 2 (actions/setup-go@v6): with.version-file reads the version at run time, set with.version to v<x.y.z>`,
+		}},
+		{"codecov skip validation", codecovStep("\n          skip_validation: true"), codecovSkips("skip_validation", "true")},
+		{"codecov skip validation one", codecovStep("\n          skip_validation: '1'"), codecovSkips("skip_validation", "1")},
+		{"codecov skip validation expression", codecovStep("\n          skip_validation: ${{ env.X }}"), codecovSkips("skip_validation", "${{ env.X }}")},
+		{"codecov upper-case skip validation", codecovStep("\n          Skip_Validation: true"), codecovSkips("skip_validation", "true")},
+		{"codecov skip validation false", codecovStep("\n          skip_validation: false"), nil},
+		{"codecov binary", codecovStep("\n          binary: ./codecov"), codecovSkips("binary", "./codecov")},
+		{"codecov empty binary", codecovStep("\n          binary: ''"), codecovSkips("binary", "")},
+		{"codecov use pypi", codecovStep("\n          use_pypi: true"), codecovSkips("use_pypi", "true")},
+		{"codecov use pypi false", codecovStep("\n          use_pypi: false"), nil},
+		{"other action with skip validation", step(goreleaser, "\n          version: v2.18.3\n          skip_validation: true"), nil},
+		{"composite action step", `
+runs:
+  using: composite
+  steps:
+    - uses: ` + codecov + `
+`, []string{
+			`test.yml: runs step 1 (` + strings.SplitN(codecov, " ", 2)[0] + `): with.version is missing and defaults to latest, set it to v<x.y.z>`,
+		}},
+		{"empty file", ``, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := unpinnedVersions("test.yml", []byte(tt.yaml))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Join(got, "\n") != strings.Join(tt.want, "\n") {
+				t.Errorf("unpinnedVersions() =\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(tt.want, "\n"))
+			}
+		})
+	}
+	if _, err := unpinnedVersions("test.yml", []byte("jobs: [")); err == nil {
+		t.Error("unpinnedVersions() succeeded on invalid YAML, want error")
+	}
+}
+
+func TestScanVersions(t *testing.T) {
+	got, err := scanVersions(writeRepo(t, map[string]string{
+		".github/workflows/release.yaml": `
+jobs:
+  release:
+    steps:
+      - uses: ./.github/actions/outer
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          version: '~> v2'
+`,
+		".github/actions/outer/action.yml": `
+runs:
+  using: composite
+  steps:
+    - uses: ./nested
+`,
+		"nested/action.yml": `
+runs:
+  using: composite
+  steps:
+    - uses: codecov/codecov-action@v7
+      with:
+        version: latest
+`,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `.github/workflows/release.yaml: job "release" step 2 (goreleaser/goreleaser-action@v7): with.version "~> v2" is not an exact version, set it to v<x.y.z>
+nested/action.yml: runs step 1 (codecov/codecov-action@v7): with.version "latest" is not an exact version, set it to v<x.y.z>`
+	if strings.Join(got, "\n") != want {
+		t.Errorf("scanVersions() =\n%s\nwant:\n%s", strings.Join(got, "\n"), want)
+	}
+	if _, err := scanVersions(t.TempDir()); err == nil {
+		t.Error("scanVersions() succeeded without workflow files, want error")
 	}
 }
 
@@ -1422,6 +1700,20 @@ func mappingValue(n *yaml.Node, key string) *yaml.Node {
 	for i := 0; i+1 < len(n.Content); i += 2 {
 		if n.Content[i].Value == key {
 			return n.Content[i+1]
+		}
+	}
+	return nil
+}
+
+// inputValue returns the value node of the input name in a step's `with`
+// mapping, or nil. The runner matches input names regardless of case.
+func inputValue(with *yaml.Node, name string) *yaml.Node {
+	if with == nil || with.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(with.Content); i += 2 {
+		if strings.EqualFold(with.Content[i].Value, name) {
+			return with.Content[i+1]
 		}
 	}
 	return nil

@@ -45,6 +45,7 @@ jobs:
         with:
           files: coverage.out
           use_oidc: true
+          version: v11.3.2
 
       - name: Upload test results to Codecov
         if: ${{ !cancelled() }}
@@ -53,6 +54,7 @@ jobs:
           files: unit.junit.xml
           report_type: test_results
           use_oidc: true
+          version: v11.3.2
 
       - name: Ensure go.mod is tidy
         run: |
