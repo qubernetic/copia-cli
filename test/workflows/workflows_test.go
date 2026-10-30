@@ -109,6 +109,55 @@ func isGitHubScript(uses string) bool {
 	return strings.HasPrefix(strings.ToLower(uses), "actions/github-script@")
 }
 
+var (
+	pinnedRef      = regexp.MustCompile(`^[^@\s]+@[0-9a-f]{40}$`)
+	versionComment = regexp.MustCompile(`^#\s*v\S+`)
+)
+
+// unpinnedUses returns one message per remote `uses:` of a workflow or action
+// (a job's reusable workflow, a job step or a `runs` step) that does not name
+// a full 40-character commit SHA followed by a `# v<version>` comment. Local
+// actions (`./`) and docker images (`docker://`) are left out.
+func unpinnedUses(file string, data []byte) ([]string, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil, fmt.Errorf("%s: %w", file, err)
+	}
+	if len(doc.Content) == 0 {
+		return nil, nil
+	}
+	var out []string
+	check := func(where string, uses *yaml.Node) {
+		if uses == nil || uses.Value == "" || strings.HasPrefix(uses.Value, "./") || strings.HasPrefix(uses.Value, "docker://") {
+			return
+		}
+		comment := strings.TrimSpace(uses.LineComment)
+		if pinnedRef.MatchString(uses.Value) && versionComment.MatchString(comment) {
+			return
+		}
+		out = append(out, fmt.Sprintf("%s: %s uses %s; pin it to a full 40-character commit SHA followed by a # v<version> comment", file, where, strings.TrimSpace(uses.Value+" "+comment)))
+	}
+	checkSteps := func(where string, steps *yaml.Node) {
+		if steps == nil {
+			return
+		}
+		for i, s := range steps.Content {
+			check(fmt.Sprintf("%s step %d", where, i+1), mappingValue(s, "uses"))
+		}
+	}
+
+	root := doc.Content[0]
+	if jobs := mappingValue(root, "jobs"); jobs != nil && jobs.Kind == yaml.MappingNode {
+		for j := 0; j+1 < len(jobs.Content); j += 2 {
+			where := fmt.Sprintf("job %q", jobs.Content[j].Value)
+			check(where, mappingValue(jobs.Content[j+1], "uses"))
+			checkSteps(where, mappingValue(jobs.Content[j+1], "steps"))
+		}
+	}
+	checkSteps("runs", mappingValue(mappingValue(root, "runs"), "steps"))
+	return out, nil
+}
+
 // localUses returns every `uses: ./<path>` of a workflow or action: the steps
 // of its jobs and of `runs`, and reusable workflows called by a job.
 func localUses(f actionFile) []string {
@@ -163,12 +212,32 @@ func localTargets(repo, file, uses string) ([]string, string) {
 	return targets, ""
 }
 
-// scanRepo checks every workflow under .github/workflows, every action under
-// .github/actions/* and every local action or reusable workflow they use,
-// following local actions that use local actions in turn. It returns one
-// message per expression in script source and per `uses: ./<path>` that names
-// no file.
+// scanRepo checks every file walkRepo visits. It returns one message per
+// expression in script source and per `uses: ./<path>` that names no file.
 func scanRepo(repo string) ([]string, error) {
+	return walkRepo(repo, func(file string, _ []byte, f actionFile) ([]string, error) {
+		return expressions(file, f), nil
+	})
+}
+
+// scanPins returns one message per remote `uses:` that is not pinned to a full
+// commit SHA with a version comment, in every file walkRepo visits. A local
+// path that names no file is left to scanRepo.
+func scanPins(repo string) ([]string, error) {
+	var offenders []string
+	_, err := walkRepo(repo, func(file string, data []byte, _ actionFile) ([]string, error) {
+		found, err := unpinnedUses(file, data)
+		offenders = append(offenders, found...)
+		return nil, err
+	})
+	return offenders, err
+}
+
+// walkRepo calls visit on every workflow under .github/workflows, every action
+// under .github/actions/* and every local action or reusable workflow they
+// use, following local actions that use local actions in turn. It returns the
+// messages visit returns and one per `uses: ./<path>` that names no file.
+func walkRepo(repo string, visit func(file string, data []byte, f actionFile) ([]string, error)) ([]string, error) {
 	var queue []string
 	for _, pattern := range []string{".github/workflows/*.y*ml", ".github/actions/*/action.y*ml"} {
 		matches, err := filepath.Glob(filepath.Join(repo, filepath.FromSlash(pattern)))
@@ -205,7 +274,11 @@ func scanRepo(repo string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		offenders = append(offenders, expressions(file, f)...)
+		found, err := visit(file, data, f)
+		if err != nil {
+			return nil, err
+		}
+		offenders = append(offenders, found...)
 		for _, uses := range localUses(f) {
 			targets, problem := localTargets(repo, file, uses)
 			if problem != "" {
@@ -461,6 +534,133 @@ jobs:
 				}
 			}
 		})
+	}
+}
+
+// TestRemoteActionsArePinned keeps every remote action and reusable workflow
+// on a full commit SHA with its release in a `# v<version>` comment: a tag or
+// a branch can be moved to other code after review, and a short SHA can
+// become ambiguous. The check covers every local action a workflow uses.
+func TestRemoteActionsArePinned(t *testing.T) {
+	offenders, err := scanPins(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range offenders {
+		t.Error(o)
+	}
+}
+
+func TestScanPins(t *testing.T) {
+	got, err := scanPins(writeRepo(t, map[string]string{
+		".github/workflows/ci.yml": `
+jobs:
+  build:
+    steps:
+      - uses: ./.github/actions/outer
+      - uses: ./missing
+`,
+		".github/actions/outer/action.yml": `
+runs:
+  using: composite
+  steps:
+    - uses: ./nested
+`,
+		"nested/action.yml": `
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v4
+`,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `nested/action.yml: runs step 1 uses actions/checkout@v4; pin it to a full 40-character commit SHA followed by a # v<version> comment`
+	if strings.Join(got, "\n") != want {
+		t.Errorf("scanPins() =\n%s\nwant:\n%s", strings.Join(got, "\n"), want)
+	}
+	if _, err := scanPins(t.TempDir()); err == nil {
+		t.Error("scanPins() succeeded without workflow files, want error")
+	}
+}
+
+func TestUnpinnedUses(t *testing.T) {
+	const sha = "3d3c42e5aac5ba805825da76410c181273ba90b1"
+	step := func(uses string) string {
+		return `
+jobs:
+  build:
+    steps:
+      - uses: ` + uses + `
+`
+	}
+	tests := []struct {
+		name string
+		yaml string
+		want []string
+	}{
+		{"full sha with version comment", step("actions/checkout@" + sha + " # v7.0.1"), nil},
+		{"tag", step("actions/checkout@v4"), []string{
+			`test.yml: job "build" step 1 uses actions/checkout@v4; pin it to a full 40-character commit SHA followed by a # v<version> comment`,
+		}},
+		{"no ref", step("actions/checkout"), []string{
+			`test.yml: job "build" step 1 uses actions/checkout; pin it to a full 40-character commit SHA followed by a # v<version> comment`,
+		}},
+		{"short sha", step("actions/checkout@3d3c42e # v7.0.1"), []string{
+			`test.yml: job "build" step 1 uses actions/checkout@3d3c42e # v7.0.1; pin it to a full 40-character commit SHA followed by a # v<version> comment`,
+		}},
+		{"full sha without comment", step("actions/checkout@" + sha), []string{
+			`test.yml: job "build" step 1 uses actions/checkout@` + sha + `; pin it to a full 40-character commit SHA followed by a # v<version> comment`,
+		}},
+		{"full sha with another comment", step("actions/checkout@" + sha + " # main"), []string{
+			`test.yml: job "build" step 1 uses actions/checkout@` + sha + ` # main; pin it to a full 40-character commit SHA followed by a # v<version> comment`,
+		}},
+		{"upper-case sha", step("actions/checkout@" + strings.ToUpper(sha) + " # v7.0.1"), []string{
+			`test.yml: job "build" step 1 uses actions/checkout@` + strings.ToUpper(sha) + ` # v7.0.1; pin it to a full 40-character commit SHA followed by a # v<version> comment`,
+		}},
+		{"local action and docker image", `
+jobs:
+  build:
+    steps:
+      - uses: ./.github/actions/setup
+      - uses: docker://alpine:3.22
+`, nil},
+		{"reusable workflow of another repository", `
+jobs:
+  call:
+    uses: example/workflows/.github/workflows/build.yml@main
+  local:
+    uses: ./.github/workflows/reusable.yml
+`, []string{
+			`test.yml: job "call" uses example/workflows/.github/workflows/build.yml@main; pin it to a full 40-character commit SHA followed by a # v<version> comment`,
+		}},
+		{"composite action step", `
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v6
+    - uses: actions/checkout@` + sha + ` # v7.0.1
+`, []string{
+			`test.yml: runs step 1 uses actions/setup-go@v6; pin it to a full 40-character commit SHA followed by a # v<version> comment`,
+		}},
+		{"steps without uses", step("") + `      - run: go test ./...
+`, nil},
+		{"empty file", ``, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := unpinnedUses("test.yml", []byte(tt.yaml))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Join(got, "\n") != strings.Join(tt.want, "\n") {
+				t.Errorf("unpinnedUses() =\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(tt.want, "\n"))
+			}
+		})
+	}
+	if _, err := unpinnedUses("test.yml", []byte("jobs: [")); err == nil {
+		t.Error("unpinnedUses() succeeded on invalid YAML, want error")
 	}
 }
 
