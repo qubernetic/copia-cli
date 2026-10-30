@@ -1373,6 +1373,83 @@ func TestGolangciLintIsPinned(t *testing.T) {
 	}
 }
 
+var goImageLine = regexp.MustCompile(`^FROM\s+golang:(\S+)-alpine(\s|$)`)
+
+// goDirective returns the version of the go directive of a go.mod file.
+func goDirective(data []byte) (string, bool) {
+	for _, line := range strings.Split(string(data), "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "go "); ok {
+			return strings.TrimSpace(v), true
+		}
+	}
+	return "", false
+}
+
+// goImageMismatch returns a message when the Dockerfile has no
+// FROM golang:<version>-alpine line or its version is not want, else "".
+func goImageMismatch(name, want string, data []byte) string {
+	for _, line := range strings.Split(string(data), "\n") {
+		if m := goImageLine.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
+			if m[1] != want {
+				return fmt.Sprintf("%s: FROM golang:%s-alpine, want golang:%s-alpine (go.mod go %s)", name, m[1], want, want)
+			}
+			return ""
+		}
+	}
+	return fmt.Sprintf("%s: no FROM golang:<version>-alpine line, want golang:%s-alpine (go.mod go %s)", name, want, want)
+}
+
+// TestGoVersionsMatch keeps the Go of both dev images on the go directive of
+// go.mod: the sandbox image sets GOTOOLCHAIN=local, so an older image cannot
+// build the module, and golangci-lint, built with the image's Go, refuses it.
+func TestGoVersionsMatch(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, ok := goDirective(data)
+	if !ok {
+		t.Fatal("go.mod: no go directive")
+	}
+	for _, name := range []string{"Dockerfile", ".devcontainer/Dockerfile"} {
+		data, err := os.ReadFile(filepath.Join("..", "..", filepath.FromSlash(name)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if msg := goImageMismatch(name, want, data); msg != "" {
+			t.Error(msg)
+		}
+	}
+}
+
+func TestGoImageMismatch(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want string
+	}{
+		{"match", "# dev image\nFROM golang:1.27.3-alpine\n", ""},
+		{"match with stage", "FROM golang:1.27.3-alpine AS build\n", ""},
+		{"older image", "FROM golang:1.26.9-alpine\n", "Dockerfile: FROM golang:1.26.9-alpine, want golang:1.27.3-alpine (go.mod go 1.27.3)"},
+		{"newer image", "FROM golang:1.27.4-alpine\n", "Dockerfile: FROM golang:1.27.4-alpine, want golang:1.27.3-alpine (go.mod go 1.27.3)"},
+		{"no golang line", "FROM alpine:3.22\n", "Dockerfile: no FROM golang:<version>-alpine line, want golang:1.27.3-alpine (go.mod go 1.27.3)"},
+		{"not alpine", "FROM golang:1.27.3\n", "Dockerfile: no FROM golang:<version>-alpine line, want golang:1.27.3-alpine (go.mod go 1.27.3)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := goImageMismatch("Dockerfile", "1.27.3", []byte(tt.data)); got != tt.want {
+				t.Errorf("goImageMismatch() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+	if v, ok := goDirective([]byte("module x\n\ngo 1.27.3\n\nrequire (\n")); !ok || v != "1.27.3" {
+		t.Errorf("goDirective() = %q, %v, want \"1.27.3\", true", v, ok)
+	}
+	if _, ok := goDirective([]byte("module x\n")); ok {
+		t.Error("goDirective() found a go directive in a go.mod without one")
+	}
+}
+
 // TestRunBlocksPinTools keeps every go run and go install in a workflow on a
 // fixed version: a tool fetched @latest runs whatever was published last.
 func TestRunBlocksPinTools(t *testing.T) {
