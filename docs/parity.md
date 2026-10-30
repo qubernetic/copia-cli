@@ -103,6 +103,7 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 | `copia-cli org view` | [x] |
 | `copia-cli notification list` | [x] |
 | `copia-cli notification read` | [x] |
+| `copia-cli browse` (`gh browse`: repository, issue or PR number, `--no-browser`; no file paths, `--branch`, `--commit`, `--settings`, `--wiki`) | [x] |
 | `copia-cli completion` | [x] |
 
 ## Other gh commands (not yet implemented)
@@ -112,7 +113,6 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 | `gh ssh-key` | Full | `GET/POST /user/keys` |
 | `gh gpg-key` | Full | `GET/POST /user/gpg_keys` |
 | `gh status` | Partial | Compose from multiple endpoints |
-| `gh browse` | Full | Construct URL client-side |
 | `gh gist` | None | No Gitea equivalent |
 | `gh workflow` / `gh run` | None | Gitea Actions exist but Copia may not expose them |
 | `gh codespace` | None | GitHub-specific |
@@ -127,8 +127,8 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 
 | Status | Count |
 |--------|-------|
-| Implemented | 35 |
-| Not yet implemented (Full parity) | 13 |
+| Implemented | 36 |
+| Not yet implemented (Full parity) | 12 |
 | Not yet implemented (Partial) | 4 |
 | No equivalent | 14 |
 | **Total implementable** | **52** |
