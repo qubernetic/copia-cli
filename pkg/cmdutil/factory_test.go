@@ -1,6 +1,7 @@
 package cmdutil
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/qubernetic/copia-cli/internal/config"
@@ -184,4 +185,71 @@ func TestParseRemoteURL_SSH(t *testing.T) {
 func TestParseRemoteURL_Invalid(t *testing.T) {
 	_, _, err := ParseRemoteURL("not-a-url")
 	assert.Error(t, err)
+}
+
+func TestFactory_ResolveHost(t *testing.T) {
+	configWith := func(hosts map[string]*config.HostConfig) func() (*config.Config, error) {
+		return func() (*config.Config, error) { return &config.Config{Hosts: hosts}, nil }
+	}
+
+	tests := []struct {
+		name     string
+		flagHost string
+		envHost  string
+		hosts    map[string]*config.HostConfig
+		wantHost string
+		wantErr  string
+	}{
+		{
+			name:     "flag beats env and config",
+			flagHost: "flag-host.io",
+			envHost:  "env-host.io",
+			hosts:    map[string]*config.HostConfig{"config-host.io": {Token: "t"}},
+			wantHost: "flag-host.io",
+		},
+		{
+			name:     "env beats config",
+			envHost:  "env-host.io",
+			hosts:    map[string]*config.HostConfig{"config-host.io": {Token: "t"}},
+			wantHost: "env-host.io",
+		},
+		{
+			name:     "config host needs no token",
+			hosts:    map[string]*config.HostConfig{"config-host.io": {}},
+			wantHost: "config-host.io",
+		},
+		{
+			name:    "no host anywhere",
+			hosts:   map[string]*config.HostConfig{},
+			wantErr: "no host configured. Run 'copia auth login' first",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("COPIA_HOST", tt.envHost)
+			t.Setenv("COPIA_TOKEN", "")
+			ios, _, _, _ := iostreams.Test()
+			f := &Factory{IOStreams: ios, Host: tt.flagHost, Config: configWith(tt.hosts)}
+
+			host, err := f.ResolveHost()
+			if tt.wantErr != "" {
+				assert.EqualError(t, err, tt.wantErr)
+				return
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, tt.wantHost, host)
+		})
+	}
+}
+
+func TestFactory_ResolveHost_ConfigError(t *testing.T) {
+	t.Setenv("COPIA_HOST", "")
+	ios, _, _, _ := iostreams.Test()
+	f := &Factory{IOStreams: ios, Config: func() (*config.Config, error) {
+		return nil, errors.New("broken config")
+	}}
+
+	_, err := f.ResolveHost()
+	assert.EqualError(t, err, "broken config")
 }
