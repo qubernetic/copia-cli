@@ -83,10 +83,12 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 | `gh pr checkout` | Partial | `copia-cli pr checkout` | [x] |
 | `gh pr review` | Full | `copia-cli pr review` | [x] |
 | `gh pr checks` | Partial | `copia-cli pr checks` | [ ] |
-| `gh pr comment` | Full | `copia-cli pr comment` | [ ] |
+| `gh pr comment` | Full | `copia-cli pr comment` | [x] |
 | `gh pr edit` | Full | `copia-cli pr edit` | [ ] |
 | `gh pr ready` | Full | `copia-cli pr ready` | [ ] |
 | `gh pr update-branch` | Full | `copia-cli pr update-branch` | [ ] |
+
+`gh pr comment`: `POST /repos/{owner}/{repo}/issues/{index}/comments`, since Gitea keeps pull request comments on the issue of the same index. `--body/-b` or `--body-file/-F` (`-` reads stdin) is required; there is no editor and no `--web`. The argument is a number, `#<n>` or a pull request URL.
 
 `gh pr reopen`: `PATCH /repos/{owner}/{repo}/pulls/{index}` with `state: open`. The pull request is read first: an open one is left alone and a merged one fails, as in `gh`. `--comment/-c` posts to `/repos/{owner}/{repo}/issues/{index}/comments` before the reopen. The argument is a number, `#<n>` or a pull request URL.
 
@@ -153,8 +155,8 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 
 | Status | Count |
 |--------|-------|
-| Implemented | 44 |
-| Not yet implemented (Full parity) | 17 |
+| Implemented | 45 |
+| Not yet implemented (Full parity) | 16 |
 | Not yet implemented (Partial) | 7 |
 | Not yet implemented (client side, `repo set-default`) | 1 |
 | No equivalent | 12 |
