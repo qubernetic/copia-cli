@@ -35,6 +35,7 @@ type step struct {
 type actionFile struct {
 	Jobs map[string]struct {
 		Uses  string `yaml:"uses"`
+		Needs any    `yaml:"needs"`
 		Steps []step `yaml:"steps"`
 	} `yaml:"jobs"`
 	Runs struct {
@@ -654,8 +655,7 @@ runs:
 	}
 	want := []string{
 		`.github/workflows/snap.yml: job "call" uses canonical/action-build/.github/workflows/build.yml@main; install and run the tool in a run step instead`,
-		`.github/workflows/snap.yml: job "snap" step 2 uses SnapCore/action-build@v1; install and run the tool in a run step instead`,
-		`.github/actions/publish/action.yml: runs step 1 uses canonical/action-publish@v1; install and run the tool in a run step instead`,
+		`.github/workflows/snap.yml: job "snap" step 2 uses SnapCore/action-build@v1; install and run the tool in a run step instead`,		`.github/actions/publish/action.yml: runs step 1 uses canonical/action-publish@v1; install and run the tool in a run step instead`,
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("scanBanned() =\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
@@ -936,23 +936,33 @@ func isCheckout(s step) bool {
 
 // TestVersionGateRunsFirst keeps every step that installs or configures
 // anything in the release jobs behind the version gate: the step with id
-// version comes right after actions/checkout.
+// version comes right after actions/checkout. A job without a checkout runs
+// no repository code and only after a job with the gate, which it needs.
 func TestVersionGateRunsFirst(t *testing.T) {
 	for _, file := range []string{"aur.yml", "copr.yml", "snap.yml"} {
-		for name, job := range loadWorkflow(t, file).Jobs {
-			checkout := -1
+		wf := loadWorkflow(t, file)
+		gated := map[string]bool{}
+		for name, job := range wf.Jobs {
 			for i, s := range job.Steps {
 				if isCheckout(s) {
-					checkout = i
+					gated[name] = i+1 < len(job.Steps) && job.Steps[i+1].ID == "version"
+					if !gated[name] {
+						t.Errorf("%s: job %q: the step after actions/checkout is not the one with id version", file, name)
+					}
 					break
 				}
 			}
-			if checkout < 0 {
-				t.Errorf("%s: job %q has no actions/checkout step", file, name)
+		}
+		for name, job := range wf.Jobs {
+			if _, ok := gated[name]; ok {
 				continue
 			}
-			if next := checkout + 1; next >= len(job.Steps) || job.Steps[next].ID != "version" {
-				t.Errorf("%s: job %q: the step after actions/checkout is not the one with id version", file, name)
+			needsGate := false
+			for _, dep := range jobNeeds(job.Needs) {
+				needsGate = needsGate || gated[dep]
+			}
+			if !needsGate {
+				t.Errorf("%s: job %q has no actions/checkout step and needs no job with the version gate", file, name)
 			}
 		}
 	}
@@ -1082,81 +1092,275 @@ func TestCoprInstallRunsInCI(t *testing.T) {
 
 // TestSnapPackRunsLikeRelease keeps the snap-pack job of ci.yml building the
 // snap the way snap.yml, which only runs on a release, builds it: both run the
-// same Install snapcraft and Pack snap steps.
+// same Install snapcraft and Pack snap steps, in every job of snap.yml.
 func TestSnapPackRunsLikeRelease(t *testing.T) {
+	snap := loadWorkflow(t, "snap.yml")
 	for _, name := range []string{"Install snapcraft", "Pack snap"} {
-		ci, snap := stepRun(t, "ci.yml", name), stepRun(t, "snap.yml", name)
-		if ci != snap {
-			t.Errorf("ci.yml %s run block differs from snap.yml:\n%s\nwant:\n%s", name, ci, snap)
+		ci := stepRun(t, "ci.yml", name)
+		found := false
+		for _, job := range sortedJobs(snap) {
+			for _, s := range snap.Jobs[job].Steps {
+				if s.Name != name {
+					continue
+				}
+				found = true
+				if s.Run != ci {
+					t.Errorf("snap.yml job %q %s run block differs from ci.yml:\n%s\nwant:\n%s", job, name, s.Run, ci)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("snap.yml: no step named %q", name)
 		}
 	}
 }
 
-// TestSnapUploadsCheckedVersion keeps snap.yml on a fixed runner, uploads only
-// a snap whose meta/snap.yaml carries the release version, and hands the Snap
-// Store credentials to the upload step alone.
+// snapWorkflow is the part of snap.yml snapViolations reads.
+type snapWorkflow struct {
+	Env  any `yaml:"env"`
+	Jobs map[string]struct {
+		If              any            `yaml:"if"`
+		ContinueOnError any            `yaml:"continue-on-error"`
+		Needs           any            `yaml:"needs"`
+		RunsOn          string         `yaml:"runs-on"`
+		Env             any            `yaml:"env"`
+		Outputs         map[string]any `yaml:"outputs"`
+		Steps           []struct {
+			ID              string            `yaml:"id"`
+			Name            string            `yaml:"name"`
+			Uses            string            `yaml:"uses"`
+			If              any               `yaml:"if"`
+			ContinueOnError any               `yaml:"continue-on-error"`
+			Run             string            `yaml:"run"`
+			With            any               `yaml:"with"`
+			Env             map[string]string `yaml:"env"`
+		} `yaml:"steps"`
+	} `yaml:"jobs"`
+}
+
+// snapMetaChecks are the comparisons a step that checks meta/snap.yaml runs.
+var snapMetaChecks = []string{
+	`[ "$name" != copia-cli ]`,
+	`[ "$version" != "$VERSION" ]`,
+	`[ "$architectures" != '[amd64]' ]`,
+}
+
+// checksSnapMeta reports whether a run block reads meta/snap.yaml and compares
+// its name, version and architectures.
+func checksSnapMeta(run string) bool {
+	if !strings.Contains(run, "meta/snap.yaml") {
+		return false
+	}
+	for _, c := range snapMetaChecks {
+		if !strings.Contains(run, c) {
+			return false
+		}
+	}
+	return true
+}
+
+// snapViolations lists every way snap.yml lets an unchecked snap reach the Snap
+// Store or the credentials reach the build. The job that runs snapcraft pack
+// holds no secret, checks meta/snap.yaml and uploads the snap as an artifact.
+// The job that holds SNAPCRAFT_STORE_CREDENTIALS needs it, runs no repository
+// code, checks the artifact's sha256 and meta/snap.yaml again and uploads the
+// file that check names, with the credentials on the upload step alone. No job
+// or step is conditional or may fail without failing the run.
+func snapViolations(data []byte) ([]string, error) {
+	var wf snapWorkflow
+	if err := yaml.Unmarshal(data, &wf); err != nil {
+		return nil, fmt.Errorf("snap.yml: %w", err)
+	}
+	var raw struct {
+		Jobs map[string]any `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("snap.yml: %w", err)
+	}
+	var out []string
+	add := func(format string, args ...any) { out = append(out, "snap.yml: "+fmt.Sprintf(format, args...)) }
+	if strings.Contains(fmt.Sprint(wf.Env), "secrets") {
+		add("workflow env mentions secrets")
+	}
+
+	build, upload := "", ""
+	for _, name := range sortedKeys(wf.Jobs) {
+		job := wf.Jobs[name]
+		if job.RunsOn != "ubuntu-24.04" {
+			add("job %q runs-on %q, want ubuntu-24.04", name, job.RunsOn)
+		}
+		if job.If != nil {
+			add("job %q sets if:", name)
+		}
+		if job.ContinueOnError != nil {
+			add("job %q sets continue-on-error", name)
+		}
+		for i, s := range job.Steps {
+			if s.If != nil {
+				add("job %q step %d (%q) sets if:", name, i+1, s.Name)
+			}
+			if s.ContinueOnError != nil {
+				add("job %q step %d (%q) sets continue-on-error", name, i+1, s.Name)
+			}
+			if strings.Contains(s.Run, "snapcraft pack") {
+				build = name
+			}
+			if _, ok := s.Env["SNAPCRAFT_STORE_CREDENTIALS"]; ok {
+				upload = name
+			}
+		}
+	}
+	if build == "" || upload == "" || build == upload || len(wf.Jobs) != 2 {
+		add("jobs %v: want one job that runs snapcraft pack and another that holds SNAPCRAFT_STORE_CREDENTIALS", sortedKeys(wf.Jobs))
+		return out, nil
+	}
+
+	// The build job.
+	node, err := yaml.Marshal(raw.Jobs[build])
+	if err != nil {
+		return nil, err
+	}
+	if strings.Contains(string(node), "secrets") {
+		add("job %q runs snapcraft pack and mentions secrets", build)
+	}
+	job := wf.Jobs[build]
+	pack, check, artifact := -1, -1, -1
+	for i, s := range job.Steps {
+		switch {
+		case s.Name == "Pack snap":
+			pack = i
+		case checksSnapMeta(s.Run) && s.ID != "":
+			check = i
+		case strings.HasPrefix(strings.ToLower(s.Uses), "actions/upload-artifact@"):
+			artifact = i
+		}
+	}
+	if pack < 0 || check < pack || artifact < check {
+		add("job %q: Pack snap at step %d, meta/snap.yaml check at %d, actions/upload-artifact at %d; want them in that order", build, pack+1, check+1, artifact+1)
+	} else if want := "${{ steps." + job.Steps[check].ID + ".outputs.sha256 }}"; fmt.Sprint(job.Outputs["sha256"]) != want {
+		add("job %q: outputs.sha256 is %v, want %s", build, job.Outputs["sha256"], want)
+	}
+
+	// The upload job.
+	job = wf.Jobs[upload]
+	if needs := jobNeeds(job.Needs); len(needs) != 1 || needs[0] != build {
+		add("job %q needs %v, want [%s]", upload, needs, build)
+	}
+	if strings.Contains(fmt.Sprint(job.Env), "secrets") {
+		add("job %q env mentions secrets", upload)
+	}
+	download, verify, send := -1, -1, -1
+	for i, s := range job.Steps {
+		uses := strings.ToLower(s.Uses)
+		switch {
+		case strings.HasPrefix(uses, "actions/checkout@"), strings.HasPrefix(uses, "./"), strings.Contains(s.Run, "snapcraft pack"), strings.Contains(s.Run, "script/"):
+			add("job %q step %d (%q) runs repository code", upload, i+1, s.Name)
+		case strings.HasPrefix(uses, "actions/download-artifact@"):
+			download = i
+		case checksSnapMeta(s.Run) && strings.Contains(s.Run, "sha256sum -c") && s.ID != "":
+			verify = i
+			if want := "${{ needs." + build + ".outputs.sha256 }}"; !strings.Contains(fmt.Sprint(s.Env), want) {
+				add("job %q step %d (%q) does not check the sha256 against %s", upload, i+1, s.Name, want)
+			}
+		case strings.Contains(s.Run, "snapcraft upload"):
+			send = i
+		}
+		for k, v := range s.Env {
+			if strings.Contains(v, "secrets") && (k != "SNAPCRAFT_STORE_CREDENTIALS" || v != "${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}") {
+				add("job %q step %d (%q): env %s=%s; only SNAPCRAFT_STORE_CREDENTIALS may read a secret", upload, i+1, s.Name, k, v)
+			}
+		}
+		if strings.Contains(s.Run+fmt.Sprint(s.With), "secrets") {
+			add("job %q step %d (%q) mentions secrets outside env", upload, i+1, s.Name)
+		}
+	}
+	if download < 0 || verify < download || send < verify {
+		add("job %q: actions/download-artifact at step %d, sha256 and meta/snap.yaml check at %d, snapcraft upload at %d; want them in that order", upload, download+1, verify+1, send+1)
+		return out, nil
+	}
+	for i, s := range job.Steps {
+		if _, ok := s.Env["SNAPCRAFT_STORE_CREDENTIALS"]; ok && i != send {
+			add("job %q step %d (%q) sets SNAPCRAFT_STORE_CREDENTIALS; only the upload step may", upload, i+1, s.Name)
+		}
+	}
+	s := job.Steps[send]
+	if want := `snapcraft upload --release stable "$SNAP_FILE"`; strings.TrimSpace(s.Run) != want {
+		add("job %q: upload step runs %q, want %q", upload, strings.TrimSpace(s.Run), want)
+	}
+	if want := "${{ steps." + job.Steps[verify].ID + ".outputs.file }}"; s.Env["SNAP_FILE"] != want {
+		add("job %q: upload step sets SNAP_FILE=%q, want %s", upload, s.Env["SNAP_FILE"], want)
+	}
+	return out, nil
+}
+
+// TestSnapUploadsCheckedVersion keeps snap.yml on a fixed runner, packs the snap
+// in a job without secrets, and uploads only that snap, checked against its
+// sha256 and meta/snap.yaml, from a job that runs no repository code and hands
+// the Snap Store credentials to the upload step alone.
 func TestSnapUploadsCheckedVersion(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "snap.yml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var wf struct {
-		Env  any `yaml:"env"`
-		Jobs map[string]struct {
-			RunsOn string `yaml:"runs-on"`
-			Env    any    `yaml:"env"`
-			Steps  []struct {
-				Name string            `yaml:"name"`
-				Run  string            `yaml:"run"`
-				With any               `yaml:"with"`
-				Env  map[string]string `yaml:"env"`
-			} `yaml:"steps"`
-		} `yaml:"jobs"`
-	}
-	if err := yaml.Unmarshal(data, &wf); err != nil {
+	offenders, err := snapViolations(data)
+	if err != nil {
 		t.Fatal(err)
 	}
-	job, ok := wf.Jobs["snap"]
-	if !ok || len(wf.Jobs) != 1 {
-		t.Fatalf("snap.yml: jobs %v, want one job named snap", sortedKeys(wf.Jobs))
+	for _, o := range offenders {
+		t.Error(o)
 	}
-	if job.RunsOn != "ubuntu-24.04" {
-		t.Errorf("snap.yml: runs-on %q, want ubuntu-24.04", job.RunsOn)
-	}
-	for where, v := range map[string]any{"workflow env": wf.Env, "job env": job.Env} {
-		if strings.Contains(fmt.Sprint(v), "secrets.") {
-			t.Errorf("snap.yml: %s mentions secrets.", where)
-		}
-	}
+}
 
-	pack, check, upload := -1, -1, -1
-	for i, s := range job.Steps {
-		switch {
-		case s.Name == "Pack snap":
-			pack = i
-		case strings.Contains(s.Run, "meta/snap.yaml") && strings.Contains(s.Run, `"$VERSION"`):
-			check = i
-		case strings.Contains(s.Run, "snapcraft upload --release stable "):
-			upload = i
-		}
-		for field, v := range map[string]any{"run": s.Run, "with": s.With} {
-			if strings.Contains(fmt.Sprint(v), "secrets.") {
-				t.Errorf("snap.yml: step %d (%q): %s mentions secrets.", i+1, s.Name, field)
-			}
-		}
-		for k, v := range s.Env {
-			if !strings.Contains(v, "secrets.") {
-				continue
-			}
-			if want := "${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}"; i != upload || k != "SNAPCRAFT_STORE_CREDENTIALS" || v != want {
-				t.Errorf("snap.yml: step %d (%q): env %s=%s; only the upload step may read a secret, as SNAPCRAFT_STORE_CREDENTIALS=%s", i+1, s.Name, k, v, want)
-			}
-		}
+// TestSnapViolations edits the real snap.yml one way at a time and expects
+// snapViolations to reject each edit.
+func TestSnapViolations(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "snap.yml"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if pack < 0 || check < pack || upload < check {
-		t.Errorf("snap.yml: Pack snap at step %d, version check at %d, upload at %d; want pack, then a check of meta/snap.yaml against \"$VERSION\", then snapcraft upload --release stable", pack+1, check+1, upload+1)
-	} else if job.Steps[upload].Env["SNAPCRAFT_STORE_CREDENTIALS"] == "" {
-		t.Error("snap.yml: the upload step does not set SNAPCRAFT_STORE_CREDENTIALS")
+	const (
+		pack    = "      - name: Pack snap\n        run: sudo snapcraft pack --destructive-mode"
+		gate    = "      - name: Verify snap\n        id: snap"
+		install = "      - name: Install snapcraft\n        run: sudo snap install snapcraft --classic --channel=9.x/stable\n\n      - name: Upload snap"
+		header  = "  upload:\n    needs: build\n    runs-on: ubuntu-24.04\n    permissions: {}\n    steps:\n"
+		sha     = "SHA256: ${{ needs.build.outputs.sha256 }}"
+		secret  = "SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}"
+	)
+	tests := []struct {
+		name, old, new, want string
+	}{
+		{"if: always() on the upload", "      - name: Upload snap\n", "      - name: Upload snap\n        if: always()\n", `step 4 ("Upload snap") sets if:`},
+		{"if: on the upload job", "    needs: build\n", "    needs: build\n    if: always()\n", `job "upload" sets if:`},
+		{"continue-on-error on a gate", gate, gate + "\n        continue-on-error: true", `step 2 ("Verify snap") sets continue-on-error`},
+		{"glob upload", `run: snapcraft upload --release stable "$SNAP_FILE"`, "run: snapcraft upload --release stable *.snap", `upload step runs "snapcraft upload --release stable *.snap"`},
+		{"literal SNAP_FILE", "SNAP_FILE: ${{ steps.snap.outputs.file }}", "SNAP_FILE: copia-cli_1.0.0_amd64.snap", `upload step sets SNAP_FILE="copia-cli_1.0.0_amd64.snap"`},
+		{"no name check", `[ "$name" != copia-cli ]`, `[ -z "$name" ]`, "meta/snap.yaml check at 0"},
+		{"no architectures check", `[ "$architectures" != '[amd64]' ]`, `[ -z "$architectures" ]`, "meta/snap.yaml check at 0"},
+		{"no sha256 check", "sha256sum -c -", "true", "sha256 and meta/snap.yaml check at 0"},
+		{"sha256 not from build", sha, "SHA256: abc", "does not check the sha256 against"},
+		{"secret in the build job", pack, pack + "\n        env:\n          T: ${{ secrets.T }}", `job "build" runs snapcraft pack and mentions secrets`},
+		{"pack in the upload job", install, strings.Replace(install, "snap install snapcraft --classic --channel=9.x/stable", "snapcraft pack --destructive-mode", 1), "want one job that runs snapcraft pack and another"},
+		{"checkout in the upload job", header, header + "      - uses: actions/checkout@x\n", `step 1 ("") runs repository code`},
+		{"upload without needs", "    needs: build\n", "", `job "upload" needs [], want [build]`},
+		{"credentials on the gate", sha, sha + "\n          " + secret, "only the upload step may"},
+		{"one job", header, "", "want one job that runs snapcraft pack and another"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !strings.Contains(string(data), tt.old) {
+				t.Fatalf("snap.yml has no %q", tt.old)
+			}
+			got, err := snapViolations([]byte(strings.Replace(string(data), tt.old, tt.new, 1)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(strings.Join(got, "\n"), tt.want) {
+				t.Errorf("snapViolations() =\n%s\nwant a line with %q", strings.Join(got, "\n"), tt.want)
+			}
+		})
+	}
+	if _, err := snapViolations([]byte("jobs: [")); err == nil {
+		t.Error("snapViolations() accepted invalid YAML")
 	}
 }
 
