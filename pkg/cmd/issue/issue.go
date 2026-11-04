@@ -7,6 +7,7 @@ import (
 	createCmd "github.com/qubernetic/copia-cli/pkg/cmd/issue/create"
 	editCmd "github.com/qubernetic/copia-cli/pkg/cmd/issue/edit"
 	listCmd "github.com/qubernetic/copia-cli/pkg/cmd/issue/list"
+	reopenCmd "github.com/qubernetic/copia-cli/pkg/cmd/issue/reopen"
 	viewCmd "github.com/qubernetic/copia-cli/pkg/cmd/issue/view"
 	"github.com/qubernetic/copia-cli/pkg/cmdutil"
 )
@@ -27,6 +28,7 @@ func NewCmdIssue(f *cmdutil.Factory) *cobra.Command {
 	cmdutil.AddGroup(cmd, "Targeted commands",
 		viewCmd.NewCmdView(f),
 		closeCmd.NewCmdClose(f),
+		reopenCmd.NewCmdReopen(f),
 		commentCmd.NewCmdComment(f),
 		editCmd.NewCmdEdit(f),
 	)

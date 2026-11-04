@@ -15,6 +15,7 @@ import (
 	issuecreate "github.com/qubernetic/copia-cli/pkg/cmd/issue/create"
 	issueedit "github.com/qubernetic/copia-cli/pkg/cmd/issue/edit"
 	issuelist "github.com/qubernetic/copia-cli/pkg/cmd/issue/list"
+	issuereopen "github.com/qubernetic/copia-cli/pkg/cmd/issue/reopen"
 	issueview "github.com/qubernetic/copia-cli/pkg/cmd/issue/view"
 )
 
@@ -102,6 +103,31 @@ func TestIssue_FullLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, closeOut.String(), "Closed issue")
 	t.Logf("Close: %s", closeOut.String())
+
+	// Reopen with a comment; the deferred cleanup closes it again
+	reopenIO, reopenOut, _ := testIO()
+	err = issuereopen.ReopenRun(&issuereopen.ReopenOptions{
+		IO: reopenIO, HTTPClient: &http.Client{},
+		Host: env.Host, Token: env.Token,
+		Owner: env.Owner, Repo: env.Repo,
+		Number:  issueNumber,
+		Comment: "Reopened by integration test via ReopenRun.",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, fmt.Sprintf("Reopened issue #%d\n", issueNumber), reopenOut.String())
+	t.Logf("Reopen: %s", reopenOut.String())
+
+	// Reopen again: the issue is open, so nothing is sent
+	againIO, againOut, againErr := testIO()
+	err = issuereopen.ReopenRun(&issuereopen.ReopenOptions{
+		IO: againIO, HTTPClient: &http.Client{},
+		Host: env.Host, Token: env.Token,
+		Owner: env.Owner, Repo: env.Repo,
+		Number: issueNumber,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, againOut.String())
+	assert.Contains(t, againErr.String(), "is already open")
 }
 
 func TestIssue_List(t *testing.T) {

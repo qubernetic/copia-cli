@@ -49,7 +49,7 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 | `gh issue create` | Full | `copia-cli issue create` | [x] |
 | `gh issue view` | Full | `copia-cli issue view` | [x] |
 | `gh issue close` | Partial | `copia-cli issue close` | [x] |
-| `gh issue reopen` | Full | `copia-cli issue reopen` | [ ] |
+| `gh issue reopen` | Full | `copia-cli issue reopen` | [x] |
 | `gh issue comment` | Full | `copia-cli issue comment` | [x] |
 | `gh issue edit` | Full | `copia-cli issue edit` | [x] |
 | `gh issue delete` | Full | `copia-cli issue delete` | [ ] |
@@ -149,8 +149,8 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 
 | Status | Count |
 |--------|-------|
-| Implemented | 38 |
-| Not yet implemented (Full parity) | 23 |
+| Implemented | 39 |
+| Not yet implemented (Full parity) | 22 |
 | Not yet implemented (Partial) | 7 |
 | Not yet implemented (client side, `repo set-default`) | 1 |
 | No equivalent | 12 |
