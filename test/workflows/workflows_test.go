@@ -1004,14 +1004,29 @@ func TestCoprInstallRunsInCI(t *testing.T) {
 // PyPI code on pull requests, away from every secret and from the GITHUB_TOKEN
 // in the git credential store.
 func TestCoprInstallHasNoSecrets(t *testing.T) {
+	checkUnprivilegedJob(t, "copr-install")
+}
+
+// TestSnapPackHasNoSecrets keeps the snap-pack job of ci.yml, which builds the
+// snap with sudo on pull requests, away from every secret, every write
+// permission and the GITHUB_TOKEN in the git credential store.
+func TestSnapPackHasNoSecrets(t *testing.T) {
+	checkUnprivilegedJob(t, "snap-pack")
+}
+
+// checkUnprivilegedJob fails when the ci.yml job mentions a secret, grants a
+// write permission or checks out without persist-credentials: false.
+func checkUnprivilegedJob(t *testing.T, name string) {
+	t.Helper()
 	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "ci.yml"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	var wf struct {
 		Jobs map[string]struct {
-			Env   any `yaml:"env"`
-			Steps []struct {
+			Permissions any `yaml:"permissions"`
+			Env         any `yaml:"env"`
+			Steps       []struct {
 				Uses string `yaml:"uses"`
 				Run  any    `yaml:"run"`
 				With any    `yaml:"with"`
@@ -1022,23 +1037,91 @@ func TestCoprInstallHasNoSecrets(t *testing.T) {
 	if err := yaml.Unmarshal(data, &wf); err != nil {
 		t.Fatal(err)
 	}
-	job, ok := wf.Jobs["copr-install"]
+	job, ok := wf.Jobs[name]
 	if !ok {
-		t.Fatal("ci.yml has no copr-install job")
+		t.Fatalf("ci.yml has no %s job", name)
+	}
+	if job.Permissions == nil || strings.Contains(fmt.Sprint(job.Permissions), "write") {
+		t.Errorf("ci.yml: job %s permissions %v, want read only (contents: read)", name, job.Permissions)
 	}
 	if strings.Contains(fmt.Sprint(job.Env), "secrets.") {
-		t.Error("ci.yml: job copr-install env mentions secrets.")
+		t.Errorf("ci.yml: job %s env mentions secrets.", name)
 	}
 	for i, s := range job.Steps {
 		for field, v := range map[string]any{"run": s.Run, "with": s.With, "env": s.Env} {
 			if strings.Contains(fmt.Sprint(v), "secrets.") {
-				t.Errorf("ci.yml: job copr-install step %d: %s mentions secrets.", i+1, field)
+				t.Errorf("ci.yml: job %s step %d: %s mentions secrets.", name, i+1, field)
 			}
 		}
 	}
-	for i, s := range loadWorkflow(t, "ci.yml").Jobs["copr-install"].Steps {
+	for i, s := range loadWorkflow(t, "ci.yml").Jobs[name].Steps {
 		if p := s.With.PersistCredentials; isCheckout(s) && (p == nil || *p) {
-			t.Errorf("ci.yml: job copr-install step %d: actions/checkout does not set persist-credentials: false", i+1)
+			t.Errorf("ci.yml: job %s step %d: actions/checkout does not set persist-credentials: false", name, i+1)
+		}
+	}
+}
+
+// TestSnapPackRunsInCI keeps the snap build exercised on every pull request:
+// snap.yml only runs on a release, so ci.yml packs the snap and checks the
+// version and architectures snapcraft wrote into meta/snap.yaml.
+func TestSnapPackRunsInCI(t *testing.T) {
+	job, ok := loadWorkflow(t, "ci.yml").Jobs["snap-pack"]
+	if !ok {
+		t.Fatal("ci.yml has no snap-pack job")
+	}
+	var runs []string
+	for _, s := range job.Steps {
+		runs = append(runs, s.Run)
+	}
+	all := strings.Join(runs, "\n")
+	for _, want := range []string{
+		"snap install snapcraft --classic --channel=9.x/stable",
+		"snapcraft pack",
+		"meta/snap.yaml",
+		"git describe --tags --always",
+	} {
+		if !strings.Contains(all, want) {
+			t.Errorf("ci.yml: job snap-pack runs no %q", want)
+		}
+	}
+}
+
+// TestSnapVersionComesFromTag keeps the snap version on the release tag: the
+// tags are lightweight, so version: git (git describe without --tags) never
+// sees one, and the snap is built for amd64 only.
+func TestSnapVersionComesFromTag(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "snap", "snapcraft.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snap struct {
+		Version   string         `yaml:"version"`
+		AdoptInfo string         `yaml:"adopt-info"`
+		Platforms map[string]any `yaml:"platforms"`
+		Parts     map[string]struct {
+			OverrideBuild string `yaml:"override-build"`
+		} `yaml:"parts"`
+	}
+	if err := yaml.Unmarshal(data, &snap); err != nil {
+		t.Fatal(err)
+	}
+	if snap.Version != "" {
+		t.Errorf("snapcraft.yaml: version %q, want none (adopt-info sets it)", snap.Version)
+	}
+	if snap.AdoptInfo != "copia-cli" {
+		t.Errorf("snapcraft.yaml: adopt-info %q, want copia-cli", snap.AdoptInfo)
+	}
+	if _, ok := snap.Platforms["amd64"]; !ok || len(snap.Platforms) != 1 {
+		t.Errorf("snapcraft.yaml: platforms %v, want amd64 only", snap.Platforms)
+	}
+	build := snap.Parts["copia-cli"].OverrideBuild
+	for _, want := range []string{
+		`git describe --tags --always | sed 's/^v//'`,
+		`craftctl set version="$VERSION"`,
+		"internal/build.Version=$VERSION",
+	} {
+		if !strings.Contains(build, want) {
+			t.Errorf("snapcraft.yaml: override-build has no %q", want)
 		}
 	}
 }

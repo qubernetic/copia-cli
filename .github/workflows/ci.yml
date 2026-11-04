@@ -93,6 +93,43 @@ jobs:
       - name: Run copr-cli
         run: copr-cli --help
 
+  # snap.yml runs only on a release; this job packs the snap on every pull
+  # request and checks the version and architectures snapcraft wrote. core24
+  # matches the 24.04 runner, so the build runs without LXD.
+  snap-pack:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install snapcraft
+        run: sudo snap install snapcraft --classic --channel=9.x/stable
+
+      - name: Pack snap
+        run: snapcraft pack --destructive-mode
+
+      - name: Check snap metadata
+        run: |
+          snap_file=$(ls copia-cli_*_amd64.snap)
+          unsquashfs -d snap-root "$snap_file" meta/snap.yaml
+          want=$(git describe --tags --always | sed 's/^v//')
+          version=$(yq '.version' snap-root/meta/snap.yaml)
+          architectures=$(yq -o=json -I=0 '.architectures' snap-root/meta/snap.yaml | tr -d '"')
+          echo "version: $version"
+          echo "architectures: $architectures"
+          if [ "$version" != "$want" ]; then
+            echo "::error::meta/snap.yaml version is $version, want $want"
+            exit 1
+          fi
+          if [ "$architectures" != '[amd64]' ]; then
+            echo "::error::meta/snap.yaml architectures is $architectures, want [amd64]"
+            exit 1
+          fi
+
   integration:
     runs-on: ubuntu-latest
     steps:
