@@ -52,7 +52,7 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 | `gh issue reopen` | Full | `copia-cli issue reopen` | [x] |
 | `gh issue comment` | Full | `copia-cli issue comment` | [x] |
 | `gh issue edit` | Full | `copia-cli issue edit` | [x] |
-| `gh issue delete` | Full | `copia-cli issue delete` | [x] |
+| `gh issue delete` | Partial | `copia-cli issue delete` | [x] |
 | `gh issue pin` | Full | `copia-cli issue pin` | [ ] |
 | `gh issue unpin` | Full | `copia-cli issue unpin` | [ ] |
 | `gh issue lock` | Full | `copia-cli issue lock` | [ ] |
@@ -61,7 +61,7 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 
 `gh issue close`: Gitea records no close reason (`completed` / `not planned`), so there is no `--reason`. Write the reason with `--comment`.
 
-`gh issue delete`: `DELETE /repos/{owner}/{repo}/issues/{index}`. Gitea lets only repository admins delete an issue; others get HTTP 403. There is no interactive prompt, so the command needs `--yes`.
+`gh issue delete`: `DELETE /repos/{owner}/{repo}/issues/{index}`. Gitea 1.26 lets only repository admins delete an issue; others get HTTP 403. app.copia.io refuses the request with HTTP 405 (found by the `integration` job of #368), so on Copia the command reports that and the issue stays; close it with `issue close` instead. There is no interactive prompt, so the command needs `--yes`.
 
 `gh issue pin`, `gh issue unpin`: `POST` and `DELETE /repos/{owner}/{repo}/issues/{index}/pin`.
 
