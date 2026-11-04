@@ -1000,6 +1000,99 @@ func TestCoprInstallRunsInCI(t *testing.T) {
 	}
 }
 
+// verboseFlag matches the go test flags that print t.Logf of a passing test.
+var verboseFlag = regexp.MustCompile(`^--?(test\.)?v(=.*)?$`)
+
+// verboseGoTest reports whether a run block runs go test with -v.
+func verboseGoTest(run string) bool {
+	for _, line := range strings.Split(run, "\n") {
+		fields := strings.Fields(line)
+		for i := 0; i+1 < len(fields); i++ {
+			if fields[i] != "go" || fields[i+1] != "test" {
+				continue
+			}
+			for _, f := range fields[i+2:] {
+				if verboseFlag.MatchString(f) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func TestVerboseGoTest(t *testing.T) {
+	for run, want := range map[string]bool{
+		"go test -tags=integration ./...":             false,
+		"go test -vet=off ./...":                      false,
+		"go test -tags=integration -v ./...":          true,
+		"go test -v=true ./...":                       true,
+		"go test --v ./...":                           true,
+		"go test -test.v ./...":                       true,
+		"echo start\ngo test -count=1 -v ./...":       true,
+		"go vet -v ./...":                             false,
+		"go test -run '^TestAPI_Version$' ./test/...": false,
+	} {
+		if got := verboseGoTest(run); got != want {
+			t.Errorf("verboseGoTest(%q) = %v, want %v", run, got, want)
+		}
+	}
+}
+
+// versionRun is the only verbose go test of an integration job: it prints the
+// version Copia reports and nothing else.
+const versionRun = `go test -tags=integration -v -run '^TestAPI_Version$' ./test/integration/`
+
+// TestIntegrationLogsOnlyTheVersion keeps the integration tests' t.Logf output,
+// which names the test account, its private repositories and notifications,
+// out of the public Actions log: the Integration tests step runs without -v,
+// and a separate Copia version step with the same env runs only
+// TestAPI_Version verbosely.
+func TestIntegrationLogsOnlyTheVersion(t *testing.T) {
+	type envStep struct {
+		Name string            `yaml:"name"`
+		Run  string            `yaml:"run"`
+		Env  map[string]string `yaml:"env"`
+	}
+	for _, file := range []string{"ci.yml", "integration-scheduled.yml"} {
+		data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var wf struct {
+			Jobs map[string]struct {
+				Steps []envStep `yaml:"steps"`
+			} `yaml:"jobs"`
+		}
+		if err := yaml.Unmarshal(data, &wf); err != nil {
+			t.Fatalf("%s: %v", file, err)
+		}
+		steps := map[string]envStep{}
+		for _, s := range wf.Jobs["integration"].Steps {
+			steps[s.Name] = s
+			if s.Name != "Copia version" && verboseGoTest(s.Run) {
+				t.Errorf("%s: job integration step %q runs go test -v", file, s.Name)
+			}
+		}
+		main, ok := steps["Integration tests"]
+		if !ok {
+			t.Errorf("%s: job integration has no Integration tests step", file)
+			continue
+		}
+		version, ok := steps["Copia version"]
+		if !ok {
+			t.Errorf("%s: job integration has no Copia version step", file)
+			continue
+		}
+		if strings.TrimSpace(version.Run) != versionRun {
+			t.Errorf("%s: Copia version runs %q, want %q", file, strings.TrimSpace(version.Run), versionRun)
+		}
+		if fmt.Sprint(version.Env) != fmt.Sprint(main.Env) {
+			t.Errorf("%s: Copia version env %v differs from Integration tests env %v", file, version.Env, main.Env)
+		}
+	}
+}
+
 // TestCoprInstallHasNoSecrets keeps the copr-install job of ci.yml, which runs
 // PyPI code on pull requests, away from every secret and from the GITHUB_TOKEN
 // in the git credential store.

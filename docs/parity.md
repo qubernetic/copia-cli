@@ -34,6 +34,12 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 | `gh repo rename` | Full | `copia-cli repo rename` | [ ] |
 | `gh repo edit` | Full | `copia-cli repo edit` | [ ] |
 | `gh repo set-default` | n/a | `copia-cli repo set-default` | [ ] |
+| `gh repo sync` | Partial | `copia-cli repo sync` | [ ] |
+| `gh repo deploy-key` | Full | `copia-cli repo deploy-key` | [ ] |
+
+`gh repo sync`: `POST /repos/{owner}/{repo}/merge-upstream` (`branch`, `ff_only`) brings a branch of a fork up to date with its upstream on the server. There is no `--force` (hard reset) and no sync of a local clone, which `gh` does with git.
+
+`gh repo deploy-key`: `GET` and `POST /repos/{owner}/{repo}/keys`, `DELETE /repos/{owner}/{repo}/keys/{id}` for list, add and delete.
 
 ## issue
 
@@ -48,10 +54,18 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 | `gh issue edit` | Full | `copia-cli issue edit` | [x] |
 | `gh issue delete` | Full | `copia-cli issue delete` | [ ] |
 | `gh issue pin` | Full | `copia-cli issue pin` | [ ] |
-| `gh issue lock` | None | n/a | — |
+| `gh issue unpin` | Full | `copia-cli issue unpin` | [ ] |
+| `gh issue lock` | Full | `copia-cli issue lock` | [ ] |
+| `gh issue unlock` | Full | `copia-cli issue unlock` | [ ] |
 | `gh issue transfer` | None | n/a | — |
 
 `gh issue close`: Gitea records no close reason (`completed` / `not planned`), so there is no `--reason`. Write the reason with `--comment`.
+
+`gh issue pin`, `gh issue unpin`: `POST` and `DELETE /repos/{owner}/{repo}/issues/{index}/pin`.
+
+`gh issue lock`, `gh issue unlock`: `PUT /repos/{owner}/{repo}/issues/{index}/lock` with `lock_reason`, `DELETE` on the same path.
+
+`gh issue transfer`: Gitea 1.26 has no endpoint that moves an issue to another repository.
 
 ## pr
 
@@ -70,6 +84,9 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 | `gh pr comment` | Full | `copia-cli pr comment` | [ ] |
 | `gh pr edit` | Full | `copia-cli pr edit` | [ ] |
 | `gh pr ready` | Full | `copia-cli pr ready` | [ ] |
+| `gh pr update-branch` | Full | `copia-cli pr update-branch` | [ ] |
+
+`gh pr update-branch`: `POST /repos/{owner}/{repo}/pulls/{index}/update` with `style=merge`, or `style=rebase` for `--rebase`.
 
 ## release
 
@@ -114,7 +131,12 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 | `gh gpg-key` | Full | `GET/POST /user/gpg_keys` |
 | `gh status` | Partial | Compose from multiple endpoints |
 | `gh gist` | None | No Gitea equivalent |
-| `gh workflow` / `gh run` | None | Gitea Actions exist but Copia may not expose them |
+| `gh workflow` | Full | `/repos/{owner}/{repo}/actions/workflows`: list, view, `run` (`/{workflow_id}/dispatches`), `enable`, `disable`. Whether Copia enables Actions is unknown |
+| `gh run` | Partial | `/repos/{owner}/{repo}/actions/runs`: list, view, delete, `rerun` (`/rerun`, `/rerun-failed-jobs`, `/jobs/{job_id}/rerun`), job logs (`/actions/jobs/{job_id}/logs`), `download` (`/actions/artifacts`), `watch` by polling. No `cancel`: Gitea 1.26 has no endpoint for it. Whether Copia enables Actions is unknown |
+| `gh secret` | Partial | `/repos/{owner}/{repo}/actions/secrets`, `/orgs/{org}/actions/secrets`, `/user/actions/secrets/{secretname}`: list, set, delete; user secrets cannot be listed, no environment secrets. Whether Copia enables Actions is unknown |
+| `gh variable` | Partial | `/repos/{owner}/{repo}/actions/variables`, `/orgs/{org}/actions/variables`, `/user/actions/variables`: list, get, set, delete; no environment variables. Whether Copia enables Actions is unknown |
+| `gh search code` | None | No code search endpoint in Gitea 1.26 |
+| `gh search commits` | None | No commit search endpoint in Gitea 1.26 |
 | `gh codespace` | None | GitHub-specific |
 | `gh copilot` | None | GitHub-specific |
 | `gh project` | None | GitHub Projects, no Gitea equivalent |
@@ -127,8 +149,11 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 
 | Status | Count |
 |--------|-------|
-| Implemented | 36 |
-| Not yet implemented (Full parity) | 12 |
-| Not yet implemented (Partial) | 4 |
-| No equivalent | 14 |
-| **Total implementable** | **52** |
+| Implemented | 38 |
+| Not yet implemented (Full parity) | 23 |
+| Not yet implemented (Partial) | 7 |
+| Not yet implemented (client side, `repo set-default`) | 1 |
+| No equivalent | 12 |
+| **Total implementable** | **69** |
+
+Counted from the rows above: every `[x]` row, and every other row by its Parity value. The Parity values follow the Gitea 1.26 API (`release/v1.26` swagger); `TestAPI_Version` in `test/integration/api_test.go` logs what Copia's `GET /version` reports in the PR `integration` job. On 2026-11-04 that was `0.59.0`, Copia's own version number, not a Gitea release, so the API does not show which Gitea version Copia is built on; a command's integration test shows whether Copia serves its endpoint.

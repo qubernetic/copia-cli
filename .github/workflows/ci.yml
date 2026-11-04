@@ -109,3 +109,11 @@ jobs:
           COPIA_TEST_HOST: ${{ secrets.COPIA_TEST_HOST }}
           COPIA_TEST_OWNER: ${{ secrets.COPIA_TEST_OWNER }}
           COPIA_TEST_REPO: ${{ secrets.COPIA_TEST_REPO }}
+
+      - name: Copia version
+        run: go test -tags=integration -v -run '^TestAPI_Version$' ./test/integration/
+        env:
+          COPIA_TEST_TOKEN: ${{ secrets.COPIA_TEST_TOKEN }}
+          COPIA_TEST_HOST: ${{ secrets.COPIA_TEST_HOST }}
+          COPIA_TEST_OWNER: ${{ secrets.COPIA_TEST_OWNER }}
+          COPIA_TEST_REPO: ${{ secrets.COPIA_TEST_REPO }}
