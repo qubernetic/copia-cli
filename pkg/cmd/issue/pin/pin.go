@@ -30,7 +30,9 @@ func NewCmdPin(f *cmdutil.Factory) *cobra.Command {
 		Short: "Pin an issue",
 		Long: "Pin an issue to the repository by number or URL.\n\n" +
 			"An issue that is already pinned is left as it is. Pinning needs write access to the\n" +
-			"repository's issues.",
+			"repository's issues.\n\n" +
+			"app.copia.io does not serve the pin endpoint and answers with HTTP 404, so the command\n" +
+			"reports that the host does not support it.",
 		Example: `  # Pin an issue to the current repository
   $ copia-cli issue pin 23
 

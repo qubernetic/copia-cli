@@ -30,7 +30,9 @@ func NewCmdUnpin(f *cmdutil.Factory) *cobra.Command {
 		Short: "Unpin an issue",
 		Long: "Unpin an issue from the repository by number or URL.\n\n" +
 			"An issue that is not pinned is left as it is. Unpinning needs write access to the\n" +
-			"repository's issues.",
+			"repository's issues.\n\n" +
+			"app.copia.io does not serve the pin endpoint and answers with HTTP 404, so the command\n" +
+			"reports that the host does not support it.",
 		Example: `  # Unpin an issue from the current repository
   $ copia-cli issue unpin 23
 
