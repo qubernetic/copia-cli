@@ -593,13 +593,14 @@ var bannedPrefixes = []string{"snapcore/", "canonical/action-"}
 
 // scanBanned returns one message per `uses:` in every file walkRepo visits (a
 // job's reusable workflow, a job step or a `runs` step) that names an action
-// under bannedPrefixes, in any case.
+// under bannedPrefixes, in any case, also as a docker:// image.
 func scanBanned(repo string) ([]string, error) {
 	return walkRepo(repo, func(file string, _ []byte, f actionFile) ([]string, error) {
 		var offenders []string
 		check := func(where, uses string) {
+			name := strings.TrimPrefix(strings.ToLower(uses), "docker://")
 			for _, prefix := range bannedPrefixes {
-				if strings.HasPrefix(strings.ToLower(uses), prefix) {
+				if strings.HasPrefix(name, prefix) {
 					offenders = append(offenders, fmt.Sprintf("%s: %s uses %s; install and run the tool in a run step instead", file, where, uses))
 				}
 			}
@@ -641,6 +642,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: SnapCore/action-build@v1
       - uses: ./.github/actions/publish
+      - uses: docker://snapcore/snapcraft:stable
+      - uses: docker://ubuntu:24.04
 `,
 		".github/actions/publish/action.yml": `
 runs:
@@ -655,7 +658,9 @@ runs:
 	}
 	want := []string{
 		`.github/workflows/snap.yml: job "call" uses canonical/action-build/.github/workflows/build.yml@main; install and run the tool in a run step instead`,
-		`.github/workflows/snap.yml: job "snap" step 2 uses SnapCore/action-build@v1; install and run the tool in a run step instead`,		`.github/actions/publish/action.yml: runs step 1 uses canonical/action-publish@v1; install and run the tool in a run step instead`,
+		`.github/workflows/snap.yml: job "snap" step 2 uses SnapCore/action-build@v1; install and run the tool in a run step instead`,
+		`.github/workflows/snap.yml: job "snap" step 4 uses docker://snapcore/snapcraft:stable; install and run the tool in a run step instead`,
+		`.github/actions/publish/action.yml: runs step 1 uses canonical/action-publish@v1; install and run the tool in a run step instead`,
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("scanBanned() =\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
