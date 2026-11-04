@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `issue delete <number|url> --yes` deletes an issue with `DELETE /repos/{owner}/{repo}/issues/{index}`. Deletion is irreversible: without `--yes` the command fails with a hint and sends no request, as `repo delete` does; there is no prompt. Gitea lets only repository admins delete an issue, so HTTP 403 says that admin rights are needed, and HTTP 404 reports the issue as not found. The argument is a number, `#<n>` or an issue URL, as for `issue reopen` (#368)
 - `issue reopen <number|url>` reopens a closed issue with `PATCH /repos/{owner}/{repo}/issues/{index}` (`state: open`). The issue is read first: one that is already open gets the note `! Issue <owner>/<repo>#<n> (<title>) is already open` on standard error and nothing is sent, as in `gh`. `--comment/-c` posts a comment before the reopen. The argument is a number, `#<n>` or an issue URL; a URL names the repository, and a URL on another host than the active one fails before any request (#367)
 - `--limit/-L` (default 30) on `label list`, `org list` and `notification list`; all three page through results, so they no longer stop at the server's first page. `notification list --all` applies to every page (#245)
 - `--visibility {public|private}` on `repo list`. The Gitea list endpoints take no visibility filter, so the filter runs on each page and `--limit` counts the kept repositories; paging continues past a page without a match (#172)
