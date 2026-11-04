@@ -30,7 +30,8 @@ func NewCmdDelete(f *cmdutil.Factory) *cobra.Command {
 		Use:   "delete {<number> | <url>}",
 		Short: "Delete an issue",
 		Long: "Delete an issue by number or URL. This action is irreversible, so it needs --yes.\n\n" +
-			"Copia allows deleting an issue only to repository admins.",
+			"Gitea allows deleting an issue only to repository admins. app.copia.io refuses the request\n" +
+			"with HTTP 405; close the issue with `copia-cli issue close` there.",
 		Example: `  # Delete an issue
   $ copia-cli issue delete 12 --yes
 
@@ -99,6 +100,8 @@ func DeleteRun(opts *DeleteOptions) error {
 		return fmt.Errorf("cannot delete issue %s: permission denied (HTTP 403); deleting an issue needs admin rights on the repository", issue)
 	case http.StatusNotFound:
 		return fmt.Errorf("issue %s not found", issue)
+	case http.StatusMethodNotAllowed:
+		return fmt.Errorf("%s does not allow deleting issues (HTTP 405); close the issue with `copia-cli issue close` instead", opts.Host)
 	default:
 		return fmt.Errorf("failed to delete issue (HTTP %d)", resp.StatusCode)
 	}

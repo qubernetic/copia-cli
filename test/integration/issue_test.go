@@ -167,7 +167,7 @@ func TestIssue_Delete(t *testing.T) {
 		Host: env.Host, Token: env.Token,
 		Owner: env.Owner, Repo: env.Repo,
 		Title: "[integration-test] CLI delete test",
-		Body:  "Created by integration test; deleted via DeleteRun.",
+		Body:  "Created by integration test for DeleteRun.",
 	})
 	require.NoError(t, err)
 
@@ -175,11 +175,7 @@ func TestIssue_Delete(t *testing.T) {
 	_, _ = fmt.Sscanf(createOut.String(), "Created issue #%d", &issueNumber)
 	require.Greater(t, issueNumber, int64(0), "failed to parse issue number")
 
-	deleted := false
 	defer func() {
-		if deleted {
-			return
-		}
 		closeIO, _, _ := testIO()
 		_ = issueclose.CloseRun(&issueclose.CloseOptions{
 			IO: closeIO, HTTPClient: &http.Client{},
@@ -206,12 +202,13 @@ func TestIssue_Delete(t *testing.T) {
 	assert.ErrorContains(t, err, "use --yes to confirm")
 	assertOutputEmpty(t, out.String())
 
+	// app.copia.io answers the DELETE with HTTP 405, so the issue stays and
+	// the deferred cleanup closes it. Should Copia allow deletion, this fails
+	// and docs/parity.md needs updating.
 	opts, out = deleteOpts(true)
 	err = issuedelete.DeleteRun(opts)
-	require.NoError(t, err)
-	deleted = true
-	assertOutputEqual(t, out.String(),
-		fmt.Sprintf("Deleted issue %s/%s#%d\n", env.Owner, env.Repo, issueNumber))
+	assert.ErrorContains(t, err, "does not allow deleting issues (HTTP 405)")
+	assertOutputEmpty(t, out.String())
 
 	viewIO, _, _ := testIO()
 	err = issueview.ViewRun(&issueview.ViewOptions{
@@ -220,5 +217,5 @@ func TestIssue_Delete(t *testing.T) {
 		Owner: env.Owner, Repo: env.Repo,
 		Number: issueNumber,
 	})
-	assert.ErrorContains(t, err, "not found")
+	require.NoError(t, err, "the refused issue still exists")
 }

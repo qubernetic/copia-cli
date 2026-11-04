@@ -70,6 +70,11 @@ func TestDeleteRun_Errors(t *testing.T) {
 			wantErr: "issue my-org/my-repo#12 not found",
 		},
 		{
+			name:    "method not allowed",
+			respond: httpmock.StringResponse(http.StatusMethodNotAllowed, ""),
+			wantErr: "app.copia.io does not allow deleting issues (HTTP 405); close the issue with `copia-cli issue close` instead",
+		},
+		{
 			name:    "other status",
 			respond: httpmock.StringResponse(http.StatusInternalServerError, `{}`),
 			wantErr: "failed to delete issue (HTTP 500)",
