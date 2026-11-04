@@ -53,6 +53,9 @@ sudo snap install copia-cli
 ```
 
 > [!NOTE]
+> The Snap is built for `amd64` only. On other architectures, use a release binary or another installation method.
+
+> [!NOTE]
 > The Snap uses strict confinement — it can only access files in your home directory. If you work with git repositories outside `$HOME`, use a different installation method.
 
 ### AUR (Arch Linux)
