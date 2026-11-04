@@ -4,10 +4,16 @@ package integration
 
 import (
 	"bytes"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qubernetic/copia-cli/pkg/iostreams"
 )
@@ -48,6 +54,113 @@ func testIO() (*iostreams.IOStreams, *bytes.Buffer, *bytes.Buffer) {
 // testHTTPClient returns a real HTTP client for integration tests.
 func testHTTPClient() *http.Client {
 	return &http.Client{}
+}
+
+// apiCall sends one request to the Copia API of env and returns the status
+// and the response body. step names the request in failure messages, which
+// show the status but never the body.
+func apiCall(t *testing.T, env testEnv, step, method, path string, payload any) (int, []byte) {
+	t.Helper()
+	var body io.Reader
+	if payload != nil {
+		data, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatalf("%s: encode request: %v", step, err)
+		}
+		body = bytes.NewReader(data)
+	}
+	req, err := http.NewRequest(method, fmt.Sprintf("https://%s/api/v1%s", env.Host, path), body)
+	if err != nil {
+		t.Fatalf("%s: build request: %v", step, err)
+	}
+	req.Header.Set("Authorization", "token "+env.Token)
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := testHTTPClient().Do(req)
+	if err != nil {
+		t.Fatalf("%s: request failed", step)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("%s: read response", step)
+	}
+	return resp.StatusCode, data
+}
+
+// prFixture is a pull request between two branches the test created.
+type prFixture struct {
+	Number int64
+	Base   string
+	Head   string
+}
+
+// createFixturePR creates a base branch from the default branch, a head
+// branch from the base with one file commit, and opens a pull request with
+// title from head into base. No step writes to the default branch. Cleanup
+// closes the pull request and deletes both branches.
+func createFixturePR(t *testing.T, env testEnv, title string) prFixture {
+	t.Helper()
+	repo := fmt.Sprintf("/repos/%s/%s", env.Owner, env.Repo)
+	suffix := strconv.FormatInt(time.Now().UnixNano(), 36)
+	fx := prFixture{Base: "it-pr-base-" + suffix, Head: "it-pr-head-" + suffix}
+
+	createBranch := func(name, from string) {
+		t.Helper()
+		payload := map[string]string{"new_branch_name": name}
+		if from != "" {
+			payload["old_branch_name"] = from
+		}
+		status, _ := apiCall(t, env, "create branch", "POST", repo+"/branches", payload)
+		if status != http.StatusCreated {
+			t.Fatalf("create branch: status %d, want %d", status, http.StatusCreated)
+		}
+		t.Cleanup(func() {
+			status, _ := apiCall(t, env, "delete branch", "DELETE", repo+"/branches/"+name, nil)
+			if status != http.StatusNoContent {
+				t.Errorf("delete branch: status %d, want %d", status, http.StatusNoContent)
+			}
+		})
+	}
+	createBranch(fx.Base, "")
+	createBranch(fx.Head, fx.Base)
+
+	status, _ := apiCall(t, env, "commit file", "POST", repo+"/contents/integration-test/"+suffix+".txt", map[string]string{
+		"branch":  fx.Head,
+		"message": "test: add integration fixture file",
+		"content": base64.StdEncoding.EncodeToString([]byte("Created by the integration test PR fixture.\n")),
+	})
+	if status != http.StatusCreated {
+		t.Fatalf("commit file: status %d, want %d", status, http.StatusCreated)
+	}
+
+	status, data := apiCall(t, env, "open pull request", "POST", repo+"/pulls", map[string]string{
+		"base":  fx.Base,
+		"head":  fx.Head,
+		"title": title,
+		"body":  "Created by the integration test PR fixture.",
+	})
+	if status != http.StatusCreated {
+		t.Fatalf("open pull request: status %d, want %d", status, http.StatusCreated)
+	}
+	var pr struct {
+		Number int64 `json:"number"`
+	}
+	if err := json.Unmarshal(data, &pr); err != nil || pr.Number < 1 {
+		t.Fatal("open pull request: no number in the response")
+	}
+	fx.Number = pr.Number
+	// Registered last, so it runs first: close the pull request, then delete
+	// its branches.
+	t.Cleanup(func() {
+		path := fmt.Sprintf("%s/pulls/%d", repo, fx.Number)
+		status, _ := apiCall(t, env, "close pull request", "PATCH", path, map[string]string{"state": "closed"})
+		if status != http.StatusCreated && status != http.StatusOK {
+			t.Errorf("close pull request: status %d, want %d", status, http.StatusCreated)
+		}
+	})
+	return fx
 }
 
 // The assertions below check command output and response bodies, which hold
