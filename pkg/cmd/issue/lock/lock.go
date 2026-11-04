@@ -52,7 +52,9 @@ func NewCmdLock(f *cmdutil.Factory) *cobra.Command {
 		Short: "Lock issue conversation",
 		Long: "Lock the conversation of an issue by number or URL, so that only collaborators can comment.\n\n" +
 			"An issue that is already locked is not changed; unlock it first to lock it with another\n" +
-			"reason. Locking needs write access to the repository's issues.",
+			"reason. Locking needs write access to the repository's issues.\n\n" +
+			"app.copia.io does not serve the lock endpoint and answers with HTTP 404, so the command\n" +
+			"reports that the host does not support it.",
 		Example: `  # Lock an issue in the current repository
   $ copia-cli issue lock 23
 
@@ -83,7 +85,9 @@ func NewCmdUnlock(f *cmdutil.Factory) *cobra.Command {
 		Short: "Unlock issue conversation",
 		Long: "Unlock the conversation of an issue by number or URL.\n\n" +
 			"An issue that is not locked is left as it is. Unlocking needs write access to the\n" +
-			"repository's issues.",
+			"repository's issues.\n\n" +
+			"app.copia.io does not serve the lock endpoint and answers with HTTP 404, so the command\n" +
+			"reports that the host does not support it.",
 		Example: `  # Unlock an issue in the current repository
   $ copia-cli issue unlock 23
 
