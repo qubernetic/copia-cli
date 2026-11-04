@@ -90,6 +90,8 @@ Integration tests require a Copia API token (set in `.envrc`) and run separately
 just integration
 ```
 
+A failing integration test must not print the test account's data: the repository is public, `go test` prints a failing test's log lines and messages, and testify's `assert.Contains` or `assert.NotEmpty` print the whole output they compare. So the tests under `test/integration/` never call `t.Log` or `t.Logf` (the Copia version line of `TestAPI_Version` is the one exception), and they check command output and response bodies only through the helpers of `test/integration/helpers_test.go` (`assertOutputContains`, `assertOutputEqual`, `assertOutputEmpty`, `assertOutputNotEmpty`, `assertStatusCode`), which report the expected text and the output's length in bytes. Outside that file, testify is limited to `NoError`, `Error`, `ErrorContains`, `Greater`, `True` and `False`, with string literals as the only message arguments, and `t.Error`, `t.Errorf`, `t.Fatal` and `t.Fatalf` are not called. `test/workflows` parses these files without the `integration` tag and fails `go test ./...` on any other call, naming file and line; `helpers_test.go` is its single exemption.
+
 #### Coverage gate
 
 CI runs the unit tests through [gotestsum](https://github.com/gotestyourself/gotestsum) and uploads two files to Codecov: the coverage profile (`coverage.out`) and the JUnit test report (`unit.junit.xml`) for Codecov Test Analytics, which tracks failing and flaky tests. The upload authenticates with GitHub OIDC (`use_oidc: true`, with `id-token: write` on the `test` job), so no Codecov token is stored in the repository. GitHub gives no OIDC token to workflows on fork or Dependabot PRs, so those PRs get no Codecov upload and no Codecov statuses.

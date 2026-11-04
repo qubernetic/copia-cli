@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	orglist "github.com/qubernetic/copia-cli/pkg/cmd/org/list"
@@ -27,8 +26,7 @@ func TestOrgList_Run(t *testing.T) {
 
 	err := orglist.ListRun(opts)
 	require.NoError(t, err)
-	assert.NotEmpty(t, stdout.String())
-	t.Logf("Orgs: %s", stdout.String())
+	assertOutputNotEmpty(t, stdout.String())
 }
 
 func TestOrgView_Run(t *testing.T) {
@@ -45,8 +43,7 @@ func TestOrgView_Run(t *testing.T) {
 
 	err := orgview.ViewRun(opts)
 	require.NoError(t, err)
-	assert.Contains(t, stdout.String(), env.Owner)
-	t.Logf("Org: %s", stdout.String())
+	assertOutputContains(t, stdout.String(), env.Owner)
 }
 
 func TestOrgView_NotFound(t *testing.T) {

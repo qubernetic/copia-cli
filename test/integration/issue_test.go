@@ -36,8 +36,7 @@ func TestIssue_FullLifecycle(t *testing.T) {
 	}
 	err := issuecreate.CreateRun(createOpts)
 	require.NoError(t, err)
-	assert.Contains(t, createOut.String(), "Created issue #")
-	t.Logf("Create: %s", createOut.String())
+	assertOutputContains(t, createOut.String(), "Created issue #")
 
 	// Extract issue number from output
 	var issueNumber int64
@@ -53,7 +52,6 @@ func TestIssue_FullLifecycle(t *testing.T) {
 			Owner: env.Owner, Repo: env.Repo,
 			Number: issueNumber,
 		})
-		t.Logf("Closed issue #%d", issueNumber)
 	}()
 
 	// View
@@ -65,8 +63,7 @@ func TestIssue_FullLifecycle(t *testing.T) {
 		Number: issueNumber,
 	})
 	require.NoError(t, err)
-	assert.Contains(t, viewOut.String(), "[integration-test] CLI lifecycle test")
-	t.Logf("View: %s", viewOut.String())
+	assertOutputContains(t, viewOut.String(), "[integration-test] CLI lifecycle test")
 
 	// Comment
 	commentIO, _, _ := testIO()
@@ -78,7 +75,6 @@ func TestIssue_FullLifecycle(t *testing.T) {
 		Body:   "Integration test comment via CommentRun.",
 	})
 	require.NoError(t, err)
-	t.Logf("Comment added to #%d", issueNumber)
 
 	// Edit title
 	editIO, _, _ := testIO()
@@ -90,7 +86,6 @@ func TestIssue_FullLifecycle(t *testing.T) {
 		Title:  "[integration-test] CLI lifecycle test (edited)",
 	})
 	require.NoError(t, err)
-	t.Logf("Edited issue #%d", issueNumber)
 
 	// Close
 	closeIO, closeOut, _ := testIO()
@@ -101,8 +96,7 @@ func TestIssue_FullLifecycle(t *testing.T) {
 		Number: issueNumber,
 	})
 	require.NoError(t, err)
-	assert.Contains(t, closeOut.String(), "Closed issue")
-	t.Logf("Close: %s", closeOut.String())
+	assertOutputContains(t, closeOut.String(), "Closed issue")
 
 	// Reopen with a comment; the deferred cleanup closes it again
 	reopenIO, reopenOut, _ := testIO()
@@ -114,8 +108,7 @@ func TestIssue_FullLifecycle(t *testing.T) {
 		Comment: "Reopened by integration test via ReopenRun.",
 	})
 	require.NoError(t, err)
-	assert.Equal(t, fmt.Sprintf("Reopened issue #%d\n", issueNumber), reopenOut.String())
-	t.Logf("Reopen: %s", reopenOut.String())
+	assertOutputEqual(t, reopenOut.String(), fmt.Sprintf("Reopened issue #%d\n", issueNumber))
 
 	// Reopen again: the issue is open, so nothing is sent
 	againIO, againOut, againErr := testIO()
@@ -126,13 +119,13 @@ func TestIssue_FullLifecycle(t *testing.T) {
 		Number: issueNumber,
 	})
 	require.NoError(t, err)
-	assert.Empty(t, againOut.String())
-	assert.Contains(t, againErr.String(), "is already open")
+	assertOutputEmpty(t, againOut.String())
+	assertOutputContains(t, againErr.String(), "is already open")
 }
 
 func TestIssue_List(t *testing.T) {
 	env := loadTestEnv(t)
-	ios, stdout, _ := testIO()
+	ios, _, _ := testIO()
 
 	opts := &issuelist.ListOptions{
 		IO:         ios,
@@ -147,7 +140,6 @@ func TestIssue_List(t *testing.T) {
 
 	err := issuelist.ListRun(opts)
 	require.NoError(t, err)
-	t.Logf("Output: %s", stdout.String())
 }
 
 func TestIssue_ViewNotFound(t *testing.T) {
@@ -161,5 +153,5 @@ func TestIssue_ViewNotFound(t *testing.T) {
 		Number: 99999,
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not found")
+	assert.ErrorContains(t, err, "not found")
 }

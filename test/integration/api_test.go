@@ -29,8 +29,7 @@ func TestAPI_GetUser(t *testing.T) {
 
 	err := apicmd.APIRun(opts)
 	require.NoError(t, err)
-	assert.Contains(t, stdout.String(), "login")
-	t.Logf("API /user: %s", stdout.String()[:100])
+	assertOutputContains(t, stdout.String(), "login")
 }
 
 func TestAPI_GetRepo(t *testing.T) {
@@ -47,8 +46,7 @@ func TestAPI_GetRepo(t *testing.T) {
 
 	err := apicmd.APIRun(opts)
 	require.NoError(t, err)
-	assert.Contains(t, stdout.String(), env.Repo)
-	t.Logf("API repo: %s", stdout.String()[:100])
+	assertOutputContains(t, stdout.String(), env.Repo)
 }
 
 func TestAPI_Version(t *testing.T) {
@@ -68,15 +66,15 @@ func TestAPI_Version(t *testing.T) {
 	require.NoError(t, err)
 
 	head, body, found := strings.Cut(stdout.String(), "\n\n")
-	require.True(t, found, "no blank line after the headers: %q", stdout.String())
+	require.True(t, found, "no blank line after the headers")
 	statusLine, _, _ := strings.Cut(head, "\n")
-	assert.Contains(t, statusLine, " 200 ")
+	assertOutputContains(t, statusLine, " 200 ")
 
 	var v struct {
 		Version string `json:"version"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(body), &v), "body: %q", body)
-	require.NotEmpty(t, v.Version)
+	require.NoError(t, json.Unmarshal([]byte(body), &v))
+	require.True(t, v.Version != "", "empty version")
 	t.Logf("Copia version (GET /version): %s", v.Version)
 }
 
@@ -94,5 +92,5 @@ func TestAPI_NotFound(t *testing.T) {
 
 	err := apicmd.APIRun(opts)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "404")
+	assert.ErrorContains(t, err, "404")
 }

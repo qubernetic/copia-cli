@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	searchissues "github.com/qubernetic/copia-cli/pkg/cmd/search/issues"
@@ -28,13 +27,12 @@ func TestSearchRepos_Run(t *testing.T) {
 
 	err := searchrepos.SearchRun(opts)
 	require.NoError(t, err)
-	assert.Contains(t, stdout.String(), "integration")
-	t.Logf("Search repos: %s", stdout.String())
+	assertOutputContains(t, stdout.String(), "integration")
 }
 
 func TestSearchIssues_Run(t *testing.T) {
 	env := loadTestEnv(t)
-	ios, stdout, _ := testIO()
+	ios, _, _ := testIO()
 
 	opts := &searchissues.SearchOptions{
 		IO:         ios,
@@ -49,5 +47,4 @@ func TestSearchIssues_Run(t *testing.T) {
 
 	err := searchissues.SearchRun(opts)
 	require.NoError(t, err)
-	t.Logf("Search issues: %s", stdout.String())
 }

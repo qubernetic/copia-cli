@@ -72,6 +72,7 @@ copia-cli/
 
 - **Auth-first:** Every API call requires authentication. `copia-cli auth login` is mandatory before any operation.
 - **Same-origin redirects:** every command builds its HTTP client with `cmdutil.NewHTTPClient()`, which refuses a redirect that changes scheme, host or port; a guard test parses non-test code under `pkg/`, `internal/` and `cmd/` and fails on an `http.Client` literal or `new(http.Client)` outside `pkg/cmdutil/httpclient.go`, and on `http.DefaultClient`, `http.Get`, `Head`, `Post` or `PostForm`, also under an aliased `net/http` import.
+- **Integration tests print no account data:** the tests under `test/integration/` log nothing but the Copia version line of `TestAPI_Version` and check output only through the byte-count helpers of `test/integration/helpers_test.go`; a guard in `test/workflows` parses them with `go/parser` (no `integration` tag needed) and fails on any other `t.Log`/`t.Logf`, on `t.Error`/`t.Fatal` calls and on testify calls other than `NoError`, `Error`, `ErrorContains`, `Greater`, `True` and `False` with literal messages, with `helpers_test.go` as its single exemption.
 - **Auth precedence:** `--token` flag > `COPIA_TOKEN` env var > config file
 - **Multi-instance support:** Config supports multiple hosts; active instance resolved by `--host` flag > `COPIA_HOST` env > git remote URL > first config entry
 - **Config location:** `~/.config/copia/config.yml` (Windows: `%USERPROFILE%\.config\copia\config.yml`), file permissions `600`

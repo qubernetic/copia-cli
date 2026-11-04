@@ -1,5 +1,7 @@
 // Package workflows checks the GitHub Actions workflows under .github/workflows,
-// the composite actions under .github/actions and every local action they use.
+// the composite actions under .github/actions and every local action they use,
+// and keeps the integration tests from printing the test account's data in
+// the CI log.
 package workflows
 
 import (

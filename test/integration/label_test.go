@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	labelcreate "github.com/qubernetic/copia-cli/pkg/cmd/label/create"
@@ -27,8 +26,7 @@ func TestLabel_CreateAndList(t *testing.T) {
 		Name: "integration-test-label", Color: "#ff0000",
 	})
 	require.NoError(t, err)
-	assert.Contains(t, createOut.String(), "integration-test-label")
-	t.Logf("Create: %s", createOut.String())
+	assertOutputContains(t, createOut.String(), "integration-test-label")
 
 	// Cleanup: delete label via API
 	defer func() {
@@ -55,7 +53,6 @@ func TestLabel_CreateAndList(t *testing.T) {
 				if delResp != nil {
 					_ = delResp.Body.Close()
 				}
-				t.Logf("Deleted label ID: %d", l.ID)
 			}
 		}
 	}()
@@ -69,6 +66,5 @@ func TestLabel_CreateAndList(t *testing.T) {
 		Limit: 100,
 	})
 	require.NoError(t, err)
-	assert.Contains(t, listOut.String(), "integration-test-label")
-	t.Logf("List: %s", listOut.String())
+	assertOutputContains(t, listOut.String(), "integration-test-label")
 }
