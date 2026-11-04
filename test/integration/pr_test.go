@@ -13,7 +13,7 @@ import (
 
 func TestPR_List(t *testing.T) {
 	env := loadTestEnv(t)
-	ios, stdout, _ := testIO()
+	ios, _, _ := testIO()
 
 	opts := &prlist.ListOptions{
 		IO:         ios,
@@ -28,5 +28,4 @@ func TestPR_List(t *testing.T) {
 
 	err := prlist.ListRun(opts)
 	require.NoError(t, err)
-	t.Logf("PRs: %s", stdout.String())
 }

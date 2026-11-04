@@ -31,8 +31,7 @@ func TestAuth_LoginRun_ValidToken(t *testing.T) {
 
 	err := login.LoginRun(opts)
 	require.NoError(t, err)
-	assert.Contains(t, stdout.String(), "Logged in as")
-	t.Logf("Output: %s", stdout.String())
+	assertOutputContains(t, stdout.String(), "Logged in as")
 }
 
 func TestAuth_LoginRun_InvalidToken(t *testing.T) {
@@ -49,7 +48,7 @@ func TestAuth_LoginRun_InvalidToken(t *testing.T) {
 
 	err := login.LoginRun(opts)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "authentication failed")
+	assert.ErrorContains(t, err, "authentication failed")
 }
 
 func TestAuth_StatusRun(t *testing.T) {
@@ -69,9 +68,8 @@ func TestAuth_StatusRun(t *testing.T) {
 
 	err := status.StatusRun(opts)
 	require.NoError(t, err)
-	assert.Contains(t, stdout.String(), env.Host)
-	assert.Contains(t, stdout.String(), "Token valid")
-	t.Logf("Output: %s", stdout.String())
+	assertOutputContains(t, stdout.String(), env.Host)
+	assertOutputContains(t, stdout.String(), "Token valid")
 }
 
 func TestAuth_QueryParamToken_Rejected(t *testing.T) {
@@ -94,6 +92,6 @@ func TestAuth_QueryParamToken_Rejected(t *testing.T) {
 	// answers with 403 rather than 401.
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
-	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
-	assert.Contains(t, string(body), "Only signed in user is allowed to call APIs.")
+	assertStatusCode(t, resp.StatusCode, http.StatusForbidden)
+	assertOutputContains(t, string(body), "Only signed in user is allowed to call APIs.")
 }
