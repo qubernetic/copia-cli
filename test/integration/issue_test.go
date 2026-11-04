@@ -17,6 +17,7 @@ import (
 	issuedelete "github.com/qubernetic/copia-cli/pkg/cmd/issue/delete"
 	issueedit "github.com/qubernetic/copia-cli/pkg/cmd/issue/edit"
 	issuelist "github.com/qubernetic/copia-cli/pkg/cmd/issue/list"
+	issuelock "github.com/qubernetic/copia-cli/pkg/cmd/issue/lock"
 	issuepin "github.com/qubernetic/copia-cli/pkg/cmd/issue/pin"
 	issuereopen "github.com/qubernetic/copia-cli/pkg/cmd/issue/reopen"
 	issueunpin "github.com/qubernetic/copia-cli/pkg/cmd/issue/unpin"
@@ -291,4 +292,72 @@ func TestIssue_PinUnpin(t *testing.T) {
 	assert.ErrorContains(t, err, "does not support unpinning issues (HTTP 404 on DELETE")
 	assertOutputEmpty(t, out)
 	assertOutputEmpty(t, errOut)
+}
+
+func TestIssue_LockUnlock(t *testing.T) {
+	env := loadTestEnv(t)
+
+	const title = "[integration-test] CLI lock test"
+	createIO, createOut, _ := testIO()
+	err := issuecreate.CreateRun(&issuecreate.CreateOptions{
+		IO: createIO, HTTPClient: &http.Client{},
+		Host: env.Host, Token: env.Token,
+		Owner: env.Owner, Repo: env.Repo,
+		Title: title,
+		Body:  "Created by integration test for LockRun and UnlockRun.",
+	})
+	require.NoError(t, err)
+
+	var issueNumber int64
+	_, _ = fmt.Sscanf(createOut.String(), "Created issue #%d", &issueNumber)
+	require.Greater(t, issueNumber, int64(0), "failed to parse issue number")
+
+	run := func(fn func(*issuelock.LockOptions) error, reason string) (string, string, error) {
+		ios, out, errOut := testIO()
+		err := fn(&issuelock.LockOptions{
+			IO: ios, HTTPClient: &http.Client{},
+			Host: env.Host, Token: env.Token,
+			Owner: env.Owner, Repo: env.Repo,
+			Number: issueNumber,
+			Reason: reason,
+		})
+		return out.String(), errOut.String(), err
+	}
+
+	// Cleanup: unlock (a no-op when the test got that far) and close
+	defer func() {
+		_, _, _ = run(issuelock.UnlockRun, "")
+		closeIO, _, _ := testIO()
+		_ = issueclose.CloseRun(&issueclose.CloseOptions{
+			IO: closeIO, HTTPClient: &http.Client{},
+			Host: env.Host, Token: env.Token,
+			Owner: env.Owner, Repo: env.Repo,
+			Number: issueNumber,
+		})
+	}()
+
+	suffix := fmt.Sprintf("#%d (%s)", issueNumber, title)
+
+	out, errOut, err := run(issuelock.LockRun, "resolved")
+	require.NoError(t, err)
+	assertOutputContains(t, out, "Locked as RESOLVED: Issue ")
+	assertOutputContains(t, out, suffix+"\n")
+	assertOutputEmpty(t, errOut)
+
+	// Locking again reads is_locked and sends nothing
+	out, errOut, err = run(issuelock.LockRun, "")
+	assert.ErrorContains(t, err, suffix+" is already locked")
+	assertOutputEmpty(t, out)
+	assertOutputEmpty(t, errOut)
+
+	out, errOut, err = run(issuelock.UnlockRun, "")
+	require.NoError(t, err)
+	assertOutputContains(t, out, "Unlocked: Issue ")
+	assertOutputContains(t, out, suffix+"\n")
+	assertOutputEmpty(t, errOut)
+
+	out, errOut, err = run(issuelock.UnlockRun, "")
+	require.NoError(t, err)
+	assertOutputEmpty(t, out)
+	assertOutputContains(t, errOut, suffix+" is not locked\n")
 }
