@@ -110,7 +110,7 @@ jobs:
         run: sudo snap install snapcraft --classic --channel=9.x/stable
 
       - name: Pack snap
-        run: snapcraft pack --destructive-mode
+        run: sudo snapcraft pack --destructive-mode
 
       - name: Check snap metadata
         run: |
