@@ -17,7 +17,9 @@ import (
 	issuedelete "github.com/qubernetic/copia-cli/pkg/cmd/issue/delete"
 	issueedit "github.com/qubernetic/copia-cli/pkg/cmd/issue/edit"
 	issuelist "github.com/qubernetic/copia-cli/pkg/cmd/issue/list"
+	issuepin "github.com/qubernetic/copia-cli/pkg/cmd/issue/pin"
 	issuereopen "github.com/qubernetic/copia-cli/pkg/cmd/issue/reopen"
+	issueunpin "github.com/qubernetic/copia-cli/pkg/cmd/issue/unpin"
 	issueview "github.com/qubernetic/copia-cli/pkg/cmd/issue/view"
 )
 
@@ -218,4 +220,75 @@ func TestIssue_Delete(t *testing.T) {
 		Number: issueNumber,
 	})
 	require.NoError(t, err, "the refused issue still exists")
+}
+
+func TestIssue_PinUnpin(t *testing.T) {
+	env := loadTestEnv(t)
+
+	const title = "[integration-test] CLI pin test"
+	createIO, createOut, _ := testIO()
+	err := issuecreate.CreateRun(&issuecreate.CreateOptions{
+		IO: createIO, HTTPClient: &http.Client{},
+		Host: env.Host, Token: env.Token,
+		Owner: env.Owner, Repo: env.Repo,
+		Title: title,
+		Body:  "Created by integration test for PinRun and UnpinRun.",
+	})
+	require.NoError(t, err)
+
+	var issueNumber int64
+	_, _ = fmt.Sscanf(createOut.String(), "Created issue #%d", &issueNumber)
+	require.Greater(t, issueNumber, int64(0), "failed to parse issue number")
+
+	// Cleanup: unpin (a no-op when the test got that far) and close
+	defer func() {
+		unpinIO, _, _ := testIO()
+		_ = issueunpin.UnpinRun(&issueunpin.UnpinOptions{
+			IO: unpinIO, HTTPClient: &http.Client{},
+			Host: env.Host, Token: env.Token,
+			Owner: env.Owner, Repo: env.Repo,
+			Number: issueNumber,
+		})
+		closeIO, _, _ := testIO()
+		_ = issueclose.CloseRun(&issueclose.CloseOptions{
+			IO: closeIO, HTTPClient: &http.Client{},
+			Host: env.Host, Token: env.Token,
+			Owner: env.Owner, Repo: env.Repo,
+			Number: issueNumber,
+		})
+	}()
+
+	pin := func() (string, string, error) {
+		ios, out, errOut := testIO()
+		err := issuepin.PinRun(&issuepin.PinOptions{
+			IO: ios, HTTPClient: &http.Client{},
+			Host: env.Host, Token: env.Token,
+			Owner: env.Owner, Repo: env.Repo,
+			Number: issueNumber,
+		})
+		return out.String(), errOut.String(), err
+	}
+	unpin := func() (string, string, error) {
+		ios, out, errOut := testIO()
+		err := issueunpin.UnpinRun(&issueunpin.UnpinOptions{
+			IO: ios, HTTPClient: &http.Client{},
+			Host: env.Host, Token: env.Token,
+			Owner: env.Owner, Repo: env.Repo,
+			Number: issueNumber,
+		})
+		return out.String(), errOut.String(), err
+	}
+
+	// app.copia.io answers the pin request with HTTP 404 (found by the
+	// integration job of #369), so the issue stays unpinned. Should Copia
+	// serve the route, this fails and docs/parity.md needs updating.
+	out, errOut, err := pin()
+	assert.ErrorContains(t, err, "does not support pinning issues (HTTP 404 on POST")
+	assertOutputEmpty(t, out)
+	assertOutputEmpty(t, errOut)
+
+	out, errOut, err = unpin()
+	assert.ErrorContains(t, err, "does not support unpinning issues (HTTP 404 on DELETE")
+	assertOutputEmpty(t, out)
+	assertOutputEmpty(t, errOut)
 }

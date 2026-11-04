@@ -53,8 +53,8 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 | `gh issue comment` | Full | `copia-cli issue comment` | [x] |
 | `gh issue edit` | Full | `copia-cli issue edit` | [x] |
 | `gh issue delete` | Partial | `copia-cli issue delete` | [x] |
-| `gh issue pin` | Full | `copia-cli issue pin` | [ ] |
-| `gh issue unpin` | Full | `copia-cli issue unpin` | [ ] |
+| `gh issue pin` | Partial | `copia-cli issue pin` | [x] |
+| `gh issue unpin` | Partial | `copia-cli issue unpin` | [x] |
 | `gh issue lock` | Full | `copia-cli issue lock` | [ ] |
 | `gh issue unlock` | Full | `copia-cli issue unlock` | [ ] |
 | `gh issue transfer` | None | n/a | — |
@@ -63,7 +63,7 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 
 `gh issue delete`: `DELETE /repos/{owner}/{repo}/issues/{index}`. Gitea 1.26 lets only repository admins delete an issue; others get HTTP 403. app.copia.io refuses the request with HTTP 405 (found by the `integration` job of #368), so on Copia the command reports that and the issue stays; close it with `issue close` instead. There is no interactive prompt, so the command needs `--yes`.
 
-`gh issue pin`, `gh issue unpin`: `POST` and `DELETE /repos/{owner}/{repo}/issues/{index}/pin`.
+`gh issue pin`, `gh issue unpin`: `POST` and `DELETE /repos/{owner}/{repo}/issues/{index}/pin`. Both read the issue first and leave it alone when its `pin_order` already shows the wanted state, as `gh` does; a server that sends no `pin_order` gets the request anyway. Gitea needs write access to the repository's issues for both. app.copia.io answers both `POST` and `DELETE` on the route with HTTP 404 for an issue it serves, and its issues carry no `pin_order` (found by the `integration` job of #369), so on Copia both commands report that the host does not support pinning and the issue stays as it is.
 
 `gh issue lock`, `gh issue unlock`: `PUT /repos/{owner}/{repo}/issues/{index}/lock` with `lock_reason`, `DELETE` on the same path.
 
@@ -151,8 +151,8 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 
 | Status | Count |
 |--------|-------|
-| Implemented | 39 |
-| Not yet implemented (Full parity) | 22 |
+| Implemented | 41 |
+| Not yet implemented (Full parity) | 20 |
 | Not yet implemented (Partial) | 7 |
 | Not yet implemented (client side, `repo set-default`) | 1 |
 | No equivalent | 12 |
