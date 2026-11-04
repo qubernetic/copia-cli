@@ -336,28 +336,28 @@ func TestIssue_LockUnlock(t *testing.T) {
 		})
 	}()
 
-	suffix := fmt.Sprintf("#%d (%s)", issueNumber, title)
-
+	// app.copia.io answers the lock request with HTTP 404 (found by the
+	// integration job of #370), so the issue stays unlocked. Should Copia
+	// serve the route, this fails and docs/parity.md needs updating.
 	out, errOut, err := run(issuelock.LockRun, "resolved")
-	require.NoError(t, err)
-	assertOutputContains(t, out, "Locked as RESOLVED: Issue ")
-	assertOutputContains(t, out, suffix+"\n")
-	assertOutputEmpty(t, errOut)
-
-	// Locking again reads is_locked and sends nothing
-	out, errOut, err = run(issuelock.LockRun, "")
-	assert.ErrorContains(t, err, suffix+" is already locked")
+	assert.ErrorContains(t, err, "does not support locking issues (HTTP 404 on PUT")
 	assertOutputEmpty(t, out)
 	assertOutputEmpty(t, errOut)
 
-	out, errOut, err = run(issuelock.UnlockRun, "")
-	require.NoError(t, err)
-	assertOutputContains(t, out, "Unlocked: Issue ")
-	assertOutputContains(t, out, suffix+"\n")
-	assertOutputEmpty(t, errOut)
-
+	// The issue is not locked, so unlock reads is_locked and sends nothing
 	out, errOut, err = run(issuelock.UnlockRun, "")
 	require.NoError(t, err)
 	assertOutputEmpty(t, out)
-	assertOutputContains(t, errOut, suffix+" is not locked\n")
+	assertOutputContains(t, errOut, fmt.Sprintf("#%d (%s) is not locked\n", issueNumber, title))
+
+	// Gitea answers DELETE on the lock route of an unlocked issue with 204, so
+	// a 404 shows that Copia does not serve the unlock route either.
+	unlockURL := fmt.Sprintf("https://%s/api/v1/repos/%s/%s/issues/%d/lock", env.Host, env.Owner, env.Repo, issueNumber)
+	req, err := http.NewRequest(http.MethodDelete, unlockURL, nil)
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "token "+env.Token)
+	resp, err := (&http.Client{}).Do(req)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	assertStatusCode(t, resp.StatusCode, http.StatusNotFound)
 }
