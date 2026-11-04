@@ -17,6 +17,7 @@ import (
 	prcomment "github.com/qubernetic/copia-cli/pkg/cmd/pr/comment"
 	predit "github.com/qubernetic/copia-cli/pkg/cmd/pr/edit"
 	prlist "github.com/qubernetic/copia-cli/pkg/cmd/pr/list"
+	prready "github.com/qubernetic/copia-cli/pkg/cmd/pr/ready"
 	prreopen "github.com/qubernetic/copia-cli/pkg/cmd/pr/reopen"
 	prview "github.com/qubernetic/copia-cli/pkg/cmd/pr/view"
 )
@@ -173,4 +174,52 @@ func TestPR_Edit(t *testing.T) {
 	assertOutputContains(t, viewOut.String(), fmt.Sprintf("#%d %s\n", pr.Number, title))
 	assertOutputContains(t, viewOut.String(), "\n"+body+"\n")
 	assertOutputContains(t, viewOut.String(), "Labels: "+label+"\n")
+}
+
+func TestPR_Ready(t *testing.T) {
+	env := loadTestEnv(t)
+	title := "[integration-test] CLI ready test " + strconv.FormatInt(time.Now().UnixNano(), 36)
+	pr := createDraftFixturePR(t, env, title)
+	ref := fmt.Sprintf("%s/%s#%d", env.Owner, env.Repo, pr.Number)
+
+	ready := func(undo bool) (string, string) {
+		t.Helper()
+		ios, out, errOut := testIO()
+		err := prready.ReadyRun(&prready.ReadyOptions{
+			IO: ios, HTTPClient: testHTTPClient(),
+			Host: env.Host, Token: env.Token,
+			Owner: env.Owner, Repo: env.Repo,
+			Number: pr.Number,
+			Undo:   undo,
+		})
+		require.NoError(t, err)
+		return out.String(), errOut.String()
+	}
+	viewTitle := func() string {
+		t.Helper()
+		ios, out, _ := testIO()
+		err := prview.ViewRun(&prview.ViewOptions{
+			IO: ios, HTTPClient: testHTTPClient(),
+			Host: env.Host, Token: env.Token,
+			Owner: env.Owner, Repo: env.Repo,
+			Number: pr.Number,
+		})
+		require.NoError(t, err)
+		return out.String()
+	}
+	assertOutputContains(t, viewTitle(), fmt.Sprintf("#%d WIP: %s\n", pr.Number, title))
+
+	out, errOut := ready(false)
+	assertOutputEqual(t, out, fmt.Sprintf("Pull request %s (%s) is marked as \"ready for review\"\n", ref, title))
+	assertOutputEmpty(t, errOut)
+	assertOutputContains(t, viewTitle(), fmt.Sprintf("#%d %s\n", pr.Number, title))
+
+	out, errOut = ready(false)
+	assertOutputEmpty(t, out)
+	assertOutputEqual(t, errOut, fmt.Sprintf("! Pull request %s (%s) is already \"ready for review\"\n", ref, title))
+
+	out, errOut = ready(true)
+	assertOutputEqual(t, out, fmt.Sprintf("Pull request %s (WIP: %s) is converted to \"draft\"\n", ref, title))
+	assertOutputEmpty(t, errOut)
+	assertOutputContains(t, viewTitle(), fmt.Sprintf("#%d WIP: %s\n", pr.Number, title))
 }
