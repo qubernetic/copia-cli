@@ -9,18 +9,43 @@ permissions:
 
 jobs:
   snap:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
-      - uses: snapcore/action-build@3bdaa03e1ba6bf59a65f84a751d943d549a54e79 # v1.3.0
-        id: build
+      - name: Extract version
+        id: version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          script/check-release-version.sh "$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - uses: snapcore/action-publish@214b86e5ca036ead1668c79afb81e550e6c54d40 # v1.2.0
+      - name: Install snapcraft
+        run: sudo snap install snapcraft --classic --channel=9.x/stable
+
+      - name: Pack snap
+        run: sudo snapcraft pack --destructive-mode
+
+      - name: Check snap version
+        id: snap
         env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          snap_file="copia-cli_${VERSION}_amd64.snap"
+          unsquashfs -d snap-root "$snap_file" meta/snap.yaml
+          version=$(yq '.version' snap-root/meta/snap.yaml)
+          echo "version: $version"
+          if [ "$version" != "$VERSION" ]; then
+            echo "::error::meta/snap.yaml version is $version, want $VERSION"
+            exit 1
+          fi
+          echo "file=$snap_file" >> "$GITHUB_OUTPUT"
+
+      - name: Upload snap
+        env:
+          SNAP_FILE: ${{ steps.snap.outputs.file }}
           SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
-        with:
-          snap: ${{ steps.build.outputs.snap }}
-          release: stable
+        run: snapcraft upload --release stable "$SNAP_FILE"

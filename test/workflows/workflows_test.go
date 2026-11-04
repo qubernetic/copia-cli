@@ -585,6 +585,86 @@ runs:
 	}
 }
 
+// bannedPrefixes are the owners of actions no workflow may use: the snapcore
+// and canonical snap actions call snapcraft without a command and run on
+// node20, so snap.yml installs and runs snapcraft itself.
+var bannedPrefixes = []string{"snapcore/", "canonical/action-"}
+
+// scanBanned returns one message per `uses:` in every file walkRepo visits (a
+// job's reusable workflow, a job step or a `runs` step) that names an action
+// under bannedPrefixes, in any case.
+func scanBanned(repo string) ([]string, error) {
+	return walkRepo(repo, func(file string, _ []byte, f actionFile) ([]string, error) {
+		var offenders []string
+		check := func(where, uses string) {
+			for _, prefix := range bannedPrefixes {
+				if strings.HasPrefix(strings.ToLower(uses), prefix) {
+					offenders = append(offenders, fmt.Sprintf("%s: %s uses %s; install and run the tool in a run step instead", file, where, uses))
+				}
+			}
+		}
+		for _, name := range sortedJobs(f) {
+			where := fmt.Sprintf("job %q", name)
+			check(where, f.Jobs[name].Uses)
+			for i, s := range f.Jobs[name].Steps {
+				check(fmt.Sprintf("%s step %d", where, i+1), s.Uses)
+			}
+		}
+		for i, s := range f.Runs.Steps {
+			check(fmt.Sprintf("runs step %d", i+1), s.Uses)
+		}
+		return offenders, nil
+	})
+}
+
+// TestNoSnapActions keeps the snapcore and canonical snap actions out of every
+// workflow and local action.
+func TestNoSnapActions(t *testing.T) {
+	offenders, err := scanBanned(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range offenders {
+		t.Error(o)
+	}
+}
+
+func TestScanBanned(t *testing.T) {
+	got, err := scanBanned(writeRepo(t, map[string]string{
+		".github/workflows/snap.yml": `
+jobs:
+  call:
+    uses: canonical/action-build/.github/workflows/build.yml@main
+  snap:
+    steps:
+      - uses: actions/checkout@v4
+      - uses: SnapCore/action-build@v1
+      - uses: ./.github/actions/publish
+`,
+		".github/actions/publish/action.yml": `
+runs:
+  using: composite
+  steps:
+    - uses: canonical/action-publish@v1
+    - uses: canonical/setup-lxd@v1
+`,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		`.github/workflows/snap.yml: job "call" uses canonical/action-build/.github/workflows/build.yml@main; install and run the tool in a run step instead`,
+		`.github/workflows/snap.yml: job "snap" step 2 uses SnapCore/action-build@v1; install and run the tool in a run step instead`,
+		`.github/actions/publish/action.yml: runs step 1 uses canonical/action-publish@v1; install and run the tool in a run step instead`,
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("scanBanned() =\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	if _, err := scanBanned(t.TempDir()); err == nil {
+		t.Error("scanBanned() succeeded without workflow files, want error")
+	}
+}
+
 func TestUnpinnedUses(t *testing.T) {
 	const sha = "3d3c42e5aac5ba805825da76410c181273ba90b1"
 	step := func(uses string) string {
@@ -698,10 +778,10 @@ func stepRun(t *testing.T, file, step string) string {
 	return ""
 }
 
-// TestReleaseVersionIsChecked keeps the release tag out of PKGBUILD, .SRCINFO
-// and the RPM spec unless it passed script/check-release-version.sh.
+// TestReleaseVersionIsChecked keeps the release tag out of PKGBUILD, .SRCINFO,
+// the RPM spec and the snap version check unless it passed script/check-release-version.sh.
 func TestReleaseVersionIsChecked(t *testing.T) {
-	for _, file := range []string{"aur.yml", "copr.yml"} {
+	for _, file := range []string{"aur.yml", "copr.yml", "snap.yml"} {
 		run := stepRun(t, file, "Extract version")
 		guard := strings.Index(run, `script/check-release-version.sh "$VERSION"`)
 		output := strings.Index(run, "GITHUB_OUTPUT")
@@ -858,7 +938,7 @@ func isCheckout(s step) bool {
 // anything in the release jobs behind the version gate: the step with id
 // version comes right after actions/checkout.
 func TestVersionGateRunsFirst(t *testing.T) {
-	for _, file := range []string{"aur.yml", "copr.yml"} {
+	for _, file := range []string{"aur.yml", "copr.yml", "snap.yml"} {
 		for name, job := range loadWorkflow(t, file).Jobs {
 			checkout := -1
 			for i, s := range job.Steps {
@@ -879,10 +959,10 @@ func TestVersionGateRunsFirst(t *testing.T) {
 }
 
 // TestReleaseCheckoutsDropCredentials keeps the GITHUB_TOKEN out of the git
-// credential store in the release jobs: neither runs authenticated git against
+// credential store in the release jobs: none runs authenticated git against
 // GitHub, and gh reads its own GH_TOKEN.
 func TestReleaseCheckoutsDropCredentials(t *testing.T) {
-	for _, file := range []string{"aur.yml", "copr.yml"} {
+	for _, file := range []string{"aur.yml", "copr.yml", "snap.yml"} {
 		for name, job := range loadWorkflow(t, file).Jobs {
 			for i, s := range job.Steps {
 				if !isCheckout(s) {
@@ -998,6 +1078,95 @@ func TestCoprInstallRunsInCI(t *testing.T) {
 	if ci != copr {
 		t.Errorf("ci.yml Install copr-cli run block differs from copr.yml:\n%s\nwant:\n%s", ci, copr)
 	}
+}
+
+// TestSnapPackRunsLikeRelease keeps the snap-pack job of ci.yml building the
+// snap the way snap.yml, which only runs on a release, builds it: both run the
+// same Install snapcraft and Pack snap steps.
+func TestSnapPackRunsLikeRelease(t *testing.T) {
+	for _, name := range []string{"Install snapcraft", "Pack snap"} {
+		ci, snap := stepRun(t, "ci.yml", name), stepRun(t, "snap.yml", name)
+		if ci != snap {
+			t.Errorf("ci.yml %s run block differs from snap.yml:\n%s\nwant:\n%s", name, ci, snap)
+		}
+	}
+}
+
+// TestSnapUploadsCheckedVersion keeps snap.yml on a fixed runner, uploads only
+// a snap whose meta/snap.yaml carries the release version, and hands the Snap
+// Store credentials to the upload step alone.
+func TestSnapUploadsCheckedVersion(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "snap.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wf struct {
+		Env  any `yaml:"env"`
+		Jobs map[string]struct {
+			RunsOn string `yaml:"runs-on"`
+			Env    any    `yaml:"env"`
+			Steps  []struct {
+				Name string            `yaml:"name"`
+				Run  string            `yaml:"run"`
+				With any               `yaml:"with"`
+				Env  map[string]string `yaml:"env"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(data, &wf); err != nil {
+		t.Fatal(err)
+	}
+	job, ok := wf.Jobs["snap"]
+	if !ok || len(wf.Jobs) != 1 {
+		t.Fatalf("snap.yml: jobs %v, want one job named snap", sortedKeys(wf.Jobs))
+	}
+	if job.RunsOn != "ubuntu-24.04" {
+		t.Errorf("snap.yml: runs-on %q, want ubuntu-24.04", job.RunsOn)
+	}
+	for where, v := range map[string]any{"workflow env": wf.Env, "job env": job.Env} {
+		if strings.Contains(fmt.Sprint(v), "secrets.") {
+			t.Errorf("snap.yml: %s mentions secrets.", where)
+		}
+	}
+
+	pack, check, upload := -1, -1, -1
+	for i, s := range job.Steps {
+		switch {
+		case s.Name == "Pack snap":
+			pack = i
+		case strings.Contains(s.Run, "meta/snap.yaml") && strings.Contains(s.Run, `"$VERSION"`):
+			check = i
+		case strings.Contains(s.Run, "snapcraft upload --release stable "):
+			upload = i
+		}
+		for field, v := range map[string]any{"run": s.Run, "with": s.With} {
+			if strings.Contains(fmt.Sprint(v), "secrets.") {
+				t.Errorf("snap.yml: step %d (%q): %s mentions secrets.", i+1, s.Name, field)
+			}
+		}
+		for k, v := range s.Env {
+			if !strings.Contains(v, "secrets.") {
+				continue
+			}
+			if want := "${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}"; i != upload || k != "SNAPCRAFT_STORE_CREDENTIALS" || v != want {
+				t.Errorf("snap.yml: step %d (%q): env %s=%s; only the upload step may read a secret, as SNAPCRAFT_STORE_CREDENTIALS=%s", i+1, s.Name, k, v, want)
+			}
+		}
+	}
+	if pack < 0 || check < pack || upload < check {
+		t.Errorf("snap.yml: Pack snap at step %d, version check at %d, upload at %d; want pack, then a check of meta/snap.yaml against \"$VERSION\", then snapcraft upload --release stable", pack+1, check+1, upload+1)
+	} else if job.Steps[upload].Env["SNAPCRAFT_STORE_CREDENTIALS"] == "" {
+		t.Error("snap.yml: the upload step does not set SNAPCRAFT_STORE_CREDENTIALS")
+	}
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // TestCoprInstallHasNoSecrets keeps the copr-install job of ci.yml, which runs
