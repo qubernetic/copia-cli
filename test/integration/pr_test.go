@@ -15,6 +15,7 @@ import (
 
 	prclose "github.com/qubernetic/copia-cli/pkg/cmd/pr/close"
 	prcomment "github.com/qubernetic/copia-cli/pkg/cmd/pr/comment"
+	predit "github.com/qubernetic/copia-cli/pkg/cmd/pr/edit"
 	prlist "github.com/qubernetic/copia-cli/pkg/cmd/pr/list"
 	prreopen "github.com/qubernetic/copia-cli/pkg/cmd/pr/reopen"
 	prview "github.com/qubernetic/copia-cli/pkg/cmd/pr/view"
@@ -122,4 +123,54 @@ func TestPR_Comment(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assertOutputContains(t, viewOut.String(), body)
+}
+
+func TestPR_Edit(t *testing.T) {
+	env := loadTestEnv(t)
+	pr := createFixturePR(t, env, "[integration-test] CLI edit test")
+	suffix := strconv.FormatInt(time.Now().UnixNano(), 36)
+
+	label := "it-pr-edit-" + suffix
+	status, data := apiCall(t, env, "create label", "POST",
+		fmt.Sprintf("/repos/%s/%s/labels", env.Owner, env.Repo), map[string]string{"name": label, "color": "#00aabb"})
+	if !assertStatusCode(t, status, http.StatusCreated) {
+		t.FailNow()
+	}
+	var created struct {
+		ID int64 `json:"id"`
+	}
+	require.NoError(t, json.Unmarshal(data, &created))
+	t.Cleanup(func() {
+		status, _ := apiCall(t, env, "delete label", "DELETE",
+			fmt.Sprintf("/repos/%s/%s/labels/%d", env.Owner, env.Repo, created.ID), nil)
+		assertStatusCode(t, status, http.StatusNoContent)
+	})
+
+	title := "[integration-test] CLI edit test, edited " + suffix
+	body := "Body edited by integration test " + suffix
+	ios, out, _ := testIO()
+	err := predit.EditRun(&predit.EditOptions{
+		IO: ios, HTTPClient: &http.Client{},
+		Host: env.Host, Token: env.Token,
+		Owner: env.Owner, Repo: env.Repo,
+		Number:    pr.Number,
+		Title:     title,
+		TitleSet:  true,
+		Body:      &body,
+		AddLabels: []string{label},
+	})
+	require.NoError(t, err)
+	assertOutputContains(t, out.String(), fmt.Sprintf("/pulls/%d", pr.Number))
+
+	viewIO, viewOut, _ := testIO()
+	err = prview.ViewRun(&prview.ViewOptions{
+		IO: viewIO, HTTPClient: &http.Client{},
+		Host: env.Host, Token: env.Token,
+		Owner: env.Owner, Repo: env.Repo,
+		Number: pr.Number,
+	})
+	require.NoError(t, err)
+	assertOutputContains(t, viewOut.String(), fmt.Sprintf("#%d %s\n", pr.Number, title))
+	assertOutputContains(t, viewOut.String(), "\n"+body+"\n")
+	assertOutputContains(t, viewOut.String(), "Labels: "+label+"\n")
 }

@@ -7,6 +7,7 @@ import (
 	commentCmd "github.com/qubernetic/copia-cli/pkg/cmd/pr/comment"
 	createCmd "github.com/qubernetic/copia-cli/pkg/cmd/pr/create"
 	diffCmd "github.com/qubernetic/copia-cli/pkg/cmd/pr/diff"
+	editCmd "github.com/qubernetic/copia-cli/pkg/cmd/pr/edit"
 	listCmd "github.com/qubernetic/copia-cli/pkg/cmd/pr/list"
 	mergeCmd "github.com/qubernetic/copia-cli/pkg/cmd/pr/merge"
 	reopenCmd "github.com/qubernetic/copia-cli/pkg/cmd/pr/reopen"
@@ -34,6 +35,7 @@ func NewCmdPR(f *cmdutil.Factory) *cobra.Command {
 		closeCmd.NewCmdClose(f),
 		reopenCmd.NewCmdReopen(f),
 		commentCmd.NewCmdComment(f),
+		editCmd.NewCmdEdit(f),
 		reviewCmd.NewCmdReview(f),
 		diffCmd.NewCmdDiff(f),
 		checkoutCmd.NewCmdCheckout(f),
