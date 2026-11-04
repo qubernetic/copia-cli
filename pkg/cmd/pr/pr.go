@@ -4,6 +4,7 @@ import (
 	"github.com/spf13/cobra"
 	checkoutCmd "github.com/qubernetic/copia-cli/pkg/cmd/pr/checkout"
 	closeCmd "github.com/qubernetic/copia-cli/pkg/cmd/pr/close"
+	commentCmd "github.com/qubernetic/copia-cli/pkg/cmd/pr/comment"
 	createCmd "github.com/qubernetic/copia-cli/pkg/cmd/pr/create"
 	diffCmd "github.com/qubernetic/copia-cli/pkg/cmd/pr/diff"
 	listCmd "github.com/qubernetic/copia-cli/pkg/cmd/pr/list"
@@ -32,6 +33,7 @@ func NewCmdPR(f *cmdutil.Factory) *cobra.Command {
 		mergeCmd.NewCmdMerge(f),
 		closeCmd.NewCmdClose(f),
 		reopenCmd.NewCmdReopen(f),
+		commentCmd.NewCmdComment(f),
 		reviewCmd.NewCmdReview(f),
 		diffCmd.NewCmdDiff(f),
 		checkoutCmd.NewCmdCheckout(f),
