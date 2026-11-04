@@ -63,10 +63,10 @@ func TestPinRun(t *testing.T) {
 			wantErr: "cannot pin issue my-org/my-repo#12: permission denied (HTTP 403); pinning an issue needs write access to the repository's issues",
 		},
 		{
-			name:    "not found on pin",
+			name:    "pin endpoint not served",
 			issue:   `{"title":"Broken","pin_order":0}`,
 			pin:     httpmock.StringResponse(http.StatusNotFound, `{}`),
-			wantErr: "issue my-org/my-repo#12 not found",
+			wantErr: "app.copia.io does not support pinning issues (HTTP 404 on POST /repos/my-org/my-repo/issues/12/pin)",
 		},
 	}
 	for _, tt := range tests {

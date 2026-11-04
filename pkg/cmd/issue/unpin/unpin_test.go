@@ -63,10 +63,10 @@ func TestUnpinRun(t *testing.T) {
 			wantErr: "cannot unpin issue my-org/my-repo#12: permission denied (HTTP 403); unpinning an issue needs write access to the repository's issues",
 		},
 		{
-			name:    "not found on unpin",
+			name:    "unpin endpoint not served",
 			issue:   `{"title":"Broken","pin_order":3}`,
 			unpin:   httpmock.StringResponse(http.StatusNotFound, `{}`),
-			wantErr: "issue my-org/my-repo#12 not found",
+			wantErr: "app.copia.io does not support unpinning issues (HTTP 404 on DELETE /repos/my-org/my-repo/issues/12/pin)",
 		},
 	}
 	for _, tt := range tests {

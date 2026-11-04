@@ -53,7 +53,8 @@ func FetchPinState(client *http.Client, host, token, owner, repo string, number 
 }
 
 // SetPinned pins the issue with POST /repos/{owner}/{repo}/issues/{index}/pin,
-// or unpins it with DELETE on the same path.
+// or unpins it with DELETE on the same path. Call it after FetchPinState: a
+// 404 then means the server does not serve the route, as app.copia.io does.
 func SetPinned(client *http.Client, host, token, owner, repo string, number int64, pin bool) error {
 	method, verb := "DELETE", "unpin"
 	if pin {
@@ -73,7 +74,9 @@ func SetPinned(client *http.Client, host, token, owner, repo string, number int6
 	case http.StatusForbidden:
 		return fmt.Errorf("cannot %s issue %s: permission denied (HTTP 403); %sning an issue needs write access to the repository's issues", verb, issue, verb)
 	case http.StatusNotFound:
-		return fmt.Errorf("issue %s not found", issue)
+		// The issue was just read, so the server does not serve the route.
+		return fmt.Errorf("%s does not support %sning issues (HTTP 404 on %s /repos/%s/%s/issues/%d/pin)",
+			host, verb, method, owner, repo, number)
 	}
 
 	var apiErr struct {

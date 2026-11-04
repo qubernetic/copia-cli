@@ -104,10 +104,10 @@ func TestSetPinned(t *testing.T) {
 			wantErr: "cannot unpin issue my-org/my-repo#12: permission denied (HTTP 403); unpinning an issue needs write access to the repository's issues",
 		},
 		{
-			name:    "not found",
+			name:    "endpoint not served",
 			pin:     true,
 			respond: httpmock.StringResponse(http.StatusNotFound, `{}`),
-			wantErr: "issue my-org/my-repo#12 not found",
+			wantErr: "app.copia.io does not support pinning issues (HTTP 404 on POST /repos/my-org/my-repo/issues/12/pin)",
 		},
 		{
 			name:    "server message",

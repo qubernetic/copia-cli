@@ -258,7 +258,6 @@ func TestIssue_PinUnpin(t *testing.T) {
 		})
 	}()
 
-	suffix := fmt.Sprintf("#%d (%s)", issueNumber, title)
 	pin := func() (string, string, error) {
 		ios, out, errOut := testIO()
 		err := issuepin.PinRun(&issuepin.PinOptions{
@@ -280,26 +279,16 @@ func TestIssue_PinUnpin(t *testing.T) {
 		return out.String(), errOut.String(), err
 	}
 
+	// app.copia.io answers the pin request with HTTP 404 (found by the
+	// integration job of #369), so the issue stays unpinned. Should Copia
+	// serve the route, this fails and docs/parity.md needs updating.
 	out, errOut, err := pin()
-	require.NoError(t, err)
-	assertOutputContains(t, out, "Pinned issue ")
-	assertOutputContains(t, out, suffix+"\n")
-	assertOutputEmpty(t, errOut)
-
-	// Pinning again reads pin_order and sends nothing
-	out, errOut, err = pin()
-	require.NoError(t, err)
+	assert.ErrorContains(t, err, "does not support pinning issues (HTTP 404 on POST")
 	assertOutputEmpty(t, out)
-	assertOutputContains(t, errOut, suffix+" is already pinned\n")
-
-	out, errOut, err = unpin()
-	require.NoError(t, err)
-	assertOutputContains(t, out, "Unpinned issue ")
-	assertOutputContains(t, out, suffix+"\n")
 	assertOutputEmpty(t, errOut)
 
 	out, errOut, err = unpin()
-	require.NoError(t, err)
+	assert.ErrorContains(t, err, "does not support unpinning issues (HTTP 404 on DELETE")
 	assertOutputEmpty(t, out)
-	assertOutputContains(t, errOut, suffix+" is not pinned\n")
+	assertOutputEmpty(t, errOut)
 }
