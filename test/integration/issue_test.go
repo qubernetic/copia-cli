@@ -3,6 +3,7 @@
 package integration
 
 import (
+	"bytes"
 	"fmt"
 	"net/http"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	issueclose "github.com/qubernetic/copia-cli/pkg/cmd/issue/close"
 	issuecomment "github.com/qubernetic/copia-cli/pkg/cmd/issue/comment"
 	issuecreate "github.com/qubernetic/copia-cli/pkg/cmd/issue/create"
+	issuedelete "github.com/qubernetic/copia-cli/pkg/cmd/issue/delete"
 	issueedit "github.com/qubernetic/copia-cli/pkg/cmd/issue/edit"
 	issuelist "github.com/qubernetic/copia-cli/pkg/cmd/issue/list"
 	issuereopen "github.com/qubernetic/copia-cli/pkg/cmd/issue/reopen"
@@ -153,5 +155,70 @@ func TestIssue_ViewNotFound(t *testing.T) {
 		Number: 99999,
 	})
 	require.Error(t, err)
+	assert.ErrorContains(t, err, "not found")
+}
+
+func TestIssue_Delete(t *testing.T) {
+	env := loadTestEnv(t)
+
+	createIO, createOut, _ := testIO()
+	err := issuecreate.CreateRun(&issuecreate.CreateOptions{
+		IO: createIO, HTTPClient: &http.Client{},
+		Host: env.Host, Token: env.Token,
+		Owner: env.Owner, Repo: env.Repo,
+		Title: "[integration-test] CLI delete test",
+		Body:  "Created by integration test; deleted via DeleteRun.",
+	})
+	require.NoError(t, err)
+
+	var issueNumber int64
+	_, _ = fmt.Sscanf(createOut.String(), "Created issue #%d", &issueNumber)
+	require.Greater(t, issueNumber, int64(0), "failed to parse issue number")
+
+	deleted := false
+	defer func() {
+		if deleted {
+			return
+		}
+		closeIO, _, _ := testIO()
+		_ = issueclose.CloseRun(&issueclose.CloseOptions{
+			IO: closeIO, HTTPClient: &http.Client{},
+			Host: env.Host, Token: env.Token,
+			Owner: env.Owner, Repo: env.Repo,
+			Number: issueNumber,
+		})
+	}()
+
+	deleteOpts := func(confirmed bool) (*issuedelete.DeleteOptions, *bytes.Buffer) {
+		ios, out, _ := testIO()
+		return &issuedelete.DeleteOptions{
+			IO: ios, HTTPClient: &http.Client{},
+			Host: env.Host, Token: env.Token,
+			Owner: env.Owner, Repo: env.Repo,
+			Number:    issueNumber,
+			Confirmed: confirmed,
+		}, out
+	}
+
+	// Without --yes nothing is sent and the issue stays
+	opts, out := deleteOpts(false)
+	err = issuedelete.DeleteRun(opts)
+	assert.ErrorContains(t, err, "use --yes to confirm")
+	assertOutputEmpty(t, out.String())
+
+	opts, out = deleteOpts(true)
+	err = issuedelete.DeleteRun(opts)
+	require.NoError(t, err)
+	deleted = true
+	assertOutputEqual(t, out.String(),
+		fmt.Sprintf("Deleted issue %s/%s#%d\n", env.Owner, env.Repo, issueNumber))
+
+	viewIO, _, _ := testIO()
+	err = issueview.ViewRun(&issueview.ViewOptions{
+		IO: viewIO, HTTPClient: &http.Client{},
+		Host: env.Host, Token: env.Token,
+		Owner: env.Owner, Repo: env.Repo,
+		Number: issueNumber,
+	})
 	assert.ErrorContains(t, err, "not found")
 }
