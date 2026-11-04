@@ -23,6 +23,7 @@ func TestNewCmdPR_RegistersSubcommands(t *testing.T) {
 		"merge":    "Targeted commands",
 		"close":    "Targeted commands",
 		"reopen":   "Targeted commands",
+		"comment":  "Targeted commands",
 		"review":   "Targeted commands",
 		"diff":     "Targeted commands",
 		"checkout": "Targeted commands",

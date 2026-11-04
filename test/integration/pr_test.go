@@ -6,13 +6,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
 	prclose "github.com/qubernetic/copia-cli/pkg/cmd/pr/close"
+	prcomment "github.com/qubernetic/copia-cli/pkg/cmd/pr/comment"
 	prlist "github.com/qubernetic/copia-cli/pkg/cmd/pr/list"
 	prreopen "github.com/qubernetic/copia-cli/pkg/cmd/pr/reopen"
+	prview "github.com/qubernetic/copia-cli/pkg/cmd/pr/view"
 )
 
 func TestPR_List(t *testing.T) {
@@ -82,4 +87,39 @@ func TestPR_CloseReopen(t *testing.T) {
 	require.NoError(t, err)
 	assertOutputEmpty(t, out)
 	assertOutputEqual(t, errOut, "! Pull request "+ref+" is already open\n")
+}
+
+func TestPR_Comment(t *testing.T) {
+	env := loadTestEnv(t)
+	pr := createFixturePR(t, env, "[integration-test] CLI comment test")
+
+	body := "Comment by integration test " + strconv.FormatInt(time.Now().UnixNano(), 36)
+	ios, out, _ := testIO()
+	err := prcomment.CommentRun(&prcomment.CommentOptions{
+		IO: ios, HTTPClient: &http.Client{},
+		Host: env.Host, Token: env.Token,
+		Owner: env.Owner, Repo: env.Repo,
+		Number: pr.Number,
+		Body:   body,
+	})
+	require.NoError(t, err)
+	assertOutputContains(t, out.String(), "#issuecomment-")
+
+	_, id, _ := strings.Cut(strings.TrimSpace(out.String()), "#issuecomment-")
+	t.Cleanup(func() {
+		status, _ := apiCall(t, env, "delete comment", "DELETE",
+			fmt.Sprintf("/repos/%s/%s/issues/comments/%s", env.Owner, env.Repo, id), nil)
+		assertStatusCode(t, status, http.StatusNoContent)
+	})
+
+	viewIO, viewOut, _ := testIO()
+	err = prview.ViewRun(&prview.ViewOptions{
+		IO: viewIO, HTTPClient: &http.Client{},
+		Host: env.Host, Token: env.Token,
+		Owner: env.Owner, Repo: env.Repo,
+		Number:   pr.Number,
+		Comments: true,
+	})
+	require.NoError(t, err)
+	assertOutputContains(t, viewOut.String(), body)
 }
