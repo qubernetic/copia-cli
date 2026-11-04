@@ -78,7 +78,7 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 | `gh pr view` | Full | `copia-cli pr view` | [x] |
 | `gh pr merge` | Full | `copia-cli pr merge` | [x] |
 | `gh pr close` | Full | `copia-cli pr close` | [x] |
-| `gh pr reopen` | Full | `copia-cli pr reopen` | [ ] |
+| `gh pr reopen` | Full | `copia-cli pr reopen` | [x] |
 | `gh pr diff` | Full | `copia-cli pr diff` | [x] |
 | `gh pr checkout` | Partial | `copia-cli pr checkout` | [x] |
 | `gh pr review` | Full | `copia-cli pr review` | [x] |
@@ -87,6 +87,8 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 | `gh pr edit` | Full | `copia-cli pr edit` | [ ] |
 | `gh pr ready` | Full | `copia-cli pr ready` | [ ] |
 | `gh pr update-branch` | Full | `copia-cli pr update-branch` | [ ] |
+
+`gh pr reopen`: `PATCH /repos/{owner}/{repo}/pulls/{index}` with `state: open`. The pull request is read first: an open one is left alone and a merged one fails, as in `gh`. `--comment/-c` posts to `/repos/{owner}/{repo}/issues/{index}/comments` before the reopen. The argument is a number, `#<n>` or a pull request URL.
 
 `gh pr update-branch`: `POST /repos/{owner}/{repo}/pulls/{index}/update` with `style=merge`, or `style=rebase` for `--rebase`.
 
@@ -151,8 +153,8 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 
 | Status | Count |
 |--------|-------|
-| Implemented | 43 |
-| Not yet implemented (Full parity) | 18 |
+| Implemented | 44 |
+| Not yet implemented (Full parity) | 17 |
 | Not yet implemented (Partial) | 7 |
 | Not yet implemented (client side, `repo set-default`) | 1 |
 | No equivalent | 12 |
