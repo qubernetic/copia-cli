@@ -26,6 +26,8 @@ func TestNewCmdIssue_RegistersSubcommands(t *testing.T) {
 		"comment": "Targeted commands",
 		"edit":    "Targeted commands",
 		"delete":  "Targeted commands",
+		"pin":     "Targeted commands",
+		"unpin":   "Targeted commands",
 	}, groupOf)
 
 	var titles []string
