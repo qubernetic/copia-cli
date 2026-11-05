@@ -39,6 +39,9 @@ hosts:
     default_org: my-org
 output: json
 browser: firefox --new-tab
+aliases:
+  co: pr checkout
+  bugs: issue list --label $1
 ```
 
 The top-level keys beside `hosts` are the settings of `copia-cli config` (`output`, `browser`, `pager`, `editor`); `config set` changes one of them and keeps `hosts` and the tokens as they are. Every save keeps the keys copia-cli does not know, at the top level and under a host (such as `default_org` above), and writes them back unchanged.
@@ -48,6 +51,8 @@ The top-level keys beside `hosts` are the settings of `copia-cli config` (`outpu
 `pager` names the program the list and view commands and `pr diff` send their output to when standard output is a terminal, for example `less -R`. `COPIA_PAGER` overrides it (set but empty, it turns the pager off), and `PAGER` is used when neither is set. The value is split into words at whitespace and run without a shell.
 
 `editor` names the program that `--editor/-e` of `issue create`, `pr create`, `issue comment` and `pr comment` opens on a temporary file, for example `vim` or `code --wait`. `COPIA_EDITOR` overrides it, and `VISUAL`, then `EDITOR` are used when neither is set; with none of them `--editor` fails. The value is split into words like a shell does (quotes and backslashes group words, nothing is expanded) and run without a shell, with the file name as the last argument. The temporary file (`copia-*.md`, mode `600`) is removed afterwards.
+
+`aliases` maps an alias name to its expansion; `copia-cli alias set`, `delete` and `import` change it and keep `hosts` and the tokens as they are, and `alias list` prints only the aliases. An alias runs as the expanded command, so `copia-cli co 7` runs `copia-cli pr checkout 7`; an expansion that starts with `!` runs through `sh -c` as the current user. An alias may not have the name of a copia-cli command, and a copia-cli command wins over an alias of the same name added by hand.
 
 **Security considerations:**
 - File permissions are `600` (owner read/write only): every save writes a new `600` file to a temporary file beside it and renames it over the old one, so a failed save leaves the old file as it was. A save refuses a config path that is not a regular file (a symlink, for example) and a file the user cannot write; a config directory that group or others can write is set to `700`, and the save fails if that is not possible

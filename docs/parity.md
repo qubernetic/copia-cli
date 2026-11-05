@@ -130,6 +130,17 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 
 Client side, no API call. The keys are `output` (`table` or `json`, default `table`), `browser`, `pager` and `editor`, stored as top-level keys of `config.yml` beside `hosts`; gh's other keys (`git_protocol`, `prompt`, `http_unix_socket` and the rest) have no copia-cli behaviour and are not accepted. gh's `--host` flag of the three commands is left out, since no setting is per host. `browse` reads `browser` between `COPIA_BROWSER` and `BROWSER`. `output` has no gh counterpart (gh's `--json` always names its fields): `COPIA_OUTPUT`, then `output`, then `table` choose it, and with `json` every command that takes `--json` prints all its fields without `--json`, where `--jq` and `--template` work too; an explicit `--json` field list wins. `pager` works as in gh: `COPIA_PAGER` (gh: `GH_PAGER`), then `pager`, then `PAGER` choose it, and the list and view commands and `pr diff` use it when standard output is a terminal; the command is split at whitespace without quoting, where gh splits it like a shell. `editor` is used by `--editor/-e` of `issue create`, `pr create`, `issue comment` and `pr comment`: `COPIA_EDITOR` (gh: `GH_EDITOR`), then `editor`, then `VISUAL`, then `EDITOR` choose it, and the command is split like a shell and run without one, as in gh. Unlike gh there is no default editor (gh falls back to `nano` or `notepad`): with none set `--editor` fails, and the editor opens only on `--editor`, since copia-cli has no interactive prompts.
 
+## alias
+
+| gh command | Parity | Copia CLI | Status |
+|-----------|--------|-----------|--------|
+| `gh alias set` | Full | `copia-cli alias set` | [x] |
+| `gh alias list` | Full | `copia-cli alias list` | [x] |
+| `gh alias delete` | Full | `copia-cli alias delete` | [x] |
+| `gh alias import` | Full | `copia-cli alias import` | [x] |
+
+Client side, no API call. Aliases are stored under the top-level key `aliases` of `config.yml` and expanded before the command runs when the alias is the first argument, as in gh: `$1`, `$2` and so on take the arguments after the alias, otherwise they are appended, and an expansion that starts with `!` (or was set with `--shell/-s`) runs through `sh -c` with the arguments as `$1`, `$2`. Differences from gh: an argument fills a placeholder after the expansion is split into words, so it is never split again (gh replaces the placeholders in the text and splits afterwards); an alias name may not be empty, start with `-` or contain blanks, and the expansion of an alias that is no shell alias must start with a copia-cli command (gh also accepts an extension or another alias, which copia-cli does not have or expand); a built-in command also wins over an alias of the same name that was written into the config file by hand; `alias list` and `alias set`, `delete` and `import` print their messages whether or not the output is a terminal, and `alias import` exits with an error when it refused an alias, after it imported the others (gh exits 0).
+
 ## Other implemented commands
 
 | Command | Status |
@@ -171,11 +182,11 @@ Client side, no API call. The keys are `output` (`table` or `json`, default `tab
 
 | Status | Count |
 |--------|-------|
-| Implemented | 53 |
+| Implemented | 57 |
 | Not yet implemented (Full parity) | 12 |
 | Not yet implemented (Partial) | 7 |
 | Not yet implemented (client side, `repo set-default`) | 1 |
 | No equivalent | 13 |
-| **Total implementable** | **73** |
+| **Total implementable** | **77** |
 
 Counted from the rows above: every `[x]` row, and every other row by its Parity value. The Parity values follow the Gitea 1.26 API (`release/v1.26` swagger); `TestAPI_Version` in `test/integration/api_test.go` logs what Copia's `GET /version` reports in the PR `integration` job. On 2026-11-04 that was `0.59.0`, Copia's own version number, not a Gitea release, so the API does not show which Gitea version Copia is built on; a command's integration test shows whether Copia serves its endpoint.
