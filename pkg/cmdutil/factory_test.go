@@ -70,6 +70,8 @@ func TestFactory_ResolveAuth_FlagBeatsEnv(t *testing.T) {
 }
 
 func TestFactory_ResolveAuth_ConfigFallback(t *testing.T) {
+	t.Setenv("COPIA_TOKEN", "")
+	t.Setenv("COPIA_HOST", "")
 	ios, _, _, _ := iostreams.Test()
 	f := &Factory{
 		IOStreams: ios,
@@ -136,6 +138,8 @@ func TestFactory_ResolveAuth_StoredToken(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("COPIA_TOKEN", "")
+			t.Setenv("COPIA_HOST", "")
 			keyring.MockInit()
 			require.NoError(t, keyring.Set("copia-cli:app.copia.io", "john", "keyring-token"))
 			require.NoError(t, keyring.Set("copia-cli:app.copia.io", "jane", "keyring-token-jane"))
@@ -302,6 +306,8 @@ func TestFactory_ResolveAuth_EnvTokenOnlyForNamedHost(t *testing.T) {
 }
 
 func TestFactory_ResolveAuth_NoConfig(t *testing.T) {
+	t.Setenv("COPIA_TOKEN", "")
+	t.Setenv("COPIA_HOST", "")
 	ios, _, _, _ := iostreams.Test()
 	f := &Factory{
 		IOStreams: ios,
