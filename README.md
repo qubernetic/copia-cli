@@ -95,6 +95,11 @@ $ copia-cli pr merge 7 --merge --delete-branch --body "Tested on the line 3 PLC"
 $ copia-cli browse
 $ copia-cli browse 7
 
+# Show and change the settings (output, browser, pager, editor)
+$ copia-cli config list
+$ copia-cli config set browser "firefox --new-tab"
+$ copia-cli config get browser
+
 # Call any API endpoint: fetch every page and keep only the titles
 $ copia-cli api --paginate /repos/my-org/my-repo/issues --jq '.[].title'
 ```

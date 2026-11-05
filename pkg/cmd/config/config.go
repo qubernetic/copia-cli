@@ -16,7 +16,7 @@ import (
 // NewCmdConfig creates the `copia-cli config` command group.
 func NewCmdConfig(f *cmdutil.Factory) *cobra.Command {
 	var long strings.Builder
-	long.WriteString("Display or change configuration settings for copia-cli.\n\nCurrent respected settings:\n")
+	long.WriteString("Display or change configuration settings for copia-cli.\n\nCurrent respected settings:\n\n")
 	for _, o := range config.Options {
 		_, _ = fmt.Fprintf(&long, "- `%s`: %s", o.Key, o.Description)
 		if len(o.AllowedValues) > 0 {

@@ -18,6 +18,7 @@ You can find installation instructions on our [README](https://github.com/qubern
 
 - Run `copia-cli auth login` to authenticate with your Copia instance. Alternatively, `copia-cli` will respect the `COPIA_TOKEN` [environment variable](https://github.com/qubernetic/copia-cli#environment-variables).
 - To target a specific Copia host, use the `--host` flag or set `COPIA_HOST`.
+- Run `copia-cli config list` to see the settings (`output`, `browser`, `pager`, `editor`) and `copia-cli config set <key> <value>` to change one.
 
 ## Examples
 

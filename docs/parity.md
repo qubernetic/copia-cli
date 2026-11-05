@@ -119,6 +119,17 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 | `gh label edit` | Full | `copia-cli label edit` | [ ] |
 | `gh label delete` | Full | `copia-cli label delete` | [ ] |
 
+## config
+
+| gh command | Parity | Copia CLI | Status |
+|-----------|--------|-----------|--------|
+| `gh config get` | Full | `copia-cli config get` | [x] |
+| `gh config set` | Full | `copia-cli config set` | [x] |
+| `gh config list` | Full | `copia-cli config list` | [x] |
+| `gh config clear-cache` | None | n/a, copia-cli keeps no API cache | — |
+
+Client side, no API call. The keys are `output` (`table` or `json`, default `table`), `browser`, `pager` and `editor`, stored as top-level keys of `config.yml` beside `hosts`; gh's other keys (`git_protocol`, `prompt`, `http_unix_socket` and the rest) have no copia-cli behaviour and are not accepted. gh's `--host` flag of the three commands is left out, since no setting is per host. `browse` reads `browser` between `COPIA_BROWSER` and `BROWSER`.
+
 ## Other implemented commands
 
 | Command | Status |
@@ -160,11 +171,11 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 
 | Status | Count |
 |--------|-------|
-| Implemented | 50 |
+| Implemented | 53 |
 | Not yet implemented (Full parity) | 12 |
 | Not yet implemented (Partial) | 7 |
 | Not yet implemented (client side, `repo set-default`) | 1 |
-| No equivalent | 12 |
-| **Total implementable** | **70** |
+| No equivalent | 13 |
+| **Total implementable** | **73** |
 
 Counted from the rows above: every `[x]` row, and every other row by its Parity value. The Parity values follow the Gitea 1.26 API (`release/v1.26` swagger); `TestAPI_Version` in `test/integration/api_test.go` logs what Copia's `GET /version` reports in the PR `integration` job. On 2026-11-04 that was `0.59.0`, Copia's own version number, not a Gitea release, so the API does not show which Gitea version Copia is built on; a command's integration test shows whether Copia serves its endpoint.

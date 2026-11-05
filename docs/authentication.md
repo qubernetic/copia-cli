@@ -37,10 +37,14 @@ hosts:
     token: <encrypted-or-plaintext>
     user: <username>
     default_org: my-org
+output: json
+browser: firefox --new-tab
 ```
 
+The top-level keys beside `hosts` are the settings of `copia-cli config` (`output`, `browser`, `pager`, `editor`); `config set` changes one of them and keeps `hosts` and the tokens as they are.
+
 **Security considerations:**
-- File permissions should be `600` (owner read/write only)
+- File permissions should be `600` (owner read/write only); every save drops any permission bit beyond `600`
 - On Windows, stored in `%USERPROFILE%\.config\copia\config.yml`
 - Token can also be set via `COPIA_TOKEN` environment variable (takes precedence)
 - Token can also be passed per-command via `--token` flag (takes highest precedence)
