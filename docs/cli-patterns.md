@@ -807,3 +807,24 @@ if opts.EditorMode {
 - `--editor` conflicts with `--body` and `--body-file` through `MarkFlagsMutuallyExclusive`, so the conflict fails before `RunE`.
 - Tests use `pkg/cmdutil/editortest`: `editortest.New(t, text)` writes a shell script that records its arguments and the initial text and saves `text`; set its `Command` in `COPIA_EDITOR`.
 
+### Web
+
+`--web/-w` (gh's flag) opens the page in the browser instead of calling the API. The command handles it first in `RunE`, with `f.ResolveHost` instead of `f.ResolveAuth`, so it needs no token and sends no request:
+
+```go
+cmd.Flags().BoolVarP(&opts.Web, "web", "w", false, "Open the issue in the browser")
+
+// RunE
+if opts.Web {
+	host, err := f.ResolveHost()
+	...
+	owner, repo, err := f.ResolveRepo()
+	...
+	return cmdutil.OpenInBrowser(f.IOStreams, f.Browser, cmdutil.RepoWebURL(host, owner, repo, "issues/12"))
+}
+```
+
+- Paths and query parameters are those of the Gitea 1.26 web router and handlers. A filter the web page takes only by ID (labels, milestones, assignees) would need an API call, so the command passes `cmdutil.WarnWebIgnored` the names of those flags that are set, which prints `warning: --<flag> is not applied in the browser`, and opens the page without them.
+- `cmdutil.OpenInBrowser` prints `Opening <url> in your browser.` to standard error when standard output is a terminal, as gh does for `--web`.
+- Tests set `Browser: &browsertest.Browser{}` on the Factory, check its `URLs`, the standard error text with and without `ios.SetStdoutTTY(true)`, and that the `httpmock` registry saw no request.
+
