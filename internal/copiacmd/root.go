@@ -13,6 +13,7 @@ import (
 	"github.com/qubernetic/copia-cli/internal/build"
 	"github.com/qubernetic/copia-cli/internal/config"
 	apiCmd "github.com/qubernetic/copia-cli/pkg/cmd/api"
+	aliasCmd "github.com/qubernetic/copia-cli/pkg/cmd/alias"
 	"github.com/qubernetic/copia-cli/pkg/cmd/alias/expand"
 	authCmd "github.com/qubernetic/copia-cli/pkg/cmd/auth"
 	browseCmd "github.com/qubernetic/copia-cli/pkg/cmd/browse"
@@ -60,6 +61,7 @@ func NewRootCmd(f *cmdutil.Factory) *cobra.Command {
 	cmd.AddCommand(notificationCmd.NewCmdNotification(f))
 	cmd.AddCommand(browseCmd.NewCmdBrowse(f))
 	cmd.AddCommand(configCmd.NewCmdConfig(f))
+	cmd.AddCommand(aliasCmd.NewCmdAlias(f))
 	cmd.AddCommand(completionCmd.NewCmdCompletion(f.IOStreams))
 
 	return cmd

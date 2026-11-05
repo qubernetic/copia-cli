@@ -25,7 +25,7 @@ func TestNewRootCmd_RegistersCommands(t *testing.T) {
 	}
 	for _, want := range []string{
 		"auth", "repo", "issue", "label", "pr", "release",
-		"api", "search", "org", "notification", "browse", "completion", "config",
+		"api", "search", "org", "notification", "browse", "completion", "config", "alias",
 	} {
 		assert.Contains(t, names, want)
 	}
