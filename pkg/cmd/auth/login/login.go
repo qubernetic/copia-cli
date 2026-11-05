@@ -134,21 +134,18 @@ func LoginRun(opts *LoginOptions) error {
 		return err
 	}
 
-	hc := cfg.Hosts[opts.Host]
-	if hc == nil {
-		hc = &config.HostConfig{}
-		cfg.Hosts[opts.Host] = hc
-	}
-	hc.User = user.Login
-	// A token in the keyring leaves none in the config file, which also
-	// moves a token stored there by an earlier login.
-	hc.Token = ""
 	var keyringErr error
-	if opts.Keyring == nil || opts.InsecureStorage {
-		hc.Token = opts.Token
-	} else if keyringErr = opts.Keyring.Set(opts.Host, user.Login, opts.Token); keyringErr != nil {
-		hc.Token = opts.Token
+	fileToken := opts.Token
+	if opts.Keyring != nil && !opts.InsecureStorage {
+		keyringErr = opts.Keyring.Set(opts.Host, user.Login, opts.Token)
+		if keyringErr == nil {
+			// A token in the keyring leaves none in the config file, which
+			// also moves a token stored there by an earlier login.
+			fileToken = ""
+		}
 	}
+	// FileStore.Set changes cfg only and cannot fail; Save writes it.
+	_ = config.FileStore{Config: cfg}.Set(opts.Host, user.Login, fileToken)
 	cfg.DefaultHostName = opts.Host
 
 	if err := config.Save(opts.ConfigPath, cfg); err != nil {
