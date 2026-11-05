@@ -50,6 +50,23 @@ func TestListRemotes(t *testing.T) {
 	}, remotes)
 }
 
+func TestListRemotes_PartialClone(t *testing.T) {
+	gitRepo(t, "origin", "https://app.copia.io/my-org/my-repo.git")
+	partialClone(t, "origin")
+
+	remotes, err := ListRemotes()
+	require.NoError(t, err)
+	assert.Equal(t, []Remote{{Name: "origin", Owner: "my-org", Repo: "my-repo"}}, remotes)
+}
+
+// partialClone configures the remote name as a partial clone does
+// (git clone --filter=blob:none), so git remote -v appends "[blob:none]".
+func partialClone(t *testing.T, name string) {
+	t.Helper()
+	git(t, "config", "remote."+name+".promisor", "true")
+	git(t, "config", "remote."+name+".partialclonefilter", "blob:none")
+}
+
 func TestListRemotes_NoRemotes(t *testing.T) {
 	gitRepo(t)
 	remotes, err := ListRemotes()
@@ -91,6 +108,7 @@ func TestDetectBaseRepo(t *testing.T) {
 		name      string
 		remotes   []string
 		resolved  string
+		partial   string
 		wantOwner string
 		wantErr   string
 	}{
@@ -106,6 +124,12 @@ func TestDetectBaseRepo(t *testing.T) {
 			wantOwner: "my-org",
 		},
 		{
+			name:      "origin of a partial clone",
+			remotes:   []string{"origin", "https://app.copia.io/my-fork/my-repo.git"},
+			partial:   "origin",
+			wantOwner: "my-fork",
+		},
+		{
 			name:    "neither a default nor origin",
 			remotes: []string{"upstream", "https://app.copia.io/my-org/my-repo.git"},
 			wantErr: "no default remote and no origin remote configured; run `copia-cli repo set-default` or use -R owner/repo",
@@ -116,6 +140,9 @@ func TestDetectBaseRepo(t *testing.T) {
 			gitRepo(t, tt.remotes...)
 			if tt.resolved != "" {
 				git(t, "config", "remote."+tt.resolved+".copia-resolved", "base")
+			}
+			if tt.partial != "" {
+				partialClone(t, tt.partial)
 			}
 			owner, repo, err := DetectBaseRepo()()
 			if tt.wantErr != "" {

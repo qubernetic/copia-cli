@@ -74,8 +74,9 @@ func ListRemotes() ([]Remote, error) {
 	var names []string
 	urls := map[string]string{}
 	for _, line := range strings.Split(string(out), "\n") {
+		// A partial clone appends its filter: "origin URL (fetch) [blob:none]".
 		fields := strings.Fields(line)
-		if len(fields) != 3 || fields[2] != "(fetch)" {
+		if len(fields) < 3 || fields[2] != "(fetch)" {
 			continue
 		}
 		if _, seen := urls[fields[0]]; !seen {
