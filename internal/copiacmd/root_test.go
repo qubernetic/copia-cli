@@ -143,6 +143,22 @@ func TestMain_ResolvesOutputFormat(t *testing.T) {
 	assert.Equal(t, "Error: invalid COPIA_OUTPUT \"yaml\": valid values are table, json\n", stderr)
 }
 
+func TestNewFactory_ReadsKeyringToken(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("COPIA_TOKEN", "")
+	t.Setenv("COPIA_HOST", "")
+	cfg := &config.Config{Hosts: map[string]*config.HostConfig{"app.copia.io": {User: "john"}}}
+	require.NoError(t, config.Save(filepath.Join(dir, "copia", "config.yml"), cfg))
+	require.NoError(t, config.NewKeyringStore().Set("app.copia.io", "john", "keyring-token"))
+
+	ios, _, _, _ := iostreams.Test()
+	host, token, err := NewFactory(ios).ResolveAuth()
+	require.NoError(t, err)
+	assert.Equal(t, "app.copia.io", host)
+	assert.Equal(t, "keyring-token", token)
+}
+
 func TestExecute_DefaultOutputFormat(t *testing.T) {
 	t.Setenv("COPIA_OUTPUT", "json")
 	ios, _, stdout, _ := iostreams.Test()

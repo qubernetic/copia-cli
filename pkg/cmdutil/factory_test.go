@@ -9,6 +9,7 @@ import (
 	"github.com/qubernetic/copia-cli/pkg/iostreams"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/zalando/go-keyring"
 )
 
 func TestFactory_ResolveAuth_FlagOverride(t *testing.T) {
@@ -85,6 +86,70 @@ func TestFactory_ResolveAuth_ConfigFallback(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "app.copia.io", host)
 	assert.Equal(t, "config-token", token)
+}
+
+func TestFactory_ResolveAuth_StoredToken(t *testing.T) {
+	tests := []struct {
+		name       string
+		host       *config.HostConfig
+		keyringErr error
+		noKeyring  bool
+		wantToken  string
+		wantErr    string
+	}{
+		{
+			name:      "keyring token",
+			host:      &config.HostConfig{User: "john"},
+			wantToken: "keyring-token",
+		},
+		{
+			name:      "config file token before keyring",
+			host:      &config.HostConfig{User: "john", Token: "file-token"},
+			wantToken: "file-token",
+		},
+		{
+			name:      "no keyring store",
+			host:      &config.HostConfig{User: "john"},
+			noKeyring: true,
+			wantErr:   "no token configured for app.copia.io",
+		},
+		{
+			name:       "keyring unavailable",
+			host:       &config.HostConfig{User: "john"},
+			keyringErr: errors.New("no secret service"),
+			wantErr:    "no secret service",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			keyring.MockInit()
+			require.NoError(t, keyring.Set("copia-cli:app.copia.io", "john", "keyring-token"))
+			if tt.keyringErr != nil {
+				keyring.MockInitWithError(tt.keyringErr)
+				t.Cleanup(keyring.MockInit)
+			}
+			ios, _, _, _ := iostreams.Test()
+			f := &Factory{
+				IOStreams: ios,
+				Config: func() (*config.Config, error) {
+					return &config.Config{Hosts: map[string]*config.HostConfig{"app.copia.io": tt.host}}, nil
+				},
+			}
+			if !tt.noKeyring {
+				f.Keyring = config.NewKeyringStore()
+			}
+
+			host, token, err := f.ResolveAuth()
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, "app.copia.io", host)
+			assert.Equal(t, tt.wantToken, token)
+		})
+	}
 }
 
 func TestFactory_ResolveAuth_NoConfig(t *testing.T) {
