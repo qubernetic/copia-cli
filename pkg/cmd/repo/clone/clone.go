@@ -102,11 +102,11 @@ const credentialHelper = `!f() { test "$1" = get || return 0; printf 'username=t
 // existing is the number of GIT_CONFIG_* entries already in the
 // environment, which are kept.
 func cloneCommand(opts *CloneOptions, existing int) (args, env []string, err error) {
-	configured, err := parseHost(opts.Host)
+	configured, err := cmdutil.ParseHost(opts.Host)
 	if err != nil {
 		return nil, nil, err
 	}
-	if !isPrintableASCII(opts.Token) {
+	if !cmdutil.IsPrintableASCII(opts.Token) {
 		return nil, nil, fmt.Errorf("invalid token: it may contain only printable ASCII characters")
 	}
 	cloneURL := buildCloneURL(opts.Host, opts.Repo)
@@ -117,7 +117,7 @@ func cloneCommand(opts *CloneOptions, existing int) (args, env []string, err err
 	}
 
 	env = []string{"GIT_TERMINAL_PROMPT=0"}
-	if opts.Token == "" || !isConfiguredHost(configured, cloneURL) {
+	if opts.Token == "" || !cmdutil.MatchesHost(configured, cloneURL) {
 		return args, env, nil
 	}
 
@@ -133,34 +133,6 @@ func cloneCommand(opts *CloneOptions, existing int) (args, env []string, err err
 	return args, env, nil
 }
 
-// parseHost parses the configured host, which must be a host name or IP
-// address with an optional port. git reads URL patterns in the credential
-// key built from it, so a wildcard, user name, path, query or fragment would
-// widen or shift the scope of the token; such a host is an error.
-func parseHost(host string) (*url.URL, error) {
-	invalid := fmt.Errorf("invalid host %q: want a host name with an optional port", host)
-	if host == "" || strings.ContainsAny(host, "*@/\\?#% ") {
-		return nil, invalid
-	}
-	u, err := url.Parse("https://" + host)
-	if err != nil || u.Hostname() == "" || u.Host != host {
-		return nil, invalid
-	}
-	return u, nil
-}
-
-// isPrintableASCII reports whether s holds only characters from space to
-// tilde. credentialHelper prints the token as one password= line, so a line
-// break would add credential lines such as host= or url=.
-func isPrintableASCII(s string) bool {
-	for i := 0; i < len(s); i++ {
-		if s[i] < ' ' || s[i] > '~' {
-			return false
-		}
-	}
-	return true
-}
-
 // credentialKey returns the git config key that scopes a credential helper
 // to the configured host: its lower-case name, IPv6 in brackets, and the
 // port unless it is 443.
@@ -173,6 +145,7 @@ func credentialKey(configured *url.URL) string {
 	}
 	return "credential.https://" + host + ".helper"
 }
+
 // configCount parses GIT_CONFIG_COUNT. Unset or empty means no entries; any
 // other value that is not a non-negative integer is an error, as it is for
 // git, so the entries already set are never overwritten.
@@ -185,23 +158,6 @@ func configCount(value string) (int, error) {
 		return 0, fmt.Errorf("invalid GIT_CONFIG_COUNT %q: must be a non-negative integer", value)
 	}
 	return n, nil
-}
-
-// isConfiguredHost reports whether rawURL is an https URL whose host and
-// port equal the configured host (case-insensitive, a missing port is 443).
-func isConfiguredHost(configured *url.URL, rawURL string) bool {
-	u, err := url.Parse(rawURL)
-	if err != nil || u.Scheme != "https" {
-		return false
-	}
-	return strings.EqualFold(u.Hostname(), configured.Hostname()) && httpsPort(u) == httpsPort(configured)
-}
-
-func httpsPort(u *url.URL) string {
-	if p := u.Port(); p != "" {
-		return p
-	}
-	return "443"
 }
 
 func buildCloneURL(host, repo string) string {
