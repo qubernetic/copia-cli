@@ -60,16 +60,6 @@ func TestSearchPRs_Filters(t *testing.T) {
 			want:  url.Values{"type": {"pulls"}, "state": {"all"}, "labels": {"bug,plc"}},
 		},
 		{
-			name:  "author login",
-			setup: func(o *SearchOptions) { o.Author = "alice" },
-			want:  url.Values{"type": {"pulls"}, "state": {"all"}, "created_by": {"alice"}},
-		},
-		{
-			name:  "author @me",
-			setup: func(o *SearchOptions) { o.Author = "@me" },
-			want:  url.Values{"type": {"pulls"}, "state": {"all"}, "created": {"true"}},
-		},
-		{
 			name:  "assignee @me",
 			setup: func(o *SearchOptions) { o.Assignee = "@me" },
 			want:  url.Values{"type": {"pulls"}, "state": {"all"}, "assigned": {"true"}},
@@ -95,6 +85,69 @@ func TestSearchPRs_Filters(t *testing.T) {
 			assert.Equal(t, want, reg.Requests[0].URL.Query())
 		})
 	}
+}
+
+func TestSearchPRs_Author(t *testing.T) {
+	tests := []struct {
+		name   string
+		author string
+		me     bool
+		want   url.Values
+		out    string
+	}{
+		{
+			name:   "login is sent and checked on each result",
+			author: "Bob",
+			want:   url.Values{"created_by": {"Bob"}, "limit": {"50"}},
+			out:    "my-org/hmi  #5  Add sensor  merged\n",
+		},
+		{
+			name:   "@me is sent and checked as the authenticated user",
+			author: "@me",
+			me:     true,
+			want:   url.Values{"created": {"true"}, "created_by": nil, "limit": {"50"}},
+			out:    "my-org/plc  #12  Fix PLC timeout  open\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			defer reg.Verify(t)
+			if tt.me {
+				reg.Register(httpmock.REST("GET", "/api/v1/user"), httpmock.StringResponse(http.StatusOK, `{"login":"alice"}`))
+			}
+			reg.Register(httpmock.QueryMatcher("GET", searchPath, tt.want), httpmock.StringResponse(http.StatusOK, twoPRs))
+
+			opts, stdout := newOpts(reg)
+			opts.Author = tt.author
+			require.NoError(t, SearchRun(opts))
+			assert.Equal(t, tt.out, stdout.String())
+		})
+	}
+
+	t.Run("@me and --assignee read the user once", func(t *testing.T) {
+		reg := &httpmock.Registry{}
+		defer reg.Verify(t)
+		reg.Register(httpmock.REST("GET", "/api/v1/user"), httpmock.StringResponse(http.StatusOK, `{"login":"alice"}`))
+		reg.Register(httpmock.QueryMatcher("GET", searchPath, url.Values{"created": {"true"}, "assigned": {"true"}}),
+			httpmock.StringResponse(http.StatusOK, `[]`))
+
+		opts, _ := newOpts(reg)
+		opts.Author = "@me"
+		opts.Assignee = "alice"
+		require.NoError(t, SearchRun(opts))
+		assert.Len(t, reg.Requests, 2)
+	})
+
+	t.Run("@me lookup fails", func(t *testing.T) {
+		reg := &httpmock.Registry{}
+		defer reg.Verify(t)
+		reg.Register(httpmock.REST("GET", "/api/v1/user"), httpmock.StringResponse(http.StatusUnauthorized, `{}`))
+
+		opts, _ := newOpts(reg)
+		opts.Author = "@me"
+		assert.EqualError(t, SearchRun(opts), "failed to resolve @me (HTTP 401)")
+	})
 }
 
 func TestSearchPRs_Table(t *testing.T) {
@@ -298,7 +351,7 @@ func TestNewCmdSearchPRs(t *testing.T) {
 		defer reg.Verify(t)
 		reg.Register(httpmock.QueryMatcher("GET", searchPath, url.Values{
 			"q": {"timeout"}, "type": {"pulls"}, "state": {"open"}, "labels": {"bug,plc"},
-			"created_by": {"bob"}, "assigned": {"true"}, "owner": {"my-org"}, "page": {"1"}, "limit": {"5"},
+			"created_by": {"bob"}, "assigned": {"true"}, "owner": {"my-org"}, "page": {"1"}, "limit": {"50"},
 		}), httpmock.StringResponse(http.StatusOK, twoPRs))
 
 		f, stdout := newTestFactory(t, reg)
@@ -307,18 +360,18 @@ func TestNewCmdSearchPRs(t *testing.T) {
 			"--author", "bob", "--assignee", "@me", "--owner", "my-org", "--json", "number", "-q", ".[0].number"})
 		cmd.SetOut(&bytes.Buffer{})
 		require.NoError(t, cmd.Execute())
-		assert.Equal(t, "12\n", stdout.String())
+		assert.Equal(t, "5\n", stdout.String())
 	})
 
 	t.Run("flags without a query", func(t *testing.T) {
 		reg := &httpmock.Registry{}
 		defer reg.Verify(t)
-		reg.Register(httpmock.QueryMatcher("GET", searchPath, url.Values{"q": nil, "created": {"true"}}),
+		reg.Register(httpmock.QueryMatcher("GET", searchPath, url.Values{"q": nil, "state": {"closed"}}),
 			httpmock.StringResponse(http.StatusOK, `[]`))
 
 		f, _ := newTestFactory(t, reg)
 		cmd := NewCmdSearchPRs(f)
-		cmd.SetArgs([]string{"--author", "@me"})
+		cmd.SetArgs([]string{"--state", "closed"})
 		require.NoError(t, cmd.Execute())
 		assert.NotContains(t, reg.Requests[0].URL.Query(), "q")
 	})

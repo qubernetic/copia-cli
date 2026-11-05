@@ -72,7 +72,8 @@ func NewCmdSearchPRs(f *cmdutil.Factory) *cobra.Command {
 GET /repos/issues/search. By default all states are searched; results come
 newest first.
 
---author takes a login, "@me" is the authenticated user. The search endpoint
+--author takes a login, "@me" is the authenticated user; the author is also
+checked on each result, since app.copia.io ignores the created_by filter. The search endpoint
 filters assignees only on the authenticated user, so --assignee takes "@me"
 or your own login. --owner limits the search to the repositories of a user
 or organization; -R owner/repo to one repository. Labels match any of the
@@ -155,21 +156,36 @@ func SearchRun(opts *SearchOptions) error {
 	if len(opts.Labels) > 0 {
 		q.Set("labels", strings.Join(opts.Labels, ","))
 	}
-	switch opts.Author {
+	var me string
+	login := func() (string, error) {
+		if me == "" {
+			logins, err := issueshared.ResolveAssignees(opts.HTTPClient, opts.Host, opts.Token, []string{"@me"})
+			if err != nil {
+				return "", err
+			}
+			me = logins[0]
+		}
+		return me, nil
+	}
+	author := opts.Author
+	switch author {
 	case "":
 	case "@me":
 		q.Set("created", "true")
+		var err error
+		if author, err = login(); err != nil {
+			return err
+		}
 	default:
-		q.Set("created_by", opts.Author)
+		q.Set("created_by", author)
 	}
 	if opts.Assignee != "" {
 		if opts.Assignee != "@me" {
-			me, err := issueshared.ResolveAssignees(opts.HTTPClient, opts.Host, opts.Token, []string{"@me"})
-			if err != nil {
+			if _, err := login(); err != nil {
 				return err
 			}
-			if !strings.EqualFold(me[0], opts.Assignee) {
-				return fmt.Errorf("--assignee %q: the search endpoint filters only on the authenticated user (%q), use @me", opts.Assignee, me[0])
+			if !strings.EqualFold(me, opts.Assignee) {
+				return fmt.Errorf("--assignee %q: the search endpoint filters only on the authenticated user (%q), use @me", opts.Assignee, me)
 			}
 		}
 		q.Set("assigned", "true")
@@ -181,9 +197,12 @@ func SearchRun(opts *SearchOptions) error {
 	u := fmt.Sprintf("https://%s/api/v1/repos/issues/search?%s", opts.Host, q.Encode())
 	var prs []prEntry
 	var err error
-	if opts.Repo != "" {
+	// app.copia.io ignores created_by, and the endpoint has no repository
+	// filter, so both are also checked on each result.
+	if opts.Repo != "" || author != "" {
 		prs, err = cmdutil.FetchFilteredPages(opts.HTTPClient, u, opts.Token, opts.Limit, decodePRs, func(pr prEntry) bool {
-			return strings.EqualFold(pr.Repository.FullName, opts.Repo)
+			return (opts.Repo == "" || strings.EqualFold(pr.Repository.FullName, opts.Repo)) &&
+				(author == "" || strings.EqualFold(pr.User.Login, author))
 		})
 	} else {
 		prs, err = cmdutil.FetchPages(opts.HTTPClient, u, opts.Token, opts.Limit, decodePRs)
