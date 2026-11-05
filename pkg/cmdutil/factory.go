@@ -126,3 +126,20 @@ func (f *Factory) ConfigValue(key string) string {
 	}
 	return value
 }
+
+// OutputFormat returns the default output format of the commands that take
+// --json, resolving in order: COPIA_OUTPUT, the config key output, then
+// table. A value other than table or json is an error.
+func (f *Factory) OutputFormat() (string, error) {
+	value, source := os.Getenv("COPIA_OUTPUT"), "COPIA_OUTPUT"
+	if value == "" {
+		value, source = f.ConfigValue("output"), "config key output"
+	}
+	switch value {
+	case "":
+		return OutputTable, nil
+	case OutputTable, OutputJSON:
+		return value, nil
+	}
+	return "", fmt.Errorf("invalid %s %q: valid values are %s, %s", source, value, OutputTable, OutputJSON)
+}

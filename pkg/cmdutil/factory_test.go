@@ -7,6 +7,7 @@ import (
 	"github.com/qubernetic/copia-cli/internal/config"
 	"github.com/qubernetic/copia-cli/pkg/iostreams"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestFactory_ResolveAuth_FlagOverride(t *testing.T) {
@@ -292,6 +293,36 @@ func TestFactory_ConfigValue(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			f := &Factory{Config: tt.config}
 			assert.Equal(t, tt.want, f.ConfigValue(tt.key))
+		})
+	}
+}
+
+func TestFactory_OutputFormat(t *testing.T) {
+	tests := []struct {
+		name    string
+		env     string
+		config  string
+		want    string
+		wantErr string
+	}{
+		{name: "default", want: "table"},
+		{name: "config", config: "json", want: "json"},
+		{name: "env beats config", env: "table", config: "json", want: "table"},
+		{name: "env without config", env: "json", want: "json"},
+		{name: "invalid env", env: "yaml", wantErr: `invalid COPIA_OUTPUT "yaml": valid values are table, json`},
+		{name: "invalid config", config: "yaml", wantErr: `invalid config key output "yaml": valid values are table, json`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("COPIA_OUTPUT", tt.env)
+			f := &Factory{Config: func() (*config.Config, error) { return &config.Config{Output: tt.config}, nil }}
+			got, err := f.OutputFormat()
+			if tt.wantErr != "" {
+				assert.EqualError(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
