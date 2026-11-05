@@ -85,12 +85,14 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 | `gh pr checks` | Partial | `copia-cli pr checks` | [ ] |
 | `gh pr comment` | Full | `copia-cli pr comment` | [x] |
 | `gh pr edit` | Full | `copia-cli pr edit` | [x] |
-| `gh pr ready` | Full | `copia-cli pr ready` | [ ] |
+| `gh pr ready` | Full | `copia-cli pr ready` | [x] |
 | `gh pr update-branch` | Full | `copia-cli pr update-branch` | [ ] |
 
 `gh pr comment`: `POST /repos/{owner}/{repo}/issues/{index}/comments`, since Gitea keeps pull request comments on the issue of the same index. `--body/-b` or `--body-file/-F` (`-` reads stdin) is required; there is no editor and no `--web`. The argument is a number, `#<n>` or a pull request URL.
 
 `gh pr edit`: `PATCH /repos/{owner}/{repo}/pulls/{index}` for `--title/-t`, `--body/-b`, `--body-file/-F`, `--base/-B`, `--milestone/-m` and the label and assignee flags; that PATCH replaces the whole label and assignee lists, so the pull request is read first and the changed lists are sent. Gitea's pull request PATCH ignores milestone 0, so `--remove-milestone` sends `PATCH /repos/{owner}/{repo}/issues/{index}` with `milestone: 0`. `--add-reviewer` and `--remove-reviewer` use `POST` and `DELETE /repos/{owner}/{repo}/pulls/{index}/requested_reviewers` (`org/team` goes into `team_reviewers`). There is no editor, no `--add-project` and no `--remove-project`. The argument is a number, `#<n>` or a pull request URL.
+
+`gh pr ready`: Gitea has no draft field; a pull request is a draft while its title starts with one of the `WORK_IN_PROGRESS_PREFIXES` (default `WIP:` and `[WIP]`, any case). The command reads the pull request and sends `PATCH /repos/{owner}/{repo}/pulls/{index}` with the title without the prefix; `--undo` adds `WIP: `. A pull request already in the wanted state is left alone and a closed one fails, as in `gh`. A server with other configured prefixes is not detected. The argument is a number, `#<n>` or a pull request URL.
 
 `gh pr reopen`: `PATCH /repos/{owner}/{repo}/pulls/{index}` with `state: open`. The pull request is read first: an open one is left alone and a merged one fails, as in `gh`. `--comment/-c` posts to `/repos/{owner}/{repo}/issues/{index}/comments` before the reopen. The argument is a number, `#<n>` or a pull request URL.
 
@@ -157,8 +159,8 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 
 | Status | Count |
 |--------|-------|
-| Implemented | 46 |
-| Not yet implemented (Full parity) | 15 |
+| Implemented | 47 |
+| Not yet implemented (Full parity) | 14 |
 | Not yet implemented (Partial) | 7 |
 | Not yet implemented (client side, `repo set-default`) | 1 |
 | No equivalent | 12 |

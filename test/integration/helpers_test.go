@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	prcreate "github.com/qubernetic/copia-cli/pkg/cmd/pr/create"
 	"github.com/qubernetic/copia-cli/pkg/iostreams"
 )
 
@@ -102,6 +103,59 @@ type prFixture struct {
 // closes the pull request and deletes both branches.
 func createFixturePR(t *testing.T, env testEnv, title string) prFixture {
 	t.Helper()
+	fx := createFixtureBranches(t, env)
+
+	status, data := apiCall(t, env, "open pull request", "POST", fmt.Sprintf("/repos/%s/%s/pulls", env.Owner, env.Repo), map[string]string{
+		"base":  fx.Base,
+		"head":  fx.Head,
+		"title": title,
+		"body":  "Created by the integration test PR fixture.",
+	})
+	if status != http.StatusCreated {
+		t.Fatalf("open pull request: status %d, want %d", status, http.StatusCreated)
+	}
+	var pr struct {
+		Number int64 `json:"number"`
+	}
+	if err := json.Unmarshal(data, &pr); err != nil || pr.Number < 1 {
+		t.Fatal("open pull request: no number in the response")
+	}
+	fx.Number = pr.Number
+	closeAtCleanup(t, env, fx.Number)
+	return fx
+}
+
+// createDraftFixturePR is createFixturePR with the pull request opened by
+// `pr create --draft`.
+func createDraftFixturePR(t *testing.T, env testEnv, title string) prFixture {
+	t.Helper()
+	fx := createFixtureBranches(t, env)
+
+	ios, out, _ := testIO()
+	err := prcreate.CreateRun(&prcreate.CreateOptions{
+		IO: ios, HTTPClient: testHTTPClient(),
+		Host: env.Host, Token: env.Token,
+		Owner: env.Owner, Repo: env.Repo,
+		Title: title,
+		Body:  "Created by the integration test PR fixture.",
+		Base:  fx.Base,
+		Head:  fx.Head,
+		Draft: true,
+	})
+	if err != nil {
+		t.Fatal("pr create --draft failed")
+	}
+	if _, err := fmt.Sscanf(out.String(), "Created PR #%d:", &fx.Number); err != nil || fx.Number < 1 {
+		t.Fatal("pr create --draft: no number in the output")
+	}
+	closeAtCleanup(t, env, fx.Number)
+	return fx
+}
+
+// createFixtureBranches creates the base and head branches of a fixture pull
+// request, the head with one file commit, and deletes both on cleanup.
+func createFixtureBranches(t *testing.T, env testEnv) prFixture {
+	t.Helper()
 	repo := fmt.Sprintf("/repos/%s/%s", env.Owner, env.Repo)
 	suffix := strconv.FormatInt(time.Now().UnixNano(), 36)
 	fx := prFixture{Base: "it-pr-base-" + suffix, Head: "it-pr-head-" + suffix}
@@ -134,33 +188,20 @@ func createFixturePR(t *testing.T, env testEnv, title string) prFixture {
 	if status != http.StatusCreated {
 		t.Fatalf("commit file: status %d, want %d", status, http.StatusCreated)
 	}
+	return fx
+}
 
-	status, data := apiCall(t, env, "open pull request", "POST", repo+"/pulls", map[string]string{
-		"base":  fx.Base,
-		"head":  fx.Head,
-		"title": title,
-		"body":  "Created by the integration test PR fixture.",
-	})
-	if status != http.StatusCreated {
-		t.Fatalf("open pull request: status %d, want %d", status, http.StatusCreated)
-	}
-	var pr struct {
-		Number int64 `json:"number"`
-	}
-	if err := json.Unmarshal(data, &pr); err != nil || pr.Number < 1 {
-		t.Fatal("open pull request: no number in the response")
-	}
-	fx.Number = pr.Number
-	// Registered last, so it runs first: close the pull request, then delete
-	// its branches.
+// closeAtCleanup closes pull request number on cleanup. Registered after the
+// branches, it runs before they are deleted.
+func closeAtCleanup(t *testing.T, env testEnv, number int64) {
+	t.Helper()
 	t.Cleanup(func() {
-		path := fmt.Sprintf("%s/pulls/%d", repo, fx.Number)
+		path := fmt.Sprintf("/repos/%s/%s/pulls/%d", env.Owner, env.Repo, number)
 		status, _ := apiCall(t, env, "close pull request", "PATCH", path, map[string]string{"state": "closed"})
 		if status != http.StatusCreated && status != http.StatusOK {
 			t.Errorf("close pull request: status %d, want %d", status, http.StatusCreated)
 		}
 	})
-	return fx
 }
 
 // The assertions below check command output and response bodies, which hold
