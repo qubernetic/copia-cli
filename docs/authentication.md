@@ -145,3 +145,8 @@ The active instance is determined by:
 2. `COPIA_HOST` environment variable
 3. Git remote URL of the current repo (auto-detect)
 4. First entry in config file
+
+The repository a command works on is determined by:
+1. `-R/--repo` flag
+2. The git remote marked with `copia-cli repo set-default` (git config key `remote.<name>.copia-resolved`)
+3. The git remote `origin`

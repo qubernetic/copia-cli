@@ -33,11 +33,13 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 | `gh repo archive` | Partial | `copia-cli repo archive` | [ ] |
 | `gh repo rename` | Full | `copia-cli repo rename` | [ ] |
 | `gh repo edit` | Full | `copia-cli repo edit` | [ ] |
-| `gh repo set-default` | n/a | `copia-cli repo set-default` | [ ] |
+| `gh repo set-default` | n/a | `copia-cli repo set-default` | [x] |
 | `gh repo sync` | Partial | `copia-cli repo sync` | [ ] |
 | `gh repo deploy-key` | Full | `copia-cli repo deploy-key` | [ ] |
 
 `gh repo view --web/-w`: client side, no API call and no token, opened as for the issue commands: `/{owner}/{repo}` of the argument, `-R` or the git remote. gh's `--branch` does not exist in `repo view`.
+
+`gh repo set-default`: client side, no API call and no token. The default is the git config key `remote.<name>.copia-resolved` (gh uses `gh-resolved`) with the value `base`, and the commands that work on the current repository read the marked remote first, then `origin`; `-R` wins over both. The argument is `owner/repo` (any case) or a remote name, `--view/-v` prints the default and `--unset/-u` removes it. Differences from gh: there is no prompt, so without an argument the only remote is used and several remotes fail with their list; gh also offers the parent of a fork found through the API, which copia-cli does not, so the repository must be one of the git remotes; the argument fails with `--view` or `--unset`, and the messages print whether or not standard output is a terminal.
 
 `gh repo sync`: `POST /repos/{owner}/{repo}/merge-upstream` (`branch`, `ff_only`) brings a branch of a fork up to date with its upstream on the server. There is no `--force` (hard reset) and no sync of a local clone, which `gh` does with git.
 
@@ -190,10 +192,9 @@ Client side, no API call. Aliases are stored under the top-level key `aliases` o
 
 | Status | Count |
 |--------|-------|
-| Implemented | 57 |
+| Implemented | 58 |
 | Not yet implemented (Full parity) | 12 |
 | Not yet implemented (Partial) | 7 |
-| Not yet implemented (client side, `repo set-default`) | 1 |
 | No equivalent | 13 |
 | **Total implementable** | **77** |
 

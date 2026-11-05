@@ -74,6 +74,7 @@ copia-cli/
 - **Same-origin redirects:** every command builds its HTTP client with `cmdutil.NewHTTPClient()`, which refuses a redirect that changes scheme, host or port; a guard test parses non-test code under `pkg/`, `internal/` and `cmd/` and fails on an `http.Client` literal or `new(http.Client)` outside `pkg/cmdutil/httpclient.go`, and on `http.DefaultClient`, `http.Get`, `Head`, `Post` or `PostForm`, also under an aliased `net/http` import.
 - **Integration tests print no account data:** the tests under `test/integration/` log nothing but the Copia version line of `TestAPI_Version` and check output only through the byte-count helpers of `test/integration/helpers_test.go`; a guard in `test/workflows` parses them with `go/parser` (no `integration` tag needed) and fails on any other `t.Log`/`t.Logf`, on `t.Error`/`t.Fatal` calls and on testify calls other than `NoError`, `Error`, `ErrorContains`, `Greater`, `True` and `False` with literal messages, with `helpers_test.go` as its single exemption.
 - **Auth precedence:** `--token` flag > `COPIA_TOKEN` env var > config file
+- **Repository resolution:** `-R/--repo` flag > the git remote marked by `repo set-default` (git config key `remote.<name>.copia-resolved`, gh uses `gh-resolved`) > the remote `origin`
 - **Multi-instance support:** Config supports multiple hosts; active instance resolved by `--host` flag > `COPIA_HOST` env > git remote URL > first config entry
 - **Config location:** `~/.config/copia/config.yml` (Windows: `%USERPROFILE%\.config\copia\config.yml`), file permissions `600`
 
@@ -90,4 +91,4 @@ Phase 4: ~~winget~~, ~~COPR~~, ~~AUR~~, ~~Snap~~, OS keyring, ~~aliases~~, ~~bro
 
 - `docs/api-reference.md` — Full Gitea API endpoint mapping with request/response examples
 - `docs/authentication.md` — Auth methods, token generation, config file format, multi-instance setup
-- `docs/parity.md` — Feature parity tracker against the Gitea 1.26 API (77 implementable: 57 implemented, 12 full, 7 partial, 1 client side; 13 impossible)
+- `docs/parity.md` — Feature parity tracker against the Gitea 1.26 API (77 implementable: 58 implemented, 12 full, 7 partial; 13 impossible)

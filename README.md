@@ -116,6 +116,10 @@ $ copia-cli issue list --jq '.[].title'
 $ copia-cli alias set bugs 'issue list --label $1'
 $ copia-cli alias list
 
+# In a fork with an upstream remote, work on the upstream repository by default
+$ copia-cli repo set-default my-org/my-repo
+$ copia-cli repo set-default --view
+
 # Call any API endpoint: fetch every page and keep only the titles
 $ copia-cli api --paginate /repos/my-org/my-repo/issues --jq '.[].title'
 ```
