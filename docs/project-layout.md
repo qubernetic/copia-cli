@@ -93,6 +93,8 @@ copia-cli/
 │   ├── cmdutil/
 │   │   ├── factory.go             # Factory dependency injection
 │   │   ├── browser.go             # Browser opener (COPIA_BROWSER, config browser, BROWSER, OS default)
+│   │   ├── editor.go              # --editor (COPIA_EDITOR, config editor, VISUAL, EDITOR), run without a shell
+│   │   ├── editortest/            # Fake editor command for tests
 │   │   ├── json.go                # --json field filter, --jq (gojq), --template, PrintJSON
 │   │   └── template.go            # --template execution and its gh helpers
 │   ├── iostreams/

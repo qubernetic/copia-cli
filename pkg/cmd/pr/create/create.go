@@ -33,6 +33,9 @@ type CreateOptions struct {
 	Reviewers  []string
 	Draft      bool
 	Fill       bool
+
+	EditorMode    bool
+	EditorCommand string
 }
 
 type createRequest struct {
@@ -77,6 +80,11 @@ over the filled value.
 --body-file reads the body from a file; "-" reads standard input. It cannot be
 combined with --body.
 
+--editor opens the editor set in COPIA_EDITOR, the config key editor, VISUAL
+or EDITOR on a temporary file: the title on the first line, the body after a
+blank line, prefilled with --title and the --fill values. Empty text aborts
+without a pull request. It cannot be combined with --body or --body-file.
+
 --draft marks the pull request as work in progress: Copia has no draft flag,
 so the title gets the prefix "WIP: " unless it already starts with "WIP:" or
 "[WIP]" (in any case).
@@ -102,6 +110,9 @@ command exits with an error.`,
   # Read the body from a file, or from standard input with -
   $ copia-cli pr create --title "docs: add manual" --head docs/manual --body-file notes.md
   $ git log -1 --format=%b | copia-cli pr create --title "fix: timeout" --head fix/timeout -F -
+
+  # Edit the filled title and body in the editor
+  $ copia-cli pr create --fill --editor --base develop
 
   # Assign yourself, add labels and a milestone, and request reviewers
   $ copia-cli pr create --title "feat: add wrapper" --head feature/wrapper \
@@ -130,12 +141,15 @@ command exits with an error.`,
 			}
 			opts.Owner = owner
 			opts.Repo = repo
+			if opts.EditorMode {
+				opts.EditorCommand = f.Editor()
+			}
 			opts.HTTPClient = cmdutil.NewHTTPClient()
 			return CreateRun(opts)
 		},
 	}
 
-	cmd.Flags().StringVarP(&opts.Title, "title", "t", "", "PR title (required unless --fill is set)")
+	cmd.Flags().StringVarP(&opts.Title, "title", "t", "", "PR title (required unless --fill or --editor is set)")
 	cmd.Flags().StringVarP(&opts.Body, "body", "b", "", "PR body")
 	cmd.Flags().StringVarP(&bodyFile, "body-file", "F", "", "Read the body from `file` (use \"-\" to read from standard input)")
 	cmd.Flags().StringVar(&opts.Base, "base", "main", "Base branch")
@@ -146,7 +160,10 @@ command exits with an error.`,
 	cmd.Flags().StringSliceVarP(&opts.Reviewers, "reviewer", "r", nil, "Request reviews from people or teams by their login or org/team name")
 	cmd.Flags().BoolVarP(&opts.Draft, "draft", "d", false, "Mark the pull request as work in progress (WIP: title prefix)")
 	cmd.Flags().BoolVarP(&opts.Fill, "fill", "f", false, "Use commit info between the base and head branches for the title and body")
+	cmd.Flags().BoolVarP(&opts.EditorMode, "editor", "e", false, "Write the title and body in the text editor")
 	cmd.MarkFlagsMutuallyExclusive("body", "body-file")
+	cmd.MarkFlagsMutuallyExclusive("body", "editor")
+	cmd.MarkFlagsMutuallyExclusive("body-file", "editor")
 
 	return cmd
 }
@@ -156,6 +173,13 @@ func CreateRun(opts *CreateOptions) error {
 		if err := fill(opts); err != nil {
 			return err
 		}
+	}
+	if opts.EditorMode {
+		title, body, err := cmdutil.EditTitleBody(opts.IO, opts.EditorCommand, opts.Title, opts.Body)
+		if err != nil {
+			return err
+		}
+		opts.Title, opts.Body = title, body
 	}
 	if opts.Title == "" {
 		return fmt.Errorf("title required")

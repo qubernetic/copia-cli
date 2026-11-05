@@ -191,7 +191,7 @@ func TestNewCmdComment_BodyErrors(t *testing.T) {
 		args    []string
 		wantErr string
 	}{
-		{name: "no body flag", args: []string{"7"}, wantErr: "--body or --body-file required"},
+		{name: "no body flag", args: []string{"7"}, wantErr: "--body, --body-file or --editor required"},
 		{name: "both body flags", args: []string{"7", "-b", "x", "-F", "-"}, wantErr: "if any flags in the group [body body-file] are set none of the others can be"},
 		{name: "missing body file", args: []string{"7", "-F", filepath.Join(t.TempDir(), "missing.md")}, wantErr: "no such file or directory"},
 		{name: "empty body", args: []string{"7", "-b", ""}, wantErr: "body cannot be blank"},
