@@ -11,6 +11,7 @@ import (
 	"github.com/qubernetic/copia-cli/pkg/iostreams"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/zalando/go-keyring"
 )
 
 func TestLogoutRun_RemovesHost(t *testing.T) {
@@ -234,4 +235,88 @@ func TestLogoutRun_SaveError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "writing config")
 	assert.Empty(t, stdout.String())
+}
+
+// failingStore is a keyring that refuses every call with err.
+type failingStore struct{ err error }
+
+func (s failingStore) Get(string, string) (string, error) { return "", s.err }
+func (s failingStore) Set(string, string, string) error   { return s.err }
+func (s failingStore) Delete(string, string) error        { return s.err }
+
+func TestLogoutRun_TokenStorage(t *testing.T) {
+	tests := []struct {
+		name        string
+		fileToken   string
+		inKeyring   bool
+		keyring     func() config.TokenStore
+		wantWarning string
+	}{
+		{
+			name:      "keyring only",
+			inKeyring: true,
+			keyring:   func() config.TokenStore { return config.NewKeyringStore() },
+		},
+		{
+			name:      "config file and keyring",
+			fileToken: "file-token",
+			inKeyring: true,
+			keyring:   func() config.TokenStore { return config.NewKeyringStore() },
+		},
+		{
+			name:      "config file only",
+			fileToken: "file-token",
+			keyring:   func() config.TokenStore { return config.NewKeyringStore() },
+		},
+		{
+			name:        "keyring unavailable",
+			fileToken:   "file-token",
+			keyring:     func() config.TokenStore { return failingStore{err: config.ErrKeyringTimeout} },
+			wantWarning: "warning: could not delete the token of app.copia.io from the OS keyring: timed out waiting for the OS keyring\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			keyring.MockInit()
+			if tt.inKeyring {
+				require.NoError(t, keyring.Set("copia-cli:app.copia.io", "john", "keyring-token"))
+			}
+			configPath := filepath.Join(t.TempDir(), "config.yml")
+			require.NoError(t, config.Save(configPath, &config.Config{Hosts: map[string]*config.HostConfig{
+				"app.copia.io": {Token: tt.fileToken, User: "john"},
+			}}))
+
+			ios, _, stdout, stderr := iostreams.Test()
+			err := logoutRun(&LogoutOptions{IO: ios, Host: "app.copia.io", ConfigPath: configPath, Keyring: tt.keyring()})
+			require.NoError(t, err)
+			assert.Equal(t, "Logged out of app.copia.io\n", stdout.String())
+			assert.Equal(t, tt.wantWarning, stderr.String())
+
+			loaded, err := config.Load(configPath)
+			require.NoError(t, err)
+			assert.Empty(t, loaded.Hosts)
+			_, err = keyring.Get("copia-cli:app.copia.io", "john")
+			assert.ErrorIs(t, err, keyring.ErrNotFound)
+		})
+	}
+}
+
+func TestNewCmdLogout_Keyring(t *testing.T) {
+	keyring.MockInit()
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("COPIA_HOST", "")
+	configPath := filepath.Join(dir, "copia", "config.yml")
+	require.NoError(t, config.Save(configPath, &config.Config{Hosts: map[string]*config.HostConfig{"app.copia.io": {User: "john"}}}))
+	require.NoError(t, keyring.Set("copia-cli:app.copia.io", "john", "keyring-token"))
+
+	ios, _, _, _ := iostreams.Test()
+	cmd := NewCmdLogout(&cmdutil.Factory{IOStreams: ios, Keyring: config.NewKeyringStore()})
+	cmd.SetArgs([]string{})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	require.NoError(t, cmd.Execute())
+
+	_, err := keyring.Get("copia-cli:app.copia.io", "john")
+	assert.ErrorIs(t, err, keyring.ErrNotFound)
 }
