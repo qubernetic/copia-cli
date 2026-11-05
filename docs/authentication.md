@@ -29,7 +29,7 @@ copia-cli follows an HTTP redirect only when it keeps the scheme, host and port 
 
 ### Token Storage
 
-`auth login` stores the token in the OS keyring: the macOS Keychain, the Windows Credential Manager, or the Secret Service on Linux (GNOME Keyring, KWallet). The entry has the service `copia-cli:<host>` and the login as the account. The config file then keeps the host and the user, but no token.
+`auth login` stores the token in the OS keyring: the macOS Keychain, the Windows Credential Manager, or the Secret Service on Linux (GNOME Keyring, KWallet). The entry has the service `copia-cli:<host>` and the login as the account, so every account of a host has its own entry. The config file then keeps the host and the account, but no token.
 
 When the keyring is not available (no Secret Service running, a headless server, a container, a CI runner) or does not answer within three seconds (a locked keyring waiting for an unlock prompt), `auth login` stores the token in plain text in the config file instead and prints a warning on standard error that names the config file; the warning never contains the token. `--insecure-storage` stores the token in the config file on purpose, without trying the keyring:
 
@@ -39,7 +39,17 @@ copia-cli auth login --token <your-token> --insecure-storage
 
 The snap has no `password-manager-service` plug, so the snap can never reach the keyring and always stores the token in the config file, with the warning.
 
-The commands read the stored token from the config file first, then from the keyring, so a token stored in the config file by an older version keeps working. There is no automatic migration: the next `auth login` on that host moves the token to the keyring and removes it from the config file. `auth logout` deletes the token from both places; when the keyring fails it still removes the host from the config file and prints a warning, so check the keyring by hand then.
+The commands read the stored token from the config file first, then from the keyring, so a token stored in the config file by an older version keeps working. There is no automatic migration: the next `auth login` on that host moves the token to the keyring and removes it from the config file. `auth logout` deletes the token from both places; when the keyring fails it still removes the account from the config file and prints a warning, so check the keyring by hand then.
+
+### Several Accounts on One Host
+
+`auth login` with the token of another account on the same host adds that account and makes it the host's active account; the accounts logged in before stay stored, each with its own token. Logging in again with an account the host already has updates its token and makes it active again. The commands always use the active account's token.
+
+`auth logout` removes the active account of the host, `auth logout --user <login>` (`-u`) removes the named one. When the active account is removed, the alphabetically first remaining account becomes active and `Switched active account for <host> to <login>` is printed; when the last account of a host is removed, the host is removed from the config file.
+
+```bash
+copia-cli auth logout --host app.copia.io --user john
+```
 
 The config file is `~/.config/copia/config.yml`:
 
@@ -47,8 +57,11 @@ The config file is `~/.config/copia/config.yml`:
 default_host: app.copia.io
 hosts:
   app.copia.io:
-    user: <username>
-    token: <plain text, only when stored in the config file>
+    user: <the active account's login>
+    users:
+      <login>:
+        token: <plain text, only when stored in the config file>
+      <other login>:
     default_org: my-org
 output: json
 browser: firefox --new-tab
@@ -56,6 +69,8 @@ aliases:
   co: pr checkout
   bugs: issue list --label $1
 ```
+
+A host keeps several accounts, as in gh: `users` holds every account by its login (with a `token` key only when that token is stored in the config file), and `user` names the active account, whose token the commands use. A config of an older version, with `token` and `user` directly under the host, is read as one account and written in the new shape on the next save.
 
 `default_host` names the host the commands use when neither `--host` nor `COPIA_HOST` is given. `auth login` sets it to the host it logs in to, and `auth logout` of that host moves it to the alphabetically first remaining host, or removes it when none remains. When it is unset (a config of an older version) or names a host that is no longer in `hosts`, the alphabetically first host is the default.
 
@@ -77,7 +92,7 @@ The other top-level keys beside `hosts` are the settings of `copia-cli config` (
 
 ### Check the Auth Status
 
-`copia-cli auth status` lists every host in the config file in alphabetical order, the default host marked with `(default)`, with its user, its token, where the token is stored (`keyring` or `config file`) and whether Copia accepts the token. A host without a stored token shows `Token: none` and `No token stored`, and a keyring that fails shows `Token: none` and the error. `--host` limits the output to one host.
+`copia-cli auth status` lists every host in the config file in alphabetical order, the default host marked with `(default)`, and under each host every account, the active one first, with its user, `Active account: true` or `false`, its token, where the token is stored (`keyring` or `config file`) and whether Copia accepts the token. A host without a stored token shows `Token: none` and `No token stored`, and a keyring that fails shows `Token: none` and the error. `--host` limits the output to one host.
 
 `auth status` reads only the stored tokens (config file and keyring) and the `--host` flag. It does not read `COPIA_HOST` or `COPIA_TOKEN`, so when either is set, the other commands may use a different host or token than the one `auth status` reports on.
 
@@ -85,6 +100,11 @@ The other top-level keys beside `hosts` are the settings of `copia-cli config` (
 $ copia-cli auth status
 app.copia.io (default)
   User: john
+  Active account: true
+  Token: **************************************** (keyring)
+  Token valid
+  User: jane
+  Active account: false
   Token: **************************************** (keyring)
   Token valid
 ```
@@ -102,7 +122,7 @@ copia-cli auth status --host app.copia.io --show-token
 
 1. `--token` flag (per-command)
 2. `COPIA_TOKEN` environment variable
-3. The stored token of the active host: the config file (`~/.config/copia/config.yml`) first, then the OS keyring
+3. The stored token of the active account of the active host: the config file (`~/.config/copia/config.yml`) first, then the OS keyring
 
 ## Alternative Auth Methods
 
@@ -147,16 +167,22 @@ The config file holds several Copia instances (e.g., on-prem vs cloud):
 default_host: app.copia.io
 hosts:
   app.copia.io:
-    token: abc123
     user: cbiro
+    users:
+      cbiro:
+        token: abc123
+      ci-bot:
+        token: def456
     default_org: my-org
   copia.internal.example.com:
-    token: xyz789
     user: cbiro
+    users:
+      cbiro:
+        token: xyz789
     default_org: InternalTeam
 ```
 
-The tokens above are stored in the config file (`--insecure-storage` or no keyring); a token in the keyring has its own entry per host (`copia-cli:<host>`) and no `token` key here.
+The tokens above are stored in the config file (`--insecure-storage` or no keyring); a token in the keyring has its own entry per host and account (service `copia-cli:<host>`, account = the login) and no `token` key here.
 
 The active instance is determined by:
 1. `--host` flag

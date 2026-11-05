@@ -138,8 +138,8 @@ func TestAuth_LoginFallsBackToConfigFile(t *testing.T) {
 
 	cfg, err := config.Load(configPath)
 	require.NoError(t, err, "reading the temporary config failed")
-	hc := cfg.Hosts[env.Host]
-	require.True(t, hc != nil && hc.Token == env.Token, "the token is not in the temporary config file")
+	stored, source, err := config.LookupToken(cfg, env.Host, nil)
+	require.True(t, err == nil && stored == env.Token && source == config.SourceFile, "the token is not in the temporary config file")
 
 	ios, stdout, _ = testIO()
 	err = status.StatusRun(&status.StatusOptions{
@@ -154,4 +154,44 @@ func TestAuth_LoginFallsBackToConfigFile(t *testing.T) {
 	ios, stdout, _ = testIO()
 	require.NoError(t, copiacmd.Execute(copiacmd.NewFactory(ios), []string{"api", "/user"}), "api /user with the stored token failed")
 	assertOutputNotEmpty(t, stdout.String())
+}
+
+// TestAuth_LoginMakesAccountActive logs in with the token stored in a
+// temporary config file and checks that auth status lists the account as the
+// host's active account with a valid token.
+func TestAuth_LoginMakesAccountActive(t *testing.T) {
+	env := loadTestEnv(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(home, ".gitconfig"))
+	configPath := filepath.Join(home, "config.yml")
+
+	ios, stdout, _ := testIO()
+	err := login.LoginRun(&login.LoginOptions{
+		IO:              ios,
+		Host:            env.Host,
+		Token:           env.Token,
+		ConfigPath:      configPath,
+		HTTPClient:      testHTTPClient(),
+		InsecureStorage: true,
+	})
+	require.NoError(t, err, "auth login failed")
+	assertOutputContains(t, stdout.String(), "Logged in as")
+
+	cfg, err := config.Load(configPath)
+	require.NoError(t, err, "reading the temporary config failed")
+	hc := cfg.Hosts[env.Host]
+	require.True(t, hc != nil && hc.User != "" && len(hc.Logins()) == 1, "auth login stored no active account")
+
+	ios, stdout, _ = testIO()
+	err = status.StatusRun(&status.StatusOptions{
+		IO:         ios,
+		ConfigPath: configPath,
+		HTTPClient: testHTTPClient(),
+		Host:       env.Host,
+	})
+	require.NoError(t, err, "auth status failed")
+	assertOutputContains(t, stdout.String(), "\n  Active account: true\n  Token: ")
+	assertOutputContains(t, stdout.String(), " (config file)\n  Token valid\n")
+	assert.False(t, strings.Contains(stdout.String(), env.Token), "auth status printed the token")
 }

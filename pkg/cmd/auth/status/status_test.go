@@ -69,7 +69,7 @@ func TestStatusRun_MasksToken(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.NotContains(t, stdout.String(), token)
-	assert.Equal(t, "app.copia.io (default)\n  User: john\n  Token: "+strings.Repeat("*", 40)+" (config file)\n  Token valid\n", stdout.String())
+	assert.Equal(t, "app.copia.io (default)\n  User: john\n  Active account: true\n  Token: "+strings.Repeat("*", 40)+" (config file)\n  Token valid\n", stdout.String())
 }
 
 func TestStatusRun_ShowToken(t *testing.T) {
@@ -80,12 +80,12 @@ func TestStatusRun_ShowToken(t *testing.T) {
 	}{
 		{
 			name: "all hosts",
-			want: "app.copia.io (default)\n  User: john\n  Token: abc123 (config file)\n  Token valid\n",
+			want: "app.copia.io (default)\n  User: john\n  Active account: true\n  Token: abc123 (config file)\n  Token valid\n",
 		},
 		{
 			name: "specific host",
 			host: "app.copia.io",
-			want: "app.copia.io (default)\n  User: john\n  Token: abc123 (config file)\n  Token valid\n",
+			want: "app.copia.io (default)\n  User: john\n  Active account: true\n  Token: abc123 (config file)\n  Token valid\n",
 		},
 	}
 
@@ -175,7 +175,7 @@ func TestStatusRun_SpecificHostMasksToken(t *testing.T) {
 		Host:       "other.copia.io",
 	})
 	require.NoError(t, err)
-	assert.Equal(t, "other.copia.io\n  User: jane\n  Token: ****** (config file)\n  Token valid\n", stdout.String())
+	assert.Equal(t, "other.copia.io\n  User: jane\n  Active account: true\n  Token: ****** (config file)\n  Token valid\n", stdout.String())
 }
 
 func TestStatusRun_NoHosts(t *testing.T) {
@@ -323,8 +323,8 @@ func TestNewCmdStatus_AllHosts(t *testing.T) {
 	err := runStatusCmd(t, &cmdutil.Factory{IOStreams: ios})
 	require.NoError(t, err)
 	out := stdout.String()
-	assert.Contains(t, out, "app.copia.io (default)\n  User: john\n  Token: **** (config file)\n  Token valid\n")
-	assert.Contains(t, out, "other.example.com\n  User: jane\n  Token: *** (config file)\n  Token invalid (HTTP 401)\n")
+	assert.Contains(t, out, "app.copia.io (default)\n  User: john\n  Active account: true\n  Token: **** (config file)\n  Token valid\n")
+	assert.Contains(t, out, "other.example.com\n  User: jane\n  Active account: true\n  Token: *** (config file)\n  Token invalid (HTTP 401)\n")
 	assert.Len(t, reg.Requests, 2)
 }
 
@@ -341,7 +341,7 @@ func TestNewCmdStatus_FactoryHost(t *testing.T) {
 	ios, _, stdout, _ := iostreams.Test()
 	err := runStatusCmd(t, &cmdutil.Factory{IOStreams: ios, Host: "other.example.com"})
 	require.NoError(t, err)
-	assert.Equal(t, "other.example.com\n  User: jane\n  Token: *** (config file)\n  Token valid\n", stdout.String())
+	assert.Equal(t, "other.example.com\n  User: jane\n  Active account: true\n  Token: *** (config file)\n  Token valid\n", stdout.String())
 	require.Len(t, reg.Requests, 1)
 	assert.Equal(t, "other.example.com", reg.Requests[0].URL.Host)
 	assert.Equal(t, "token bad", reg.Requests[0].Header.Get("Authorization"))
@@ -362,7 +362,7 @@ func TestNewCmdStatus_ShowToken(t *testing.T) {
 	ios, _, stdout, _ := iostreams.Test()
 	err = runStatusCmd(t, &cmdutil.Factory{IOStreams: ios, Host: "other.example.com"}, "--show-token")
 	require.NoError(t, err)
-	assert.Equal(t, "other.example.com\n  User: jane\n  Token: bad (config file)\n  Token valid\n", stdout.String())
+	assert.Equal(t, "other.example.com\n  User: jane\n  Active account: true\n  Token: bad (config file)\n  Token valid\n", stdout.String())
 	after, err := os.ReadFile(configPath)
 	require.NoError(t, err)
 	assert.Equal(t, before, after)
@@ -408,12 +408,12 @@ func TestStatusRun_RequestErrors(t *testing.T) {
 			responder: func(*http.Request) (*http.Response, error) {
 				return nil, errors.New("boom")
 			},
-			want: "app.copia.io (default)\n  User: john\n  Token: *** (config file)\n  Error: ",
+			want: "app.copia.io (default)\n  User: john\n  Active account: true\n  Token: *** (config file)\n  Error: ",
 		},
 		{
 			name: "invalid host",
 			host: "bad host",
-			want: "bad host (default)\n  User: john\n  Token: *** (config file)\n  Error: ",
+			want: "bad host (default)\n  User: john\n  Active account: true\n  Token: *** (config file)\n  Error: ",
 		},
 	}
 
@@ -452,7 +452,7 @@ func TestStatusRun_NoHTTPClient(t *testing.T) {
 	ios, _, stdout, _ := iostreams.Test()
 	err := StatusRun(&StatusOptions{IO: ios, ConfigPath: configPath})
 	require.NoError(t, err)
-	assert.Equal(t, "app.copia.io (default)\n  User: john\n  Token: *** (config file)\n  Token valid\n", stdout.String())
+	assert.Equal(t, "app.copia.io (default)\n  User: john\n  Active account: true\n  Token: *** (config file)\n  Token valid\n", stdout.String())
 }
 
 func TestStatusRun_MarksDefaultHost(t *testing.T) {
@@ -464,15 +464,15 @@ func TestStatusRun_MarksDefaultHost(t *testing.T) {
 		{
 			name:        "stored default host",
 			defaultHost: "b.example.com",
-			want: "a.example.com\n  User: u1\n  Token: * (config file)\n  Token valid\n" +
-				"b.example.com (default)\n  User: u2\n  Token: * (config file)\n  Token valid\n" +
-				"c.example.com\n  User: u3\n  Token: * (config file)\n  Token valid\n",
+			want: "a.example.com\n  User: u1\n  Active account: true\n  Token: * (config file)\n  Token valid\n" +
+				"b.example.com (default)\n  User: u2\n  Active account: true\n  Token: * (config file)\n  Token valid\n" +
+				"c.example.com\n  User: u3\n  Active account: true\n  Token: * (config file)\n  Token valid\n",
 		},
 		{
 			name: "unset default host",
-			want: "a.example.com (default)\n  User: u1\n  Token: * (config file)\n  Token valid\n" +
-				"b.example.com\n  User: u2\n  Token: * (config file)\n  Token valid\n" +
-				"c.example.com\n  User: u3\n  Token: * (config file)\n  Token valid\n",
+			want: "a.example.com (default)\n  User: u1\n  Active account: true\n  Token: * (config file)\n  Token valid\n" +
+				"b.example.com\n  User: u2\n  Active account: true\n  Token: * (config file)\n  Token valid\n" +
+				"c.example.com\n  User: u3\n  Active account: true\n  Token: * (config file)\n  Token valid\n",
 		},
 	}
 
@@ -519,7 +519,7 @@ func TestStatusRun_TokenSource(t *testing.T) {
 			host:      &config.HostConfig{User: "john"},
 			inKeyring: true,
 			keyring:   func() config.TokenStore { return config.NewKeyringStore() },
-			wantOut:   "app.copia.io (default)\n  User: john\n  Token: ************* (keyring)\n  Token valid\n",
+			wantOut:   "app.copia.io (default)\n  User: john\n  Active account: true\n  Token: ************* (keyring)\n  Token valid\n",
 			wantCall:  true,
 		},
 		{
@@ -528,7 +528,7 @@ func TestStatusRun_TokenSource(t *testing.T) {
 			inKeyring: true,
 			keyring:   func() config.TokenStore { return config.NewKeyringStore() },
 			showToken: true,
-			wantOut:   "app.copia.io (default)\n  User: john\n  Token: keyring-token (keyring)\n  Token valid\n",
+			wantOut:   "app.copia.io (default)\n  User: john\n  Active account: true\n  Token: keyring-token (keyring)\n  Token valid\n",
 			wantCall:  true,
 		},
 		{
@@ -536,20 +536,20 @@ func TestStatusRun_TokenSource(t *testing.T) {
 			host:      &config.HostConfig{User: "john", Token: "file-token"},
 			inKeyring: true,
 			keyring:   func() config.TokenStore { return config.NewKeyringStore() },
-			wantOut:   "app.copia.io (default)\n  User: john\n  Token: ********** (config file)\n  Token valid\n",
+			wantOut:   "app.copia.io (default)\n  User: john\n  Active account: true\n  Token: ********** (config file)\n  Token valid\n",
 			wantCall:  true,
 		},
 		{
 			name:    "no token stored",
 			host:    &config.HostConfig{User: "john"},
 			keyring: func() config.TokenStore { return config.NewKeyringStore() },
-			wantOut: "app.copia.io (default)\n  User: john\n  Token: none\n  No token stored\n",
+			wantOut: "app.copia.io (default)\n  User: john\n  Active account: true\n  Token: none\n  No token stored\n",
 		},
 		{
 			name:    "keyring unavailable",
 			host:    &config.HostConfig{User: "john"},
 			keyring: func() config.TokenStore { return failingStore{err: config.ErrKeyringTimeout} },
-			wantOut: "app.copia.io (default)\n  User: john\n  Token: none\n  Error: timed out waiting for the OS keyring\n",
+			wantOut: "app.copia.io (default)\n  User: john\n  Active account: true\n  Token: none\n  Error: timed out waiting for the OS keyring\n",
 		},
 	}
 	for _, tt := range tests {
@@ -602,4 +602,39 @@ func TestNewCmdStatus_Keyring(t *testing.T) {
 	ios, _, stdout, _ := iostreams.Test()
 	require.NoError(t, runStatusCmd(t, &cmdutil.Factory{IOStreams: ios, Keyring: config.NewKeyringStore()}))
 	assert.Contains(t, stdout.String(), "  Token: ************* (keyring)\n  Token valid\n")
+}
+
+func TestStatusRun_SeveralAccounts(t *testing.T) {
+	keyring.MockInit()
+	require.NoError(t, keyring.Set("copia-cli:app.copia.io", "joe", "keyring-token"))
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	// Stubs are not used up, so one responder answers both accounts.
+	reg.Register(httpmock.REST("GET", "/api/v1/user"), func(req *http.Request) (*http.Response, error) {
+		if req.Header.Get("Authorization") == "token file" {
+			return httpmock.StringResponse(http.StatusUnauthorized, `{}`)(req)
+		}
+		return httpmock.StringResponse(http.StatusOK, `{}`)(req)
+	})
+
+	configPath := filepath.Join(t.TempDir(), "config.yml")
+	require.NoError(t, config.Save(configPath, &config.Config{Hosts: map[string]*config.HostConfig{
+		"app.copia.io": {User: "joe", Users: map[string]*config.UserConfig{"john": {Token: "file"}, "joe": {}, "jane": {}}},
+	}}))
+
+	ios, _, stdout, _ := iostreams.Test()
+	require.NoError(t, StatusRun(&StatusOptions{
+		IO:         ios,
+		ConfigPath: configPath,
+		HTTPClient: &http.Client{Transport: reg},
+		Keyring:    config.NewKeyringStore(),
+	}))
+	assert.Equal(t, "app.copia.io (default)\n"+
+		"  User: joe\n  Active account: true\n  Token: ************* (keyring)\n  Token valid\n"+
+		"  User: jane\n  Active account: false\n  Token: none\n  No token stored\n"+
+		"  User: john\n  Active account: false\n  Token: **** (config file)\n  Token invalid (HTTP 401)\n",
+		stdout.String())
+	require.Len(t, reg.Requests, 2)
+	assert.Equal(t, "token keyring-token", reg.Requests[0].Header.Get("Authorization"))
+	assert.Equal(t, "token file", reg.Requests[1].Header.Get("Authorization"))
 }

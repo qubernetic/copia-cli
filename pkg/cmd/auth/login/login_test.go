@@ -45,7 +45,7 @@ func TestLoginRun_NonInteractive_Success(t *testing.T) {
 
 	cfg, err := config.Load(configPath)
 	require.NoError(t, err)
-	assert.Equal(t, "test-token-123", cfg.Hosts["app.copia.io"].Token)
+	assert.Equal(t, "test-token-123", cfg.Hosts["app.copia.io"].Users["john"].Token)
 	assert.Equal(t, "john", cfg.Hosts["app.copia.io"].User)
 }
 
@@ -115,7 +115,7 @@ func TestNewCmdLogin_Flags(t *testing.T) {
 	cfg, err := config.Load(configPath)
 	require.NoError(t, err)
 	require.Contains(t, cfg.Hosts, "copia.example.com")
-	assert.Equal(t, "flag-token", cfg.Hosts["copia.example.com"].Token)
+	assert.Equal(t, "flag-token", cfg.Hosts["copia.example.com"].Users["john"].Token)
 	assert.Equal(t, "john", cfg.Hosts["copia.example.com"].User)
 }
 
@@ -137,7 +137,7 @@ func TestNewCmdLogin_FactoryOverridesAndDefaultHost(t *testing.T) {
 
 	cfg, err := config.Load(configPath)
 	require.NoError(t, err)
-	assert.Equal(t, "factory-token", cfg.Hosts["app.copia.io"].Token)
+	assert.Equal(t, "factory-token", cfg.Hosts["app.copia.io"].Users["jane"].Token)
 }
 
 func TestNewCmdLogin_FactoryHost(t *testing.T) {
@@ -175,7 +175,7 @@ func TestNewCmdLogin_InteractivePrompt(t *testing.T) {
 
 	cfg, err := config.Load(configPath)
 	require.NoError(t, err)
-	assert.Equal(t, "typed-token", cfg.Hosts["app.copia.io"].Token)
+	assert.Equal(t, "typed-token", cfg.Hosts["app.copia.io"].Users["john"].Token)
 }
 
 func TestNewCmdLogin_InteractiveEmptyInput(t *testing.T) {
@@ -440,7 +440,7 @@ func TestLoginRun_TokenStorage(t *testing.T) {
 
 			cfg, err := config.Load(configPath)
 			require.NoError(t, err)
-			assert.Equal(t, tt.wantFile, cfg.Hosts["app.copia.io"].Token)
+			assert.Equal(t, tt.wantFile, cfg.Hosts["app.copia.io"].Users["john"].Token)
 			assert.Equal(t, "john", cfg.Hosts["app.copia.io"].User)
 			if tt.existing != nil {
 				assert.Equal(t, tt.existing.Extra, cfg.Hosts["app.copia.io"].Extra)
@@ -485,7 +485,7 @@ func TestNewCmdLogin_InsecureStorage(t *testing.T) {
 
 	cfg, err := config.Load(configPath)
 	require.NoError(t, err)
-	assert.Equal(t, "flag-token", cfg.Hosts["app.copia.io"].Token)
+	assert.Equal(t, "flag-token", cfg.Hosts["app.copia.io"].Users["john"].Token)
 	_, err = keyring.Get("copia-cli:app.copia.io", "john")
 	assert.ErrorIs(t, err, keyring.ErrNotFound)
 }
@@ -505,8 +505,92 @@ func TestNewCmdLogin_Keyring(t *testing.T) {
 
 	cfg, err := config.Load(configPath)
 	require.NoError(t, err)
-	assert.Empty(t, cfg.Hosts["app.copia.io"].Token)
+	assert.Empty(t, cfg.Hosts["app.copia.io"].Users["john"].Token)
 	got, err := keyring.Get("copia-cli:app.copia.io", "john")
 	require.NoError(t, err)
 	assert.Equal(t, "flag-token", got)
+}
+
+func TestLoginRun_AddsAccountAndMakesItActive(t *testing.T) {
+	tests := []struct {
+		name     string
+		login    string
+		keyring  bool
+		existing *config.HostConfig
+		want     *config.HostConfig
+	}{
+		{
+			name:     "second account in the config file",
+			login:    "jane",
+			existing: &config.HostConfig{User: "john", Users: map[string]*config.UserConfig{"john": {Token: "token-1"}}},
+			want:     &config.HostConfig{User: "jane", Users: map[string]*config.UserConfig{"john": {Token: "token-1"}, "jane": {Token: "token-2"}}},
+		},
+		{
+			name:     "second account in the keyring",
+			login:    "jane",
+			keyring:  true,
+			existing: &config.HostConfig{User: "john", Users: map[string]*config.UserConfig{"john": {}}},
+			want:     &config.HostConfig{User: "jane", Users: map[string]*config.UserConfig{"john": {}, "jane": {}}},
+		},
+		{
+			name:     "second account next to the old shape",
+			login:    "jane",
+			existing: &config.HostConfig{Token: "token-1", User: "john"},
+			want:     &config.HostConfig{User: "jane", Users: map[string]*config.UserConfig{"john": {Token: "token-1"}, "jane": {Token: "token-2"}}},
+		},
+		{
+			name:  "known account becomes active again",
+			login: "john",
+			existing: &config.HostConfig{User: "jane", Users: map[string]*config.UserConfig{
+				"john": {Token: "token-1", Extra: map[string]any{"future_key": "kept"}}, "jane": {Token: "token-3"},
+			}},
+			want: &config.HostConfig{User: "john", Users: map[string]*config.UserConfig{
+				"john": {Token: "token-2", Extra: map[string]any{"future_key": "kept"}}, "jane": {Token: "token-3"},
+			}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			keyring.MockInit()
+			require.NoError(t, keyring.Set("copia-cli:app.copia.io", "john", "keyring-token-1"))
+			reg := &httpmock.Registry{}
+			defer reg.Verify(t)
+			reg.Register(httpmock.REST("GET", "/api/v1/user"),
+				httpmock.StringResponse(http.StatusOK, `{"login":"`+tt.login+`","id":2}`))
+			configPath := filepath.Join(t.TempDir(), "config.yml")
+			require.NoError(t, config.Save(configPath, &config.Config{Hosts: map[string]*config.HostConfig{"app.copia.io": tt.existing}}))
+
+			opts := &LoginOptions{
+				IO:              iostreamsOnly(),
+				Host:            "app.copia.io",
+				Token:           "token-2",
+				ConfigPath:      configPath,
+				HTTPClient:      &http.Client{Transport: reg},
+				InsecureStorage: !tt.keyring,
+				Keyring:         config.NewKeyringStore(),
+			}
+			require.NoError(t, LoginRun(opts))
+
+			cfg, err := config.Load(configPath)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, cfg.Hosts["app.copia.io"])
+
+			// The keyring entry of the other account stays.
+			got, err := keyring.Get("copia-cli:app.copia.io", "john")
+			require.NoError(t, err)
+			if !tt.keyring || tt.login != "john" {
+				assert.Equal(t, "keyring-token-1", got)
+			}
+			if tt.keyring {
+				got, err := keyring.Get("copia-cli:app.copia.io", tt.login)
+				require.NoError(t, err)
+				assert.Equal(t, "token-2", got)
+			}
+		})
+	}
+}
+
+func iostreamsOnly() *iostreams.IOStreams {
+	ios, _, _, _ := iostreams.Test()
+	return ios
 }

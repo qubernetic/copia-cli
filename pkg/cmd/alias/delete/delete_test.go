@@ -80,7 +80,7 @@ func TestDelete(t *testing.T) {
 			cfg, err := config.Load(path)
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, cfg.Aliases)
-			assert.Equal(t, "secret", cfg.Hosts["app.copia.io"].Token)
+			assert.Equal(t, "secret", cfg.Hosts["app.copia.io"].Users["john"].Token)
 		})
 	}
 }
