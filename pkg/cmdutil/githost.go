@@ -23,14 +23,37 @@ func ParseHost(host string) (*url.URL, error) {
 }
 
 // MatchesHost reports whether rawURL is an https URL whose host and port
-// equal the configured host (case-insensitive, a missing port is 443). Only
-// such a URL may get the configured host's token.
+// equal the configured host (ASCII case-insensitive, a missing port is 443).
+// Only such a URL may get the configured host's token. A non-ASCII host name
+// never matches: Unicode case folding joins names such as xσ and xς that IDNA
+// turns into two hosts.
 func MatchesHost(configured *url.URL, rawURL string) bool {
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Scheme != "https" {
 		return false
 	}
-	return strings.EqualFold(u.Hostname(), configured.Hostname()) && httpsPort(u) == httpsPort(configured)
+	return asciiEqualFold(u.Hostname(), configured.Hostname()) && httpsPort(u) == httpsPort(configured)
+}
+
+// asciiEqualFold reports whether a and b are equal with only A to Z folded to
+// a to z. A string with a byte above tilde equals nothing.
+func asciiEqualFold(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		if a[i] > '~' || b[i] > '~' || asciiLower(a[i]) != asciiLower(b[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func asciiLower(c byte) byte {
+	if 'A' <= c && c <= 'Z' {
+		return c + 'a' - 'A'
+	}
+	return c
 }
 
 func httpsPort(u *url.URL) string {

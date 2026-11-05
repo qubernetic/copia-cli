@@ -109,8 +109,9 @@ func (f *Factory) ResolveAuth() (host, token string, err error) {
 }
 
 // sameHost reports whether a and b name the same host: the host name
-// compared case-insensitively and the same port, a missing port being 443.
-// A host that does not parse is never the same host.
+// compared ASCII case-insensitively and the same port, a missing port being
+// 443. A host that does not parse or has a non-ASCII name is never the same
+// host.
 func sameHost(a, b string) bool {
 	u, err := ParseHost(a)
 	if err != nil {

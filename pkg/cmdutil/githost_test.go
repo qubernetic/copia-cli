@@ -56,6 +56,8 @@ func TestMatchesHost(t *testing.T) {
 		{name: "other host", configured: "app.copia.io", url: "https://evil.example.com"},
 		{name: "suffix host", configured: "app.copia.io", url: "https://app.copia.io.evil.example.com"},
 		{name: "unparsable", configured: "app.copia.io", url: "https://app.copia.io:port"},
+		{name: "unicode case fold of sigma", configured: "xσ.example", url: "https://xς.example"},
+		{name: "kelvin sign for k", configured: "kspace.example", url: "https://Kspace.example"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

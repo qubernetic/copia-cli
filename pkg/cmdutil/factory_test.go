@@ -311,6 +311,26 @@ func TestFactory_ResolveAuth_EnvTokenOnlyForNamedHost(t *testing.T) {
 			wantWarning: otherHostWarning,
 		},
 		{
+			// Unicode folds σ and ς together, IDNA does not: xn--x-0mb and
+			// xn--x-ymb are two hosts.
+			name:        "--host names COPIA_HOST with a Unicode case fold of sigma",
+			flagHost:    "xς.example",
+			envHost:     "xσ.example",
+			hosts:       map[string]*config.HostConfig{"xς.example": {Token: "token-final-sigma"}},
+			wantHost:    "xς.example",
+			wantToken:   "token-final-sigma",
+			wantWarning: otherHostWarning,
+		},
+		{
+			name:        "--host names COPIA_HOST with a Kelvin sign for k",
+			flagHost:    "Kspace.example",
+			envHost:     "kspace.example",
+			hosts:       map[string]*config.HostConfig{"Kspace.example": {Token: "token-kelvin"}},
+			wantHost:    "Kspace.example",
+			wantToken:   "token-kelvin",
+			wantWarning: otherHostWarning,
+		},
+		{
 			name:      "--token beats COPIA_TOKEN with another host than COPIA_HOST",
 			flagToken: "flag-token",
 			flagHost:  "b.example.com",
