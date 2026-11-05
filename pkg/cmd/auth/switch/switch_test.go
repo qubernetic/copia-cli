@@ -346,18 +346,40 @@ hosts:
 	assert.Empty(t, hc.Users["jane"].Token)
 }
 
-func TestSwitchRun_SaveError(t *testing.T) {
+func TestSwitchRun_FileError(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root ignores file permissions")
 	}
-	path := filepath.Join(t.TempDir(), "config.yml")
-	require.NoError(t, os.WriteFile(path, []byte(twoAccountsOneHost), 0400))
+	tests := []struct {
+		name    string
+		mode    os.FileMode
+		wantErr string
+	}{
+		{name: "read-only file", mode: 0400, wantErr: "writing config"},
+		{name: "unreadable file", mode: 0000, wantErr: "reading config:"},
+	}
 
-	ios, _, stdout, _ := iostreams.Test()
-	err := switchRun(&SwitchOptions{IO: ios, ConfigPath: path})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "writing config")
-	assert.Empty(t, stdout.String())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yml")
+			require.NoError(t, os.WriteFile(path, []byte(twoAccountsOneHost), tt.mode))
+
+			ios, _, stdout, stderr := iostreams.Test()
+			err := switchRun(&SwitchOptions{IO: ios, ConfigPath: path})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+			assert.Empty(t, stdout.String())
+			assert.Empty(t, stderr.String())
+
+			info, err := os.Stat(path)
+			require.NoError(t, err)
+			assert.Equal(t, tt.mode, info.Mode().Perm())
+			require.NoError(t, os.Chmod(path, 0600))
+			data, err := os.ReadFile(path)
+			require.NoError(t, err)
+			assert.Equal(t, twoAccountsOneHost, string(data))
+		})
+	}
 }
 
 func TestSwitchRun_TokenFromEnvironment(t *testing.T) {
