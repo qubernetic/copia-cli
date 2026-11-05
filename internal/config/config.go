@@ -14,9 +14,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// HostConfig stores credentials for a single Copia/Gitea instance.
+// HostConfig stores credentials for a single Copia/Gitea instance. Token is
+// empty when the token lives in the OS keyring (see LookupToken).
 type HostConfig struct {
-	Token string `yaml:"token"`
+	Token string `yaml:"token,omitempty"`
 	User  string `yaml:"user"`
 	// Extra keeps the keys this version does not know, so a save writes
 	// them back unchanged.

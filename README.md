@@ -142,7 +142,7 @@ Shell completion is available for Bash, Zsh, Fish, and PowerShell. See `copia-cl
 - **Phase 1 (MVP):** auth, repo list/view/clone, issue CRUD, pr CRUD, label list/create — **Done**
 - **Phase 2 (Workflow):** release CRUD, repo create/delete/fork, pr review/diff/checkout, issue edit, Homebrew tap — **Done**
 - **Phase 3 (Power Features):** `api` escape hatch, search, orgs, notifications, `-R`/`--repo` flag, completion, Jekyll manual, AGPL license — **Done**
-- **Phase 4 (Nice to Have):** ~~winget~~, ~~COPR~~, ~~AUR~~, ~~Snap~~, OS keyring, ~~aliases~~, ~~browse~~, ~~status dashboard~~, ssh-key, pr checks, scheduled integration tests
+- **Phase 4 (Nice to Have):** ~~winget~~, ~~COPR~~, ~~AUR~~, ~~Snap~~, ~~OS keyring~~, ~~aliases~~, ~~browse~~, ~~status dashboard~~, ssh-key, pr checks, scheduled integration tests
 
 ## License
 

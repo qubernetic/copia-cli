@@ -29,13 +29,26 @@ copia-cli follows an HTTP redirect only when it keeps the scheme, host and port 
 
 ### Token Storage
 
-The CLI will store tokens in `~/.config/copia/config.yml`:
+`auth login` stores the token in the OS keyring: the macOS Keychain, the Windows Credential Manager, or the Secret Service on Linux (GNOME Keyring, KWallet). The entry has the service `copia-cli:<host>` and the login as the account. The config file then keeps the host and the user, but no token.
+
+When the keyring is not available (no Secret Service running, a headless server, a container, a CI runner) or does not answer within three seconds (a locked keyring waiting for an unlock prompt), `auth login` stores the token in plain text in the config file instead and prints a warning on standard error that names the config file; the warning never contains the token. `--insecure-storage` stores the token in the config file on purpose, without trying the keyring:
+
+```bash
+copia-cli auth login --token <your-token> --insecure-storage
+```
+
+The snap has no `password-manager-service` plug, so the snap can never reach the keyring and always stores the token in the config file, with the warning.
+
+The commands read the stored token from the config file first, then from the keyring, so a token stored in the config file by an older version keeps working. There is no automatic migration: the next `auth login` on that host moves the token to the keyring and removes it from the config file. `auth logout` deletes the token from both places; when the keyring fails it still removes the host from the config file and prints a warning, so check the keyring by hand then.
+
+The config file is `~/.config/copia/config.yml`:
 
 ```yaml
+default_host: app.copia.io
 hosts:
   app.copia.io:
-    token: <encrypted-or-plaintext>
     user: <username>
+    token: <plain text, only when stored in the config file>
     default_org: my-org
 output: json
 browser: firefox --new-tab
@@ -64,15 +77,15 @@ The other top-level keys beside `hosts` are the settings of `copia-cli config` (
 
 ### Check the Auth Status
 
-`copia-cli auth status` lists every host in the config file in alphabetical order, the default host marked with `(default)`, with its user, its token and whether Copia accepts the token. `--host` limits the output to one host.
+`copia-cli auth status` lists every host in the config file in alphabetical order, the default host marked with `(default)`, with its user, its token, where the token is stored (`keyring` or `config file`) and whether Copia accepts the token. A host without a stored token shows `Token: none` and `No token stored`, and a keyring that fails shows `Token: none` and the error. `--host` limits the output to one host.
 
-`auth status` reads only the config file and the `--host` flag. It does not read `COPIA_HOST` or `COPIA_TOKEN`, so when either is set, the other commands may use a different host or token than the one `auth status` reports on.
+`auth status` reads only the stored tokens (config file and keyring) and the `--host` flag. It does not read `COPIA_HOST` or `COPIA_TOKEN`, so when either is set, the other commands may use a different host or token than the one `auth status` reports on.
 
 ```console
 $ copia-cli auth status
 app.copia.io (default)
   User: john
-  Token: ****************************************
+  Token: **************************************** (keyring)
   Token valid
 ```
 
@@ -83,13 +96,13 @@ copia-cli auth status --show-token
 copia-cli auth status --host app.copia.io --show-token
 ```
 
-**The output then contains the secret.** Do not run it where the terminal is recorded or shared, or in a CI log. The flag changes the output only; the config file is not touched. When standard output is not a terminal (a pipe, a redirect or a CI log), `auth status --show-token` still prints the token and writes one warning line to standard error.
+**The output then contains the secret.** Do not run it where the terminal is recorded or shared, or in a CI log. The flag changes the output only; neither the config file nor the keyring is touched. When standard output is not a terminal (a pipe, a redirect or a CI log), `auth status --show-token` still prints the token and writes one warning line to standard error.
 
 ## Auth Precedence
 
 1. `--token` flag (per-command)
 2. `COPIA_TOKEN` environment variable
-3. The stored token of the active host in the config file (`~/.config/copia/config.yml`)
+3. The stored token of the active host: the config file (`~/.config/copia/config.yml`) first, then the OS keyring
 
 ## Alternative Auth Methods
 
@@ -142,6 +155,8 @@ hosts:
     user: cbiro
     default_org: InternalTeam
 ```
+
+The tokens above are stored in the config file (`--insecure-storage` or no keyring); a token in the keyring has its own entry per host (`copia-cli:<host>`) and no `token` key here.
 
 The active instance is determined by:
 1. `--host` flag

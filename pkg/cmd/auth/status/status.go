@@ -1,6 +1,7 @@
 package status
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -19,6 +20,9 @@ type StatusOptions struct {
 	HTTPClient *http.Client
 	Host       string // filter to specific host (optional)
 	ShowToken  bool   // print the token instead of its mask
+	// Keyring is the OS keyring a token missing from the config file is
+	// read from; nil reads the config file only.
+	Keyring config.TokenStore
 }
 
 // NewCmdStatus creates the `copia auth status` command.
@@ -28,13 +32,14 @@ func NewCmdStatus(f *cmdutil.Factory) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "status",
 		Short:   "View authentication status",
-		Long:    "Display the authentication state for each configured Copia host, including the active user, the masked token and token validity. The hosts are listed in alphabetical order and the default host is marked with (default). Use --show-token to print the token itself.",
+		Long:    "Display the authentication state for each configured Copia host, including the active user, the masked token with where it is stored (keyring or config file) and token validity. The hosts are listed in alphabetical order and the default host is marked with (default). Use --show-token to print the token itself.",
 		Example: "  $ copia-cli auth status\n  $ copia-cli auth status --show-token",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.IO = f.IOStreams
 			opts.ConfigPath = config.DefaultPath()
 			opts.HTTPClient = cmdutil.NewHTTPClient()
 			opts.Host = f.Host
+			opts.Keyring = f.Keyring
 			return StatusRun(opts)
 		},
 	}
@@ -72,6 +77,21 @@ func StatusRun(opts *StatusOptions) error {
 			continue
 		}
 		hc := cfg.Hosts[host]
+		label := host
+		if host == defaultHost {
+			label += " (default)"
+		}
+
+		stored, source, err := config.LookupToken(cfg, host, opts.Keyring)
+		if err != nil {
+			tokenStatus := "No token stored"
+			if !errors.Is(err, config.ErrTokenNotFound) {
+				tokenStatus = fmt.Sprintf("Error: %v", err)
+			}
+			_, _ = fmt.Fprintf(opts.IO.Out, "%s\n  User: %s\n  Token: none\n  %s\n", label, hc.User, tokenStatus)
+			continue
+		}
+
 		tokenStatus := "Token valid"
 		if opts.HTTPClient != nil {
 			url := fmt.Sprintf("https://%s/api/v1/user", host)
@@ -79,7 +99,7 @@ func StatusRun(opts *StatusOptions) error {
 			if err != nil {
 				tokenStatus = fmt.Sprintf("Error: %v", err)
 			} else {
-				req.Header.Set("Authorization", "token "+hc.Token)
+				req.Header.Set("Authorization", "token "+stored)
 				resp, err := opts.HTTPClient.Do(req)
 				if err != nil {
 					tokenStatus = fmt.Sprintf("Error: %v", err)
@@ -92,16 +112,11 @@ func StatusRun(opts *StatusOptions) error {
 			}
 		}
 
-		token := maskToken(hc.Token)
+		token := maskToken(stored)
 		if opts.ShowToken {
-			token = hc.Token
+			token = stored
 		}
-
-		label := host
-		if host == defaultHost {
-			label += " (default)"
-		}
-		_, _ = fmt.Fprintf(opts.IO.Out, "%s\n  User: %s\n  Token: %s\n  %s\n", label, hc.User, token, tokenStatus)
+		_, _ = fmt.Fprintf(opts.IO.Out, "%s\n  User: %s\n  Token: %s (%s)\n  %s\n", label, hc.User, token, source, tokenStatus)
 	}
 
 	return nil

@@ -70,8 +70,8 @@ func NewRootCmd(f *cmdutil.Factory) *cobra.Command {
 }
 
 // NewFactory returns the Factory of a real run on ios: the config file at
-// config.DefaultPath, the repository of the git remote and the configured
-// browser.
+// config.DefaultPath, the OS keyring, the repository of the git remote and
+// the configured browser.
 func NewFactory(ios *iostreams.IOStreams) *cmdutil.Factory {
 	f := &cmdutil.Factory{
 		IOStreams: ios,
@@ -79,6 +79,7 @@ func NewFactory(ios *iostreams.IOStreams) *cmdutil.Factory {
 			return config.Load(config.DefaultPath())
 		},
 		BaseRepo: cmdutil.DetectBaseRepo(),
+		Keyring:  config.NewKeyringStore(),
 	}
 	f.Browser = cmdutil.NewBrowser(f.ConfigValue)
 	return f
