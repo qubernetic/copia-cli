@@ -161,7 +161,7 @@ Client side, no API call. Aliases are stored under the top-level key `aliases` o
 | `copia-cli org view` | [x] |
 | `copia-cli notification list` | [x] |
 | `copia-cli notification read` | [x] |
-| `copia-cli browse` (`gh browse`: repository, issue or PR number, `--no-browser`; no file paths, `--branch`, `--commit`, `--settings`, `--wiki`) | [x] |
+| `copia-cli browse` (`gh browse`: repository, issue or PR number, commit SHA (`/commit/{sha}`), `<path>`, `<path>:<line>` and `<path>:<start>-<end>` (`/src/branch/{branch}/{path}`, with a line `?display=source#L{n}` or `#L{n}-L{m}`, Gitea's counterpart of gh's `?plain=1`), `--branch/-b`, `--commit/-c` (`/src/commit/{sha}/{path}`; without a SHA the last commit of the current branch, of the default branch with `-R`, from `GET /repos/{owner}/{repo}/branches/{branch}`), `--blame` (`/blame/branch/...` or `/blame/commit/...`), `--settings/-s`, `--wiki/-w`, `--releases/-r`, `--actions/-a`, `--projects/-p`, `--no-browser/-n`; a path without `--branch` or `--commit` reads the default branch with `GET /repos/{owner}/{repo}`, everything else makes no API call. Conflicting flags fail with gh's messages before anything opens. Unlike gh, `--no-browser` does not check that the repository exists) | [x] |
 | `copia-cli completion` | [x] |
 
 ## Other gh commands (not yet implemented)

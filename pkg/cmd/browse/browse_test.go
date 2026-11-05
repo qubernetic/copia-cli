@@ -157,10 +157,10 @@ func TestNewCmdBrowse_Errors(t *testing.T) {
 		wantErr  string
 	}{
 		{
-			name:    "not a number",
+			name:    "a path needs a token for the default branch",
 			args:    []string{"main.st"},
 			host:    "app.copia.io",
-			wantErr: `invalid argument "main.st": expected an issue or pull request number`,
+			wantErr: "no token configured for app.copia.io. Run 'copia auth login' first",
 		},
 		{
 			name:    "zero",

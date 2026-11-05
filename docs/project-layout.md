@@ -89,7 +89,7 @@ copia-cli/
 │   │   ├── search/                # issues, repos
 │   │   ├── org/                   # list, view
 │   │   ├── notification/          # list, read
-│   │   ├── browse/                # single command: browse [<number>]
+│   │   ├── browse/                # single command: browse [<number> | <path> | <commit-sha>]
 │   │   ├── config/                # get, set, list
 │   │   ├── alias/                 # set, list, delete, import; expand/ (alias expansion), shared/ (name and expansion checks)
 │   │   └── completion/            # single command: completion <shell> (bash, zsh, fish, powershell)
@@ -194,7 +194,7 @@ func xxxRun(opts *XxxOptions) error { ... }  // unexported, testable
 | `search` | issues, repos | Raw HTTP |
 | `org` | list, view | Raw HTTP |
 | `notification` | list, read | Raw HTTP (read: PATCH one thread, PUT with `--all`) |
-| `browse` | none (single command `browse [<number>]`) | No API call; URL built client-side, opened with `cmdutil.Browser` |
+| `browse` | none (single command `browse [<number> \| <path> \| <commit-sha>]`) | URL built client-side, opened with `cmdutil.Browser`; raw HTTP only for the default branch of a path and the last commit of `--commit` |
 | `config` | get, set, list | No API call; reads and writes the settings of `config.yml`, `set` validates before it saves |
 | `alias` | set, list, delete, import | No API call; reads and writes `aliases` of `config.yml`, `set` and `import` refuse a name of a built-in command |
 | `completion` | none (single command `completion <shell>`: bash, zsh, fish, powershell) | No API call; Cobra script generation |
