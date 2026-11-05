@@ -253,22 +253,30 @@ func TestPR_UpdateBranch(t *testing.T) {
 	}
 	updated := fmt.Sprintf("Updated the branch of pull request %s (%s)\n", ref, title)
 
-	// The up-to-date check of the command relies on the compare endpoint.
-	compare := func(basehead string) int {
+	// settled waits until Gitea, which recomputes the merge base in the
+	// background after a push, reports the head branch as up to date.
+	settled := func() {
 		t.Helper()
-		status, data := apiCall(t, env, "compare", "GET",
-			fmt.Sprintf("/repos/%s/%s/compare/%s", env.Owner, env.Repo, basehead), nil)
-		assertStatusCode(t, status, http.StatusOK)
-		var cmp struct {
-			TotalCommits *int `json:"total_commits"`
+		path := fmt.Sprintf("/repos/%s/%s/pulls/%d", env.Owner, env.Repo, pr.Number)
+		for i := 0; i < 30; i++ {
+			status, data := apiCall(t, env, "read pull request", "GET", path, nil)
+			assertStatusCode(t, status, http.StatusOK)
+			var got struct {
+				MergeBase string `json:"merge_base"`
+				Base      struct {
+					Sha string `json:"sha"`
+				} `json:"base"`
+			}
+			require.NoError(t, json.Unmarshal(data, &got))
+			if got.MergeBase != "" && got.MergeBase == got.Base.Sha {
+				return
+			}
+			time.Sleep(time.Second)
 		}
-		require.NoError(t, json.Unmarshal(data, &cmp))
-		require.True(t, cmp.TotalCommits != nil, "compare response has no total_commits")
-		return *cmp.TotalCommits
+		require.True(t, false, "merge_base never reached the base branch tip")
 	}
-	require.True(t, compare(pr.Base+"..."+pr.Head) == 1, "compare base...head: want 1 commit")
-	require.True(t, compare(pr.Head+"..."+pr.Base) == 0, "compare head...base: want 0 commits")
 
+	settled()
 	out, errOut := update(false)
 	assertOutputEmpty(t, out)
 	assertOutputEqual(t, errOut, fmt.Sprintf("! The branch of pull request %s (%s) is already up to date\n", ref, title))
@@ -280,6 +288,7 @@ func TestPR_UpdateBranch(t *testing.T) {
 	assertOutputEmpty(t, errOut)
 	onHead(merged)
 
+	settled()
 	out, errOut = update(false)
 	assertOutputEmpty(t, out)
 	assertOutputContains(t, errOut, "is already up to date")
