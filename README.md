@@ -95,6 +95,11 @@ $ copia-cli pr merge 7 --merge --delete-branch --body "Tested on the line 3 PLC"
 $ copia-cli browse
 $ copia-cli browse 7
 
+# Open a file at a line on a branch, its blame view, or the repository settings
+$ copia-cli browse main.st:312 --branch bug-fix
+$ copia-cli browse main.st:312 --blame
+$ copia-cli browse --settings
+
 # Show and change the settings (output, browser, pager, editor)
 $ copia-cli config list
 $ copia-cli config set browser "firefox --new-tab"
