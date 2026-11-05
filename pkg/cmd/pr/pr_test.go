@@ -17,18 +17,19 @@ func TestNewCmdPR_RegistersSubcommands(t *testing.T) {
 		groupOf[c.Name()] = c.GroupID
 	}
 	assert.Equal(t, map[string]string{
-		"list":     "General commands",
-		"create":   "General commands",
-		"view":     "Targeted commands",
-		"merge":    "Targeted commands",
-		"close":    "Targeted commands",
-		"reopen":   "Targeted commands",
-		"comment":  "Targeted commands",
-		"edit":     "Targeted commands",
-		"ready":    "Targeted commands",
-		"review":   "Targeted commands",
-		"diff":     "Targeted commands",
-		"checkout": "Targeted commands",
+		"list":          "General commands",
+		"create":        "General commands",
+		"view":          "Targeted commands",
+		"merge":         "Targeted commands",
+		"close":         "Targeted commands",
+		"reopen":        "Targeted commands",
+		"comment":       "Targeted commands",
+		"edit":          "Targeted commands",
+		"ready":         "Targeted commands",
+		"update-branch": "Targeted commands",
+		"review":        "Targeted commands",
+		"diff":          "Targeted commands",
+		"checkout":      "Targeted commands",
 	}, groupOf)
 
 	var titles []string

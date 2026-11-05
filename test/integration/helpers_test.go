@@ -180,15 +180,22 @@ func createFixtureBranches(t *testing.T, env testEnv) prFixture {
 	createBranch(fx.Base, "")
 	createBranch(fx.Head, fx.Base)
 
-	status, _ := apiCall(t, env, "commit file", "POST", repo+"/contents/integration-test/"+suffix+".txt", map[string]string{
-		"branch":  fx.Head,
+	commitFile(t, env, fx.Head, "integration-test/"+suffix+".txt")
+	return fx
+}
+
+// commitFile adds the file path to branch with one commit. The file goes
+// away with the branch.
+func commitFile(t *testing.T, env testEnv, branch, path string) {
+	t.Helper()
+	status, _ := apiCall(t, env, "commit file", "POST", fmt.Sprintf("/repos/%s/%s/contents/%s", env.Owner, env.Repo, path), map[string]string{
+		"branch":  branch,
 		"message": "test: add integration fixture file",
 		"content": base64.StdEncoding.EncodeToString([]byte("Created by the integration test PR fixture.\n")),
 	})
 	if status != http.StatusCreated {
 		t.Fatalf("commit file: status %d, want %d", status, http.StatusCreated)
 	}
-	return fx
 }
 
 // closeAtCleanup closes pull request number on cleanup. Registered after the

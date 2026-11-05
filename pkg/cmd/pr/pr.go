@@ -13,6 +13,7 @@ import (
 	readyCmd "github.com/qubernetic/copia-cli/pkg/cmd/pr/ready"
 	reopenCmd "github.com/qubernetic/copia-cli/pkg/cmd/pr/reopen"
 	reviewCmd "github.com/qubernetic/copia-cli/pkg/cmd/pr/review"
+	updateBranchCmd "github.com/qubernetic/copia-cli/pkg/cmd/pr/update-branch"
 	viewCmd "github.com/qubernetic/copia-cli/pkg/cmd/pr/view"
 	"github.com/qubernetic/copia-cli/pkg/cmdutil"
 )
@@ -38,6 +39,7 @@ func NewCmdPR(f *cmdutil.Factory) *cobra.Command {
 		commentCmd.NewCmdComment(f),
 		editCmd.NewCmdEdit(f),
 		readyCmd.NewCmdReady(f),
+		updateBranchCmd.NewCmdUpdateBranch(f),
 		reviewCmd.NewCmdReview(f),
 		diffCmd.NewCmdDiff(f),
 		checkoutCmd.NewCmdCheckout(f),

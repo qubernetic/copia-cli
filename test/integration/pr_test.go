@@ -19,6 +19,7 @@ import (
 	prlist "github.com/qubernetic/copia-cli/pkg/cmd/pr/list"
 	prready "github.com/qubernetic/copia-cli/pkg/cmd/pr/ready"
 	prreopen "github.com/qubernetic/copia-cli/pkg/cmd/pr/reopen"
+	prupdatebranch "github.com/qubernetic/copia-cli/pkg/cmd/pr/update-branch"
 	prview "github.com/qubernetic/copia-cli/pkg/cmd/pr/view"
 )
 
@@ -222,4 +223,81 @@ func TestPR_Ready(t *testing.T) {
 	assertOutputEqual(t, out, fmt.Sprintf("Pull request %s (WIP: %s) is converted to \"draft\"\n", ref, title))
 	assertOutputEmpty(t, errOut)
 	assertOutputContains(t, viewTitle(), fmt.Sprintf("#%d WIP: %s\n", pr.Number, title))
+}
+
+func TestPR_UpdateBranch(t *testing.T) {
+	env := loadTestEnv(t)
+	title := "[integration-test] CLI update-branch test " + strconv.FormatInt(time.Now().UnixNano(), 36)
+	pr := createFixturePR(t, env, title)
+	ref := fmt.Sprintf("%s/%s#%d", env.Owner, env.Repo, pr.Number)
+
+	update := func(rebase bool) (string, string) {
+		t.Helper()
+		ios, out, errOut := testIO()
+		err := prupdatebranch.UpdateBranchRun(&prupdatebranch.UpdateBranchOptions{
+			IO: ios, HTTPClient: testHTTPClient(),
+			Host: env.Host, Token: env.Token,
+			Owner: env.Owner, Repo: env.Repo,
+			Number: pr.Number,
+			Rebase: rebase,
+		})
+		require.NoError(t, err)
+		return out.String(), errOut.String()
+	}
+	// onHead checks that the head branch has the file path.
+	onHead := func(path string) {
+		t.Helper()
+		status, _ := apiCall(t, env, "read head file", "GET",
+			fmt.Sprintf("/repos/%s/%s/contents/%s?ref=%s", env.Owner, env.Repo, path, pr.Head), nil)
+		assertStatusCode(t, status, http.StatusOK)
+	}
+	updated := fmt.Sprintf("Updated the branch of pull request %s (%s)\n", ref, title)
+
+	// settled waits until Gitea, which recomputes the merge base in the
+	// background after a push, reports the head branch as up to date.
+	settled := func() {
+		t.Helper()
+		path := fmt.Sprintf("/repos/%s/%s/pulls/%d", env.Owner, env.Repo, pr.Number)
+		for i := 0; i < 30; i++ {
+			status, data := apiCall(t, env, "read pull request", "GET", path, nil)
+			assertStatusCode(t, status, http.StatusOK)
+			var got struct {
+				MergeBase string `json:"merge_base"`
+				Base      struct {
+					Sha string `json:"sha"`
+				} `json:"base"`
+			}
+			require.NoError(t, json.Unmarshal(data, &got))
+			if got.MergeBase != "" && got.MergeBase == got.Base.Sha {
+				return
+			}
+			time.Sleep(time.Second)
+		}
+		require.True(t, false, "merge_base never reached the base branch tip")
+	}
+
+	settled()
+	out, errOut := update(false)
+	assertOutputEmpty(t, out)
+	assertOutputEqual(t, errOut, fmt.Sprintf("! The branch of pull request %s (%s) is already up to date\n", ref, title))
+
+	merged := "integration-test/" + pr.Base + "-merge.txt"
+	commitFile(t, env, pr.Base, merged)
+	out, errOut = update(false)
+	assertOutputEqual(t, out, updated)
+	assertOutputEmpty(t, errOut)
+	onHead(merged)
+
+	settled()
+	out, errOut = update(false)
+	assertOutputEmpty(t, out)
+	assertOutputContains(t, errOut, "is already up to date")
+
+	rebased := "integration-test/" + pr.Base + "-rebase.txt"
+	commitFile(t, env, pr.Base, rebased)
+	out, errOut = update(true)
+	assertOutputEqual(t, out, updated)
+	assertOutputEmpty(t, errOut)
+	onHead(rebased)
+	onHead(merged)
 }
