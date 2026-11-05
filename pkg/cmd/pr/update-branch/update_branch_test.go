@@ -18,22 +18,18 @@ import (
 )
 
 const (
-	prPath      = "/api/v1/repos/my-org/my-repo/pulls/7"
-	updatePath  = "/api/v1/repos/my-org/my-repo/pulls/7/update"
-	comparePath = "/api/v1/repos/my-org/my-repo/compare/feature...main"
+	prPath     = "/api/v1/repos/my-org/my-repo/pulls/7"
+	updatePath = "/api/v1/repos/my-org/my-repo/pulls/7/update"
 )
 
-func prJSON(state string, merged bool, headRepo string) string {
-	return fmt.Sprintf(`{"number":7,"title":"Fix the build","state":%q,"merged":%t,`+
-		`"head":{"ref":"feature","repo":{"full_name":%q}},`+
-		`"base":{"ref":"main","repo":{"full_name":"my-org/my-repo"}}}`, state, merged, headRepo)
+// prJSON is a pull request whose base branch tip is base1 and whose merge
+// base with the head branch is mergeBase.
+func prJSON(state string, merged bool, mergeBase string) string {
+	return fmt.Sprintf(`{"number":7,"title":"Fix the build","state":%q,"merged":%t,"merge_base":%q,`+
+		`"head":{"ref":"feature","sha":"head1"},"base":{"ref":"main","sha":"base1"}}`, state, merged, mergeBase)
 }
 
-var openPR = prJSON("open", false, "my-org/my-repo")
-
-func behind(n int) httpmock.Responder {
-	return httpmock.StringResponse(http.StatusOK, fmt.Sprintf(`{"total_commits":%d,"commits":[]}`, n))
-}
+var openPR = prJSON("open", false, "base0")
 
 func runOpts(reg *httpmock.Registry, rebase bool) (*UpdateBranchOptions, *bytes.Buffer, *bytes.Buffer) {
 	ios, _, stdout, stderr := iostreams.Test()
@@ -63,7 +59,6 @@ func TestUpdateBranchRun_Styles(t *testing.T) {
 			reg := &httpmock.Registry{}
 			defer reg.Verify(t)
 			reg.Register(httpmock.REST("GET", prPath), httpmock.StringResponse(http.StatusOK, openPR))
-			reg.Register(httpmock.REST("GET", comparePath), behind(2))
 			reg.Register(httpmock.QueryMatcher("POST", updatePath, url.Values{"style": {tt.wantStyle}}),
 				httpmock.StringResponse(http.StatusOK, ``))
 
@@ -81,57 +76,25 @@ func TestUpdateBranchRun_Styles(t *testing.T) {
 func TestUpdateBranchRun_AlreadyUpToDate(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
-	reg.Register(httpmock.REST("GET", prPath), httpmock.StringResponse(http.StatusOK, openPR))
-	reg.Register(httpmock.REST("GET", comparePath), behind(0))
+	reg.Register(httpmock.REST("GET", prPath), httpmock.StringResponse(http.StatusOK, prJSON("open", false, "base1")))
 
 	opts, stdout, stderr := runOpts(reg, false)
 	require.NoError(t, UpdateBranchRun(opts))
-	assert.Len(t, reg.Requests, 2, "no update for an up-to-date branch")
+	assert.Len(t, reg.Requests, 1, "no update for an up-to-date branch")
 	assert.Empty(t, stdout.String())
 	assert.Equal(t, "! The branch of pull request my-org/my-repo#7 (Fix the build) is already up to date\n", stderr.String())
 }
 
-func TestUpdateBranchRun_CompareSkipped(t *testing.T) {
-	tests := []struct {
-		name    string
-		pr      string
-		compare httpmock.Responder
-	}{
-		{name: "head in a fork", pr: prJSON("open", false, "someone/my-repo")},
-		{name: "compare refused", pr: openPR, compare: httpmock.StringResponse(http.StatusNotFound, `{}`)},
-		{name: "compare transport error", pr: openPR, compare: failing},
-		{name: "compare bad json", pr: openPR, compare: httpmock.StringResponse(http.StatusOK, `{`)},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			reg := &httpmock.Registry{}
-			defer reg.Verify(t)
-			reg.Register(httpmock.REST("GET", prPath), httpmock.StringResponse(http.StatusOK, tt.pr))
-			if tt.compare != nil {
-				reg.Register(httpmock.REST("GET", comparePath), tt.compare)
-			}
-			reg.Register(httpmock.REST("POST", updatePath), httpmock.StringResponse(http.StatusOK, ``))
-
-			opts, stdout, _ := runOpts(reg, false)
-			require.NoError(t, UpdateBranchRun(opts))
-			assert.Equal(t, "Updated the branch of pull request my-org/my-repo#7 (Fix the build)\n", stdout.String())
-		})
-	}
-}
-
-func TestUpdateBranchRun_EscapesBranchNames(t *testing.T) {
+func TestUpdateBranchRun_NoMergeBase(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
-	pr := `{"number":7,"title":"x","state":"open",` +
-		`"head":{"ref":"feat/a#1","repo":{"full_name":"my-org/my-repo"}},` +
-		`"base":{"ref":"release/1.0","repo":{"full_name":"my-org/my-repo"}}}`
-	reg.Register(httpmock.REST("GET", prPath), httpmock.StringResponse(http.StatusOK, pr))
-	reg.Register(httpmock.REST("GET", "/compare/feat/a#1...release/1.0"), behind(0))
+	reg.Register(httpmock.REST("GET", prPath),
+		httpmock.StringResponse(http.StatusOK, `{"number":7,"title":"Fix the build","state":"open"}`))
+	reg.Register(httpmock.REST("POST", updatePath), httpmock.StringResponse(http.StatusOK, ``))
 
-	opts, _, stderr := runOpts(reg, false)
+	opts, stdout, _ := runOpts(reg, false)
 	require.NoError(t, UpdateBranchRun(opts))
-	assert.Equal(t, "/api/v1/repos/my-org/my-repo/compare/feat/a%231...release/1.0", reg.Requests[1].URL.EscapedPath())
-	assert.Contains(t, stderr.String(), "is already up to date")
+	assert.Equal(t, "Updated the branch of pull request my-org/my-repo#7 (Fix the build)\n", stdout.String())
 }
 
 func TestUpdateBranchRun_NotOpen(t *testing.T) {
@@ -140,9 +103,9 @@ func TestUpdateBranchRun_NotOpen(t *testing.T) {
 		pr      string
 		wantErr string
 	}{
-		{name: "merged", pr: prJSON("closed", true, "my-org/my-repo"),
+		{name: "merged", pr: prJSON("closed", true, "base0"),
 			wantErr: "pull request my-org/my-repo#7 (Fix the build) can't be updated because it was already merged"},
-		{name: "closed", pr: prJSON("closed", false, "my-org/my-repo"),
+		{name: "closed", pr: prJSON("closed", false, "base0"),
 			wantErr: "pull request my-org/my-repo#7 (Fix the build) can't be updated because it is closed"},
 	}
 	for _, tt := range tests {
@@ -246,7 +209,6 @@ func TestUpdateBranchRun_Errors(t *testing.T) {
 			defer reg.Verify(t)
 			if tt.update {
 				reg.Register(httpmock.REST("GET", prPath), httpmock.StringResponse(http.StatusOK, openPR))
-				reg.Register(httpmock.REST("GET", comparePath), behind(1))
 			}
 			tt.stubs(reg)
 
@@ -296,7 +258,6 @@ func TestNewCmdUpdateBranch_Runs(t *testing.T) {
 			defer reg.Verify(t)
 			httpmock.ReplaceDefaultTransport(t, reg)
 			reg.Register(httpmock.REST("GET", prPath), httpmock.StringResponse(http.StatusOK, openPR))
-			reg.Register(httpmock.REST("GET", comparePath), behind(1))
 			reg.Register(httpmock.QueryMatcher("POST", updatePath, url.Values{"style": {tt.wantStyle}}),
 				httpmock.StringResponse(http.StatusOK, ``))
 
@@ -313,10 +274,7 @@ func TestNewCmdUpdateBranch_URLArgument(t *testing.T) {
 	httpmock.ReplaceDefaultTransport(t, reg)
 
 	reg.Register(httpmock.REST("GET", "/api/v1/repos/other/thing/pulls/5"),
-		httpmock.StringResponse(http.StatusOK, `{"number":5,"title":"x","state":"open",`+
-			`"head":{"ref":"feature","repo":{"full_name":"other/thing"}},`+
-			`"base":{"ref":"main","repo":{"full_name":"other/thing"}}}`))
-	reg.Register(httpmock.REST("GET", "/api/v1/repos/other/thing/compare/feature...main"), behind(1))
+		httpmock.StringResponse(http.StatusOK, `{"number":5,"title":"x","state":"open","merge_base":"a","base":{"sha":"b"}}`))
 	reg.Register(httpmock.REST("POST", "/api/v1/repos/other/thing/pulls/5/update"),
 		httpmock.StringResponse(http.StatusOK, ``))
 

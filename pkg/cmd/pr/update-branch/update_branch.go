@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
-	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/qubernetic/copia-cli/pkg/cmd/pr/shared"
@@ -80,26 +78,21 @@ func NewCmdUpdateBranch(f *cmdutil.Factory) *cobra.Command {
 	return cmd
 }
 
-type branchRef struct {
-	Ref  string `json:"ref"`
-	Repo struct {
-		FullName string `json:"full_name"`
-	} `json:"repo"`
-}
-
 type prState struct {
-	Title  string    `json:"title"`
-	State  string    `json:"state"`
-	Merged bool      `json:"merged"`
-	Head   branchRef `json:"head"`
-	Base   branchRef `json:"base"`
+	Title     string `json:"title"`
+	State     string `json:"state"`
+	Merged    bool   `json:"merged"`
+	MergeBase string `json:"merge_base"`
+	Base      struct {
+		Sha string `json:"sha"`
+	} `json:"base"`
 }
 
 // UpdateBranchRun updates the head branch with
 // POST /repos/{owner}/{repo}/pulls/{index}/update?style=merge|rebase.
 func UpdateBranchRun(opts *UpdateBranchOptions) error {
-	repoURL := fmt.Sprintf("https://%s/api/v1/repos/%s/%s", opts.Host, opts.Owner, opts.Repo)
-	prURL := fmt.Sprintf("%s/pulls/%d", repoURL, opts.Number)
+	prURL := fmt.Sprintf("https://%s/api/v1/repos/%s/%s/pulls/%d",
+		opts.Host, opts.Owner, opts.Repo, opts.Number)
 	ref := fmt.Sprintf("%s/%s#%d", opts.Owner, opts.Repo, opts.Number)
 
 	pr, err := fetchPR(opts, prURL, ref)
@@ -113,8 +106,9 @@ func UpdateBranchRun(opts *UpdateBranchOptions) error {
 		return fmt.Errorf("pull request %s (%s) can't be updated because it is closed", ref, pr.Title)
 	}
 	// Gitea answers an update of an up-to-date branch with HTTP 500, so the
-	// command asks first, as gh does.
-	if upToDate(opts, repoURL, pr) {
+	// command checks first, as gh does: base.sha is the tip of the base
+	// branch, and the head branch has it when it is their merge base.
+	if pr.MergeBase != "" && pr.MergeBase == pr.Base.Sha {
 		_, _ = fmt.Fprintf(opts.IO.ErrOut, "! The branch of pull request %s (%s) is already up to date\n", ref, pr.Title)
 		return nil
 	}
@@ -140,41 +134,6 @@ func UpdateBranchRun(opts *UpdateBranchOptions) error {
 
 	_, _ = fmt.Fprintf(opts.IO.Out, "Updated the branch of pull request %s (%s)\n", ref, pr.Title)
 	return nil
-}
-
-// upToDate reports whether the base branch has no commit that the head branch
-// lacks, with GET /repos/{owner}/{repo}/compare/{head}...{base}. It answers
-// false when it cannot tell (head branch in a fork, a failed compare), so the
-// update is sent and the server decides.
-func upToDate(opts *UpdateBranchOptions, repoURL string, pr *prState) bool {
-	if pr.Head.Repo.FullName != pr.Base.Repo.FullName {
-		return false
-	}
-	resp, err := send(opts, "GET", repoURL+"/compare/"+escapeBranch(pr.Head.Ref)+"..."+escapeBranch(pr.Base.Ref))
-	if err != nil {
-		return false
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return false
-	}
-	var cmp struct {
-		TotalCommits int `json:"total_commits"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&cmp); err != nil {
-		return false
-	}
-	return cmp.TotalCommits == 0
-}
-
-// escapeBranch escapes each segment of a branch name for a URL path and keeps
-// the slashes, which the compare route takes as they are.
-func escapeBranch(name string) string {
-	parts := strings.Split(name, "/")
-	for i, p := range parts {
-		parts[i] = url.PathEscape(p)
-	}
-	return strings.Join(parts, "/")
 }
 
 // fetchPR reads the pull request with GET /repos/{owner}/{repo}/pulls/{index}.
