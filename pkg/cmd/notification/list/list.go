@@ -89,6 +89,11 @@ func ListRun(opts *ListOptions) error {
 		return err
 	}
 
+	if err := opts.IO.StartPager(); err != nil {
+		_, _ = fmt.Fprintf(opts.IO.ErrOut, "failed to start pager: %v\n", err)
+	}
+	defer opts.IO.StopPager()
+
 	if opts.JSON.IsJSON() {
 		return opts.JSON.Print(opts.IO.Out, notifications)
 	}

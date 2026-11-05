@@ -82,6 +82,11 @@ func DiffRun(opts *DiffOptions) error {
 		return fmt.Errorf("API error (HTTP %d)", resp.StatusCode)
 	}
 
+	if err := opts.IO.StartPager(); err != nil {
+		_, _ = fmt.Fprintf(opts.IO.ErrOut, "failed to start pager: %v\n", err)
+	}
+	defer opts.IO.StopPager()
+
 	_, err = io.Copy(opts.IO.Out, resp.Body)
 	return err
 }

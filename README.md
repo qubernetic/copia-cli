@@ -100,6 +100,9 @@ $ copia-cli config list
 $ copia-cli config set browser "firefox --new-tab"
 $ copia-cli config get browser
 
+# Page long output through less; COPIA_PAGER= turns it off for one call
+$ copia-cli config set pager "less -R"
+
 # Print JSON with every field by default; COPIA_OUTPUT=table overrides it for one call
 $ copia-cli config set output json
 $ copia-cli issue list --jq '.[].title'

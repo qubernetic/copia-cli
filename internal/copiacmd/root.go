@@ -78,8 +78,9 @@ func NewFactory(ios *iostreams.IOStreams) *cmdutil.Factory {
 
 // Execute runs the root command of f with args. The command context carries
 // f.OutputFormat, the default output format of the commands that take
-// --json.
+// --json, and f.IOStreams pages through f.Pager.
 func Execute(f *cmdutil.Factory, args []string) error {
+	f.IOStreams.SetPager(f.Pager())
 	rootCmd := NewRootCmd(f)
 	rootCmd.SetArgs(args)
 	return rootCmd.ExecuteContext(cmdutil.WithOutputFormat(context.Background(), f.OutputFormat))

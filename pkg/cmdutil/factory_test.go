@@ -2,6 +2,7 @@ package cmdutil
 
 import (
 	"errors"
+	"os"
 	"testing"
 
 	"github.com/qubernetic/copia-cli/internal/config"
@@ -326,3 +327,34 @@ func TestFactory_OutputFormat(t *testing.T) {
 		})
 	}
 }
+
+func TestFactory_Pager(t *testing.T) {
+	tests := []struct {
+		name   string
+		env    *string
+		config string
+		pager  string
+		want   string
+	}{
+		{name: "none"},
+		{name: "PAGER", pager: "more", want: "more"},
+		{name: "config beats PAGER", config: "less -R", pager: "more", want: "less -R"},
+		{name: "env beats config", env: ptr("most"), config: "less -R", pager: "more", want: "most"},
+		{name: "empty env turns the pager off", env: ptr(""), config: "less -R", pager: "more", want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("COPIA_PAGER", "")
+			if tt.env == nil {
+				require.NoError(t, os.Unsetenv("COPIA_PAGER"))
+			} else {
+				t.Setenv("COPIA_PAGER", *tt.env)
+			}
+			t.Setenv("PAGER", tt.pager)
+			f := &Factory{Config: func() (*config.Config, error) { return &config.Config{Pager: tt.config}, nil }}
+			assert.Equal(t, tt.want, f.Pager())
+		})
+	}
+}
+
+func ptr(s string) *string { return &s }

@@ -45,6 +45,8 @@ The top-level keys beside `hosts` are the settings of `copia-cli config` (`outpu
 
 `output: json` makes every command that takes `--json` print all its fields as JSON when `--json` is not given, so `--jq` and `--template` work alone. `COPIA_OUTPUT` (`table` or `json`) overrides the key for one call, and an explicit `--json` field list overrides both.
 
+`pager` names the program the list and view commands and `pr diff` send their output to when standard output is a terminal, for example `less -R`. `COPIA_PAGER` overrides it (set but empty, it turns the pager off), and `PAGER` is used when neither is set. The value is split into words at whitespace and run without a shell.
+
 **Security considerations:**
 - File permissions are `600` (owner read/write only): every save writes a new `600` file to a temporary file beside it and renames it over the old one, so a failed save leaves the old file as it was. A save refuses a config path that is not a regular file (a symlink, for example) and a file the user cannot write; a config directory that group or others can write is set to `700`, and the save fails if that is not possible
 - On Windows, stored in `%USERPROFILE%\.config\copia\config.yml`
