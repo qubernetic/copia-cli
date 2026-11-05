@@ -149,7 +149,7 @@ func TestSet(t *testing.T) {
 		{
 			name:    "a name with a blank",
 			args:    []string{"i l", "issue list"},
-			wantErr: `could not create alias "i l": a name may not be empty, start with - or contain blanks`,
+			wantErr: `could not create alias i l: a name may not be empty, start with - or contain blanks`,
 		},
 		{
 			name:    "an expansion that is no command",

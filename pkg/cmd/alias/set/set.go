@@ -97,10 +97,10 @@ func setRun(opts *SetOptions) error {
 	}
 
 	if err := shared.ValidateName(opts.Root, opts.Name); err != nil {
-		return err
+		return fmt.Errorf("could not create alias %s: %w", opts.Name, err)
 	}
-	if err := shared.ValidateExpansion(opts.Root, opts.Name, expansion); err != nil {
-		return err
+	if err := shared.ValidateExpansion(opts.Root, expansion); err != nil {
+		return fmt.Errorf("could not create alias %s: %w", opts.Name, err)
 	}
 
 	cfg, err := config.Load(opts.ConfigPath)

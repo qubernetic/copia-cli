@@ -3,7 +3,7 @@
 package shared
 
 import (
-	"fmt"
+	"errors"
 	"strings"
 	"unicode"
 
@@ -11,27 +11,35 @@ import (
 	"github.com/qubernetic/copia-cli/pkg/cmdutil"
 )
 
+// The reasons an alias is refused. A caller names the alias and its action:
+// "could not create alias co: already a copia-cli command".
+var (
+	ErrInvalidName      = errors.New("a name may not be empty, start with - or contain blanks")
+	ErrCommandName      = errors.New("already a copia-cli command")
+	ErrInvalidExpansion = errors.New("expansion does not correspond to a copia-cli command")
+)
+
 // ValidateName fails when name is empty, starts with "-", contains a blank
 // or names a built-in command of root, which an alias may not shadow.
 func ValidateName(root *cobra.Command, name string) error {
 	if name == "" || strings.HasPrefix(name, "-") || strings.IndexFunc(name, unicode.IsSpace) >= 0 {
-		return fmt.Errorf("could not create alias %q: a name may not be empty, start with - or contain blanks", name)
+		return ErrInvalidName
 	}
 	if isCommand(root, []string{name}) {
-		return fmt.Errorf("could not create alias %s: already a copia-cli command", name)
+		return ErrCommandName
 	}
 	return nil
 }
 
 // ValidateExpansion fails when expansion is no shell alias (it does not
 // start with "!") and does not start with a built-in command of root.
-func ValidateExpansion(root *cobra.Command, name, expansion string) error {
+func ValidateExpansion(root *cobra.Command, expansion string) error {
 	if strings.HasPrefix(expansion, "!") {
 		return nil
 	}
 	words, err := cmdutil.SplitCommand(expansion)
 	if err != nil || !isCommand(root, words) {
-		return fmt.Errorf("could not create alias %s: expansion does not correspond to a copia-cli command", name)
+		return ErrInvalidExpansion
 	}
 	return nil
 }
