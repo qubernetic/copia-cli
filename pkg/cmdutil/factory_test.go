@@ -253,3 +253,45 @@ func TestFactory_ResolveHost_ConfigError(t *testing.T) {
 	_, err := f.ResolveHost()
 	assert.EqualError(t, err, "broken config")
 }
+
+func TestFactory_ConfigValue(t *testing.T) {
+	tests := []struct {
+		name   string
+		config func() (*config.Config, error)
+		key    string
+		want   string
+	}{
+		{
+			name:   "set key",
+			config: func() (*config.Config, error) { return &config.Config{Browser: "firefox"}, nil },
+			key:    "browser",
+			want:   "firefox",
+		},
+		{
+			name:   "default of an unset key",
+			config: func() (*config.Config, error) { return &config.Config{}, nil },
+			key:    "output",
+			want:   "table",
+		},
+		{
+			name:   "unknown key",
+			config: func() (*config.Config, error) { return &config.Config{}, nil },
+			key:    "hosts",
+		},
+		{
+			name:   "unreadable config",
+			config: func() (*config.Config, error) { return nil, errors.New("parsing config: bad yaml") },
+			key:    "browser",
+		},
+		{
+			name: "no config loader",
+			key:  "browser",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := &Factory{Config: tt.config}
+			assert.Equal(t, tt.want, f.ConfigValue(tt.key))
+		})
+	}
+}

@@ -36,6 +36,7 @@ graph TB
         org[org: list/view]
         notification[notification: list/read]
         browse[browse: open repo/issue/PR URL]
+        configcmd[config: get/set/list]
         completion[completion: bash/zsh/fish/powershell]
     end
     subgraph API
@@ -52,9 +53,10 @@ graph TB
     copiacmd --> build
     copiacmd --> config
     factory --> iostreams
-    copiacmd --> auth & repo & issue & pr & label & release & apicmd & search & org & notification & browse & completion
+    copiacmd --> auth & repo & issue & pr & label & release & apicmd & search & org & notification & browse & configcmd & completion
     auth & repo & issue & pr & label & release & apicmd & search & org & notification --> factory
     browse --> factory
+    configcmd --> factory
     completion --> iostreams
     auth & repo & issue & pr & label & release & apicmd & search & org & notification -.-> client
     client --> gitea
@@ -86,10 +88,11 @@ copia-cli/
 │   │   ├── org/                   # list, view
 │   │   ├── notification/          # list, read
 │   │   ├── browse/                # single command: browse [<number>]
+│   │   ├── config/                # get, set, list
 │   │   └── completion/            # single command: completion <shell> (bash, zsh, fish, powershell)
 │   ├── cmdutil/
 │   │   ├── factory.go             # Factory dependency injection
-│   │   ├── browser.go             # Browser opener (COPIA_BROWSER, BROWSER, OS default)
+│   │   ├── browser.go             # Browser opener (COPIA_BROWSER, config browser, BROWSER, OS default)
 │   │   ├── json.go                # --json field filter, --jq (gojq), --template, PrintJSON
 │   │   └── template.go            # --template execution and its gh helpers
 │   ├── iostreams/iostreams.go     # TTY-aware I/O, Test() helper
@@ -119,9 +122,9 @@ copia-cli/
 **Pattern:** `init()` falls back to `debug.ReadBuildInfo()` when `Version == "DEV"`
 
 ### `internal/config/`
-**Purpose:** YAML config management for multi-host credentials
+**Purpose:** YAML config management for multi-host credentials and the settings `output`, `browser`, `pager`, `editor` (top-level keys beside `hosts`)
 **Entry point:** `config.go`
-**Exports:** `Config`, `HostConfig`, `Load()`, `Save()`, `DefaultPath()`, `DefaultHost()`
+**Exports:** `Config`, `HostConfig`, `Option`, `Options`, `Load()`, `Save()`, `DefaultPath()`, `DefaultHost()`, `Get()`, `Set()`
 **Pattern:** XDG Base Dir, 0600 permissions, graceful empty-config on missing file
 
 ### `internal/docs/`
@@ -183,6 +186,7 @@ func xxxRun(opts *XxxOptions) error { ... }  // unexported, testable
 | `org` | list, view | Raw HTTP |
 | `notification` | list, read | Raw HTTP (read: PATCH one thread, PUT with `--all`) |
 | `browse` | none (single command `browse [<number>]`) | No API call; URL built client-side, opened with `cmdutil.Browser` |
+| `config` | get, set, list | No API call; reads and writes the settings of `config.yml`, `set` validates before it saves |
 | `completion` | none (single command `completion <shell>`: bash, zsh, fish, powershell) | No API call; Cobra script generation |
 
 ### `test/integration/`

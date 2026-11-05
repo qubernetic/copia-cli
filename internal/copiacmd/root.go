@@ -12,6 +12,7 @@ import (
 	authCmd "github.com/qubernetic/copia-cli/pkg/cmd/auth"
 	browseCmd "github.com/qubernetic/copia-cli/pkg/cmd/browse"
 	completionCmd "github.com/qubernetic/copia-cli/pkg/cmd/completion"
+	configCmd "github.com/qubernetic/copia-cli/pkg/cmd/config"
 	issueCmd "github.com/qubernetic/copia-cli/pkg/cmd/issue"
 	labelCmd "github.com/qubernetic/copia-cli/pkg/cmd/label"
 	notificationCmd "github.com/qubernetic/copia-cli/pkg/cmd/notification"
@@ -53,6 +54,7 @@ func NewRootCmd(f *cmdutil.Factory) *cobra.Command {
 	cmd.AddCommand(orgCmd.NewCmdOrg(f))
 	cmd.AddCommand(notificationCmd.NewCmdNotification(f))
 	cmd.AddCommand(browseCmd.NewCmdBrowse(f))
+	cmd.AddCommand(configCmd.NewCmdConfig(f))
 	cmd.AddCommand(completionCmd.NewCmdCompletion(f.IOStreams))
 
 	return cmd
@@ -68,8 +70,8 @@ func Main() int {
 			return config.Load(config.DefaultPath())
 		},
 		BaseRepo: cmdutil.DetectBaseRepo(),
-		Browser:  cmdutil.NewBrowser(),
 	}
+	f.Browser = cmdutil.NewBrowser(f.ConfigValue)
 
 	// Note: env vars (COPIA_TOKEN, COPIA_HOST) are resolved in
 	// Factory.ResolveAuth() with correct precedence:
