@@ -95,7 +95,9 @@ copia-cli/
 │   │   ├── browser.go             # Browser opener (COPIA_BROWSER, config browser, BROWSER, OS default)
 │   │   ├── json.go                # --json field filter, --jq (gojq), --template, PrintJSON
 │   │   └── template.go            # --template execution and its gh helpers
-│   ├── iostreams/iostreams.go     # TTY-aware I/O, Test() helper
+│   ├── iostreams/
+│   │   ├── iostreams.go           # TTY-aware I/O, Test() helper
+│   │   └── pager.go               # Pager (COPIA_PAGER, config pager, PAGER), run without a shell
 │   └── httpmock/registry.go       # HTTP transport mock for testing
 ├── test/integration/              # Live API integration tests
 ├── .github/workflows/             # CI, CodeQL, release, govulncheck, bump-go

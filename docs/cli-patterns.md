@@ -762,3 +762,19 @@ if opts.JSON.IsJSON() {
 - `--template` without `--json`, `--template` with `--jq`, and a template that does not parse (an unknown helper included) fail before any request. `cmdutil.ExecuteTemplate(w, data, tpl)` is the `--template` part on its own.
 - The default output format comes from `Factory.OutputFormat` (`COPIA_OUTPUT`, then the config key `output`, then `table`). `copiacmd.Execute` puts it into the command context with `cmdutil.WithOutputFormat`; when `--json` is not given and the format is `json`, the `PreRunE` of `AddJSONFlags` selects all valid fields before it checks `--jq` and `--template`, so `IsJSON` is true and no command needs code of its own. A command built without that context (a unit test) behaves as `table`. A flag that has no JSON form calls `opts.JSON.DropDefault()` to go back to the text output when the JSON comes only from the default (`issue view --comments`).
 
+### Pager
+
+A command whose output can be long starts the pager after its requests and before its first write to `opts.IO.Out`, as gh does:
+
+```go
+if err := opts.IO.StartPager(); err != nil {
+	_, _ = fmt.Fprintf(opts.IO.ErrOut, "failed to start pager: %v\n", err)
+}
+defer opts.IO.StopPager()
+```
+
+- `copiacmd.Execute` sets the command with `IOStreams.SetPager(f.Pager())`; `Factory.Pager` resolves `COPIA_PAGER` (set but empty turns the pager off), then the config key `pager`, then `PAGER`.
+- `StartPager` does nothing when standard output is not a TTY, when no pager is set or when it is `cat`. Otherwise it splits the command into words at whitespace, runs it without a shell (`exec.Command`, which refuses a match relative to the current directory) with `LESS=FRX` and `LV=-c` unless they are set, and replaces `Out` with the pager's input until `StopPager`.
+- When the user quits the pager before the end, the rest of the output is discarded instead of failing with a broken pipe, so no command handles that case.
+- The commands that page: `repo list`, `repo view`, `issue list`, `issue view`, `pr list`, `pr view`, `pr diff`, `label list`, `release list`, `org list`, `org view` and `notification list`. Their unit tests set `ios.SetStdoutTTY(true)` and a pager that cannot be started, which shows that the command calls `StartPager`; `pkg/iostreams/pager_test.go` runs the test binary as a fake pager.
+
