@@ -363,6 +363,7 @@ func TestSwitchRun_SaveError(t *testing.T) {
 func TestSwitchRun_TokenFromEnvironment(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yml")
 	require.NoError(t, os.WriteFile(path, []byte(twoAccountsOneHost), 0600))
+	t.Setenv("COPIA_HOST", "")
 	t.Setenv("COPIA_TOKEN", "env-token")
 
 	ios, _, stdout, stderr := iostreams.Test()
@@ -370,4 +371,49 @@ func TestSwitchRun_TokenFromEnvironment(t *testing.T) {
 	assert.Equal(t, "Switched active account for a.example.com to jane\n", stdout.String())
 	assert.Equal(t, "warning: COPIA_TOKEN is set and is used instead of the token of the active account\n", stderr.String())
 	assert.NotContains(t, stderr.String(), "env-token")
+}
+
+func TestSwitchRun_TokenFromEnvironmentOtherHost(t *testing.T) {
+	// COPIA_TOKEN goes to the default host, so moving default_host would send
+	// it to a host it was not issued for.
+	tests := []struct {
+		name   string
+		config string
+		host   string
+	}{
+		{name: "no flags", config: oneAccountPerHost},
+		{name: "host flag", config: twoHosts, host: "b.example.com"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yml")
+			require.NoError(t, os.WriteFile(path, []byte(tt.config), 0600))
+			t.Setenv("COPIA_HOST", "")
+			t.Setenv("COPIA_TOKEN", "env-token")
+
+			ios, _, stdout, stderr := iostreams.Test()
+			err := switchRun(&SwitchOptions{IO: ios, Host: tt.host, ConfigPath: path})
+			require.EqualError(t, err, "COPIA_TOKEN is set and is sent to the default host a.example.com; unset it before switching to an account on b.example.com")
+			assert.NotContains(t, err.Error(), "env-token")
+			assert.Empty(t, stdout.String())
+			assert.Empty(t, stderr.String())
+			data, err := os.ReadFile(path)
+			require.NoError(t, err)
+			assert.Equal(t, tt.config, string(data))
+		})
+	}
+}
+
+func TestSwitchRun_TokenAndHostFromEnvironment(t *testing.T) {
+	// With COPIA_HOST set, COPIA_TOKEN goes there whatever default_host is.
+	path := filepath.Join(t.TempDir(), "config.yml")
+	require.NoError(t, os.WriteFile(path, []byte(oneAccountPerHost), 0600))
+	t.Setenv("COPIA_HOST", "a.example.com")
+	t.Setenv("COPIA_TOKEN", "env-token")
+
+	ios, _, stdout, stderr := iostreams.Test()
+	require.NoError(t, switchRun(&SwitchOptions{IO: ios, ConfigPath: path}))
+	assert.Equal(t, "Switched active account for b.example.com to u2\n", stdout.String())
+	assert.Equal(t, "warning: COPIA_TOKEN is set and is used instead of the token of the active account\n", stderr.String())
 }

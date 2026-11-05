@@ -28,7 +28,7 @@ func NewCmdSwitch(f *cmdutil.Factory) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "switch",
 		Short: "Switch the active account",
-		Long:  "Switch the active account of a Copia host and make that host the default host. With --host and --user it switches to that account. With --host alone it switches to the host's account when the host has one, and to the other account when it has two. Without flags it switches to the other account when exactly two accounts exist in total. In every other case it fails and lists the accounts to choose from. The token of each account stays where it is stored; COPIA_TOKEN still takes precedence over the token of the active account.",
+		Long:  "Switch the active account of a Copia host and make that host the default host. With --host and --user it switches to that account. With --host alone it switches to the host's account when the host has one, and to the other account when it has two. Without flags it switches to the other account when exactly two accounts exist in total. In every other case it fails and lists the accounts to choose from. The token of each account stays where it is stored; COPIA_TOKEN still takes precedence over the token of the active account, and while it is set without COPIA_HOST the command refuses to switch to an account on another host.",
 		Example: "  $ copia-cli auth switch\n  $ copia-cli auth switch --host app.copia.io --user john",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -87,6 +87,12 @@ func switchRun(opts *SwitchOptions) error {
 			lines[i] = c.host + " " + c.login
 		}
 		return fmt.Errorf("unable to determine which account to switch to, specify --host and --user; accounts:\n%s", strings.Join(lines, "\n"))
+	}
+
+	// Without COPIA_HOST, COPIA_TOKEN is sent to the default host, so moving
+	// default_host would send it to a host it was not issued for.
+	if defaultHost, _ := cfg.DefaultHost(); os.Getenv("COPIA_TOKEN") != "" && os.Getenv("COPIA_HOST") == "" && target.host != defaultHost {
+		return fmt.Errorf("COPIA_TOKEN is set and is sent to the default host %s; unset it before switching to an account on %s", defaultHost, target.host)
 	}
 
 	if err := cfg.SwitchAccount(target.host, target.login); err != nil {
