@@ -89,6 +89,18 @@ hosts:
     users:
       u3: {}
 `
+	loginlessToken = `# untouched
+default_host: b.example.com
+hosts:
+  a.example.com:
+    token: file-token-old
+    users:
+      jane: {}
+  b.example.com:
+    user: u2
+    users:
+      u2: {}
+`
 )
 
 func writeConfig(t *testing.T, content string) string {
@@ -245,6 +257,12 @@ func TestNewCmdSwitch(t *testing.T) {
 			config:  twoHosts,
 			args:    []string{"--user", "jim"},
 			wantErr: "not logged in to any host as jim",
+		},
+		{
+			name:    "old-shape token without a login",
+			config:  loginlessToken,
+			args:    []string{"--host", "a.example.com", "--user", "jane"},
+			wantErr: "the token of a.example.com has no account; run auth login",
 		},
 		{
 			name:    "no accounts",

@@ -544,3 +544,20 @@ func TestConfig_SwitchAccount_OldShape(t *testing.T) {
 	assert.Equal(t, "u1", cfg.Hosts["a.example.com"].User)
 	assert.Equal(t, "t1", cfg.Hosts["a.example.com"].Users["u1"].Token)
 }
+
+func TestConfig_SwitchAccount_LoginlessToken(t *testing.T) {
+	// An old-shape token without a login must not be bound to an account it
+	// was not issued for.
+	cfg := &Config{DefaultHostName: "b.example.com", Hosts: map[string]*HostConfig{
+		"a.example.com": {Token: "T", Users: map[string]*UserConfig{"jane": {}}},
+		"b.example.com": {User: "u2", Users: map[string]*UserConfig{"u2": {}}},
+	}}
+
+	err := cfg.SwitchAccount("a.example.com", "jane")
+	require.EqualError(t, err, "the token of a.example.com has no account; run auth login")
+	hc := cfg.Hosts["a.example.com"]
+	assert.Equal(t, "T", hc.Token)
+	assert.Empty(t, hc.User)
+	assert.Empty(t, hc.Users["jane"].Token)
+	assert.Equal(t, "b.example.com", cfg.DefaultHostName)
+}
