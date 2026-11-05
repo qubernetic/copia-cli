@@ -191,3 +191,14 @@ func TestSetDefault_Unset(t *testing.T) {
 	assert.Empty(t, stdout)
 	assert.Equal(t, "! No default repository has been set\n", stderr)
 }
+
+func TestSetDefault_UnsetRemovesAMarkOnAnUnparsableRemote(t *testing.T) {
+	gitRepo(t, "origin", forkURL, "local", "file:///my-repo")
+	git(t, "config", "remote.local.copia-resolved", "base")
+
+	stdout, stderr, err := runCmd(t, "--unset")
+	require.NoError(t, err)
+	assert.Empty(t, stdout)
+	assert.Equal(t, "! No default repository has been set\n", stderr)
+	assert.Empty(t, marks(t))
+}

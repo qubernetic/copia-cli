@@ -87,12 +87,13 @@ func SetDefaultRun(opts *SetDefaultOptions) error {
 	}
 
 	if opts.UnsetMode {
+		// Also removes a mark on a remote that ListRemotes leaves out.
+		if err := cmdutil.UnsetDefaultRemote(); err != nil {
+			return err
+		}
 		if current == nil {
 			_, _ = fmt.Fprintln(opts.IO.ErrOut, "! No default repository has been set")
 			return nil
-		}
-		if err := cmdutil.UnsetDefaultRemote(); err != nil {
-			return err
 		}
 		_, _ = fmt.Fprintf(opts.IO.Out, "Unset %s as default repository\n", current.FullName())
 		return nil

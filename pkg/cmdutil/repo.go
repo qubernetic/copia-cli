@@ -85,11 +85,8 @@ func ListRemotes() ([]Remote, error) {
 		}
 	}
 
-	// Exit status 1 means no remote is marked.
-	out, _ = exec.Command("git", "config", "--get-regexp", `^remote\..*\.`+RemoteResolvedKey+`$`).Output()
 	resolved := map[string]bool{}
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		key, value, _ := strings.Cut(line, " ")
+	for key, value := range resolvedKeys() {
 		name := strings.TrimSuffix(strings.TrimPrefix(key, "remote."), "."+RemoteResolvedKey)
 		resolved[name] = value != ""
 	}
@@ -103,6 +100,23 @@ func ListRemotes() ([]Remote, error) {
 		remotes = append(remotes, Remote{Name: name, Owner: owner, Repo: repo, Resolved: resolved[name]})
 	}
 	return remotes, nil
+}
+
+// resolvedKeys returns the remote.<name>.copia-resolved keys of the current
+// repository with their values, including those of remotes ListRemotes leaves
+// out.
+func resolvedKeys() map[string]string {
+	// Exit status 1 means no remote is marked.
+	out, _ := exec.Command("git", "config", "--get-regexp", `^remote\..*\.`+RemoteResolvedKey+`$`).Output()
+	keys := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		key, value, _ := strings.Cut(line, " ")
+		keys[key] = value
+	}
+	return keys
 }
 
 // SetDefaultRemote marks the remote name as the default of the current
@@ -119,17 +133,13 @@ func SetDefaultRemote(name string) error {
 }
 
 // UnsetDefaultRemote removes the default mark from every remote of the
-// current repository.
+// current repository, also from a remote whose URL names no repository.
 func UnsetDefaultRemote() error {
-	remotes, err := ListRemotes()
-	if err != nil {
-		return err
+	if err := exec.Command("git", "rev-parse", "--git-dir").Run(); err != nil {
+		return fmt.Errorf("must be run from inside a git repository")
 	}
-	for _, r := range remotes {
-		if !r.Resolved {
-			continue
-		}
-		out, err := exec.Command("git", "config", "--unset-all", "remote."+r.Name+"."+RemoteResolvedKey).CombinedOutput()
+	for key := range resolvedKeys() {
+		out, err := exec.Command("git", "config", "--unset-all", key).CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("could not unset the default remote: %s", strings.TrimSpace(string(out)))
 		}

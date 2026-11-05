@@ -80,6 +80,7 @@ func TestListRemotes_NotGitRepo(t *testing.T) {
 	t.Chdir(dir)
 	_, err := ListRemotes()
 	assert.EqualError(t, err, "must be run from inside a git repository")
+	assert.EqualError(t, UnsetDefaultRemote(), "must be run from inside a git repository")
 }
 
 func TestSetDefaultRemote(t *testing.T) {
@@ -101,6 +102,22 @@ func TestSetDefaultRemote(t *testing.T) {
 	assert.Empty(t, string(out))
 
 	require.NoError(t, UnsetDefaultRemote(), "unset without a mark is not an error")
+}
+
+func TestUnsetDefaultRemote_UnparsableURL(t *testing.T) {
+	gitRepo(t,
+		"origin", "https://app.copia.io/my-org/my-repo.git",
+		"local", "file:///my-repo")
+	git(t, "config", "remote.local.copia-resolved", "base")
+
+	require.NoError(t, SetDefaultRemote("origin"))
+	assert.Equal(t, "remote.origin.copia-resolved base",
+		git(t, "config", "--get-regexp", `^remote\..*\.copia-resolved$`),
+		"the mark on a remote without an owner/repo URL is removed too")
+
+	require.NoError(t, UnsetDefaultRemote())
+	out, _ := exec.Command("git", "config", "--get-regexp", `^remote\..*\.copia-resolved$`).Output()
+	assert.Empty(t, string(out))
 }
 
 func TestDetectBaseRepo(t *testing.T) {
