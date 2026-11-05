@@ -330,6 +330,29 @@ Requesting a code review from you
 	}
 }
 
+func TestStatusRun_ClosedOnePage(t *testing.T) {
+	// Only the most recently updated page of closed pull requests is read:
+	// a repository can have thousands, and the list has no head filter.
+	var closed []pr
+	for n := 1; n <= cmdutil.MaxPageSize; n++ {
+		closed = append(closed, pr{number: n, title: "Old", head: fmt.Sprintf("old-%d", n), author: "bob", state: "closed"})
+	}
+
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	registerUser(reg)
+	registerOpen(reg, "[]")
+	reg.Register(httpmock.QueryMatcher("GET", pullsPath, url.Values{
+		"state": {"closed"}, "sort": {"recentupdate"}, "page": {"1"}, "limit": {fmt.Sprint(cmdutil.MaxPageSize)},
+	}), httpmock.WithHeader(httpmock.StringResponse(http.StatusOK, pulls(closed...)),
+		"Link", `<https://app.copia.io/api/v1/repos/my-org/my-repo/pulls?page=2>; rel="next"`))
+	registerReview(reg, "[]")
+
+	ios, _, stdout, _ := iostreams.Test()
+	require.NoError(t, StatusRun(newOpts(reg, ios, "feature/none")))
+	assert.Contains(t, stdout.String(), "There is no pull request associated with [feature/none]")
+}
+
 func TestStatusRun_JSON(t *testing.T) {
 	tests := []struct {
 		name   string

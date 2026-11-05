@@ -197,13 +197,15 @@ func StatusRun(opts *StatusOptions) error {
 		if i := slices.IndexFunc(open, onBranch); i >= 0 {
 			current = &open[i]
 		} else {
-			closed, err := cmdutil.FetchFilteredPages(opts.HTTPClient, pullsURL("closed"), opts.Token, 1, decodePRs, onBranch)
+			// The list has no head filter, so only the most recently
+			// updated page is searched instead of every closed pull request.
+			closed, err := cmdutil.FetchPages(opts.HTTPClient, pullsURL("closed"), opts.Token, cmdutil.MaxPageSize, decodePRs)
 			if err != nil {
 				return err
 			}
 			// gh leaves out a closed pull request of the default branch.
-			if len(closed) > 0 && closed[0].defaultBranch != branch {
-				current = &closed[0]
+			if i := slices.IndexFunc(closed, onBranch); i >= 0 && closed[i].defaultBranch != branch {
+				current = &closed[i]
 			}
 		}
 	}
