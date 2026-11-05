@@ -29,13 +29,46 @@ copia-cli follows an HTTP redirect only when it keeps the scheme, host and port 
 
 ### Token Storage
 
-The CLI will store tokens in `~/.config/copia/config.yml`:
+`auth login` stores the token in the OS keyring: the macOS Keychain, the Windows Credential Manager, or the Secret Service on Linux (GNOME Keyring, KWallet). The entry has the service `copia-cli:<host>` and the login as the account, so every account of a host has its own entry. The config file then keeps the host and the account, but no token.
+
+When the keyring is not available (no Secret Service running, a headless server, a container, a CI runner) or does not answer within three seconds (a locked keyring waiting for an unlock prompt), `auth login` stores the token in plain text in the config file instead and prints a warning on standard error that names the config file; the warning never contains the token. `--insecure-storage` stores the token in the config file on purpose, without trying the keyring:
+
+```bash
+copia-cli auth login --token <your-token> --insecure-storage
+```
+
+The snap has no `password-manager-service` plug, so the snap can never reach the keyring and always stores the token in the config file, with the warning.
+
+The commands read the stored token from the config file first, then from the keyring, so a token stored in the config file by an older version keeps working. There is no automatic migration: the next `auth login` on that host moves the token to the keyring and removes it from the config file. `auth logout` deletes the token from both places; when the keyring fails it still removes the account from the config file and prints a warning, so check the keyring by hand then.
+
+### Several Accounts on One Host
+
+`auth login` with the token of another account on the same host adds that account and makes it the host's active account; the accounts logged in before stay stored, each with its own token. Logging in again with an account the host already has updates its token and makes it active again. The commands always use the active account's token.
+
+`auth logout` removes the active account of the host, `auth logout --user <login>` (`-u`) removes the named one. When the active account is removed, the alphabetically first remaining account becomes active and `Switched active account for <host> to <login>` is printed; when the last account of a host is removed, the host is removed from the config file.
+
+```bash
+copia-cli auth logout --host app.copia.io --user john
+```
+
+`auth switch` makes another stored account active and its host the default host, then prints `Switched active account for <host> to <login>`. `--host` and `--user` (`-u`) name the account. `--host` alone is enough when the host has one account (the host becomes the default host) or two (the other one becomes active). Without flags it switches to the other account when exactly two accounts are stored in total, on one host or on two. Otherwise it fails and lists the stored accounts, one `<host> <login>` per line, so you can pick one with `--host` and `--user`; there is no prompt. An unknown host or login fails and leaves the config file as it was. No token is read or moved. `COPIA_TOKEN` applies only with `COPIA_HOST` (or `--host`), so a switch never sends it to the new default host; when it is set, a warning says so. A host entry of the old shape with a token but no login cannot be switched on; run `auth login` for that host first.
+
+```bash
+copia-cli auth switch
+copia-cli auth switch --host app.copia.io --user john
+```
+
+The config file is `~/.config/copia/config.yml`:
 
 ```yaml
+default_host: app.copia.io
 hosts:
   app.copia.io:
-    token: <encrypted-or-plaintext>
-    user: <username>
+    user: <the active account's login>
+    users:
+      <login>:
+        token: <plain text, only when stored in the config file>
+      <other login>:
     default_org: my-org
 output: json
 browser: firefox --new-tab
@@ -44,7 +77,11 @@ aliases:
   bugs: issue list --label $1
 ```
 
-The top-level keys beside `hosts` are the settings of `copia-cli config` (`output`, `browser`, `pager`, `editor`); `config set` changes one of them and keeps `hosts` and the tokens as they are. Every save keeps the keys copia-cli does not know, at the top level and under a host (such as `default_org` above), and writes them back unchanged.
+A host keeps several accounts, as in gh: `users` holds every account by its login (with a `token` key only when that token is stored in the config file), and `user` names the active account, whose token the commands use. A config of an older version, with `token` and `user` directly under the host, is read as one account and written in the new shape on the next save.
+
+`default_host` names the host the commands use when neither `--host` nor `COPIA_HOST` is given. `auth login` sets it to the host it logs in to, `auth switch` to the host of the account it switches to, and `auth logout` of that host moves it to the alphabetically first remaining host, or removes it when none remains. When it is unset (a config of an older version) or names a host that is no longer in `hosts`, the alphabetically first host is the default.
+
+The other top-level keys beside `hosts` are the settings of `copia-cli config` (`output`, `browser`, `pager`, `editor`); `config set` changes one of them and keeps `hosts` and the tokens as they are. Every save keeps the keys copia-cli does not know, at the top level and under a host (such as `default_org` above), and writes them back unchanged.
 
 `output: json` makes every command that takes `--json` print all its fields as JSON when `--json` is not given, so `--jq` and `--template` work alone. `COPIA_OUTPUT` (`table` or `json`) overrides the key for one call, and an explicit `--json` field list overrides both.
 
@@ -57,20 +94,25 @@ The top-level keys beside `hosts` are the settings of `copia-cli config` (`outpu
 **Security considerations:**
 - File permissions are `600` (owner read/write only): every save writes a new `600` file to a temporary file beside it and renames it over the old one, so a failed save leaves the old file as it was. A save refuses a config path that is not a regular file (a symlink, for example) and a file the user cannot write; a config directory that group or others can write is set to `700`, and the save fails if that is not possible
 - On Windows, stored in `%USERPROFILE%\.config\copia\config.yml`
-- Token can also be set via `COPIA_TOKEN` environment variable (takes precedence)
+- Token can also be set via `COPIA_TOKEN` environment variable, together with `COPIA_HOST` (or `--host`) naming the host it belongs to; without them, or with `--host` naming another host than `COPIA_HOST`, it is ignored with a warning (see [Auth Precedence](#auth-precedence))
 - Token can also be passed per-command via `--token` flag (takes highest precedence)
 
 ### Check the Auth Status
 
-`copia-cli auth status` lists every host in the config file with its user, its token and whether Copia accepts the token. `--host` limits the output to one host.
+`copia-cli auth status` lists every host in the config file in alphabetical order, the default host marked with `(default)`, and under each host every account, the active one first, with its user, `Active account: true` or `false`, its token, where the token is stored (`keyring` or `config file`) and whether Copia accepts the token. A host without a stored token shows `Token: none` and `No token stored`, and a keyring that fails shows `Token: none` and the error. `--host` limits the output to one host.
 
-`auth status` reads only the config file and the `--host` flag. It does not read `COPIA_HOST` or `COPIA_TOKEN`, so when either is set, the other commands may use a different host or token than the one `auth status` reports on.
+`auth status` reads only the stored tokens (config file and keyring) and the `--host` flag. It does not read `COPIA_HOST` or `COPIA_TOKEN`, so when either is set, the other commands may use a different host or token than the one `auth status` reports on.
 
 ```console
 $ copia-cli auth status
-app.copia.io
+app.copia.io (default)
   User: john
-  Token: ****************************************
+  Active account: true
+  Token: **************************************** (keyring)
+  Token valid
+  User: jane
+  Active account: false
+  Token: **************************************** (keyring)
   Token valid
 ```
 
@@ -81,13 +123,63 @@ copia-cli auth status --show-token
 copia-cli auth status --host app.copia.io --show-token
 ```
 
-**The output then contains the secret.** Do not run it where the terminal is recorded or shared, or in a CI log. The flag changes the output only; the config file is not touched. When standard output is not a terminal (a pipe, a redirect or a CI log), `auth status --show-token` still prints the token and writes one warning line to standard error.
+**The output then contains the secret.** Do not run it where the terminal is recorded or shared, or in a CI log. The flag changes the output only; neither the config file nor the keyring is touched. When standard output is not a terminal (a pipe, a redirect or a CI log), `auth status --show-token` still prints the token and writes one warning line to standard error.
+
+### Use the Token with git
+
+`copia-cli auth git-credential` is a hidden command that git runs as a [credential helper](https://git-scm.com/docs/gitcredentials), as `gh auth git-credential` does. `auth setup-git` configures it, as `gh auth setup-git` does:
+
+```bash
+copia-cli auth setup-git                       # every host you are logged in to
+copia-cli auth setup-git --host app.copia.io   # one host
+```
+
+For each host it writes two entries to the global git config (`~/.gitconfig`, or the file `GIT_CONFIG_GLOBAL` names). The empty first entry drops the helpers git reads before it for that host (earlier in the global file, under `credential.helper`, a key with the port or a key with a path). Helpers git reads after it, later in the global file or in the repository's config, the worktree's config or a `-c` option, still take part, as with gh: they receive `store` and `erase` with the token and answer `get` when copia-cli prints nothing:
+
+```bash
+git config --global --replace-all credential.https://app.copia.io.helper ''
+git config --global --add credential.https://app.copia.io.helper "!'/usr/local/bin/copia-cli' auth git-credential"
+```
+
+The path is the `copia-cli` in your `PATH` when that is a symlink to the running binary, so a symlink such as Homebrew's keeps working after an upgrade; otherwise (a hard link or another binary included) it is the path of the running binary. It is always single-quoted, so a path with spaces works. Running `auth setup-git` again changes nothing. A host you are not logged in to fails with a hint to run `auth login`; `--force` (only with `--host`) configures it anyway, for a login that follows. Without `--host` and with no host logged in, it fails. `COPIA_HOST` does not narrow it, as `GH_HOST` does not for gh; only `--host` does. `auth setup-git` reads no token and makes no API call.
+
+For `get` it reads git's `key=value` lines from standard input. When `protocol` is `https` and `host` is a configured host, it prints `username=<login>` and `password=<token>` of the host's active account, the token read from the config file or the OS keyring as for the other commands. The host matches regardless of ASCII case (a host name with a non-ASCII character never matches), and its port must match: a missing port is 443, so `copia.example.com:8443` matches only a request for port 8443. A path in the request is ignored. A `username` in the request (from a URL such as `https://jane@app.copia.io/...`) must be the active account's login. Anything else (`http`, an unknown host, another port, another user name, a host without a stored token) prints nothing and exits 0, so git falls back to its next helper or prompt. `store` and `erase` do nothing, since the token stays where `auth login` stored it.
+
+`--token`, `COPIA_TOKEN` and `COPIA_HOST` do not apply: git asks for each host separately, and the answer is always the stored token of that host. A stored token or login with a character outside printable ASCII, such as a line break, is refused with an error that names the host, never the token.
 
 ## Auth Precedence
 
+The host comes from `--host`, then `COPIA_HOST`, then the config's default host (`default_host`, or the alphabetically first host). The token comes from:
+
 1. `--token` flag (per-command)
-2. `COPIA_TOKEN` environment variable
-3. Config file (`~/.config/copia/config.yml`)
+2. `COPIA_TOKEN` environment variable, only when the host came from `COPIA_HOST`, or from `--host` with `COPIA_HOST` unset or naming the same host
+3. The stored token of the active account of the active host: the config file (`~/.config/copia/config.yml`) first, then the OS keyring
+
+`COPIA_TOKEN` is bound to the host you name, so it never goes to a host the config picks: `auth logout`, `auth switch`, `auth login` and the alphabetical fallback all move the default host. When `COPIA_TOKEN` is set but the host comes from the config, the commands use the stored token and print once on standard error:
+
+```text
+warning: COPIA_TOKEN is ignored because no host is named; set COPIA_HOST (or --host) to the host the token belongs to
+```
+
+When that host has no stored token, the `no token configured` error carries the same hint.
+
+`COPIA_HOST` names the host `COPIA_TOKEN` belongs to, so `--host` naming another host does not take the token along. The same host means the host name regardless of ASCII case and the same port, a missing port counting as 443: `a.example.com` and `A.example.com:443` are the same host, `a.example.com:8443` is another one. Host names compare ASCII-only, so a host name with a non-ASCII character is never the same host, not even itself: Unicode case folding would join names such as `xσ.example` and `xς.example` that are two hosts after IDNA. A host that does not parse as a host name with an optional port is never the same host either. In that case the commands use the stored token of the `--host` host and print once on standard error:
+
+```text
+warning: COPIA_TOKEN is ignored because --host names another host than COPIA_HOST; the token is sent only to the host COPIA_HOST names
+```
+
+When the `--host` host has no stored token, the `no token configured` error carries the same hint, and so does the `reading the token for <host>` error when the OS keyring fails. The token value appears in no output or error.
+
+`auth git-credential` (see [Use the Token with git](#use-the-token-with-git)) follows none of this: it answers git for the host git asks about, with that host's stored token.
+
+In CI, set both variables:
+
+```bash
+export COPIA_HOST=app.copia.io
+export COPIA_TOKEN="$COPIA_CI_TOKEN"
+copia-cli repo list
+```
 
 ## Alternative Auth Methods
 
@@ -126,25 +218,34 @@ Response:
 
 ## Multi-Instance Support
 
-The CLI should support multiple Copia instances (e.g., on-prem vs cloud):
+The config file holds several Copia instances (e.g., on-prem vs cloud):
 
 ```yaml
+default_host: app.copia.io
 hosts:
   app.copia.io:
-    token: abc123
     user: cbiro
+    users:
+      cbiro:
+        token: abc123
+      ci-bot:
+        token: def456
     default_org: my-org
   copia.internal.example.com:
-    token: xyz789
     user: cbiro
+    users:
+      cbiro:
+        token: xyz789
     default_org: InternalTeam
 ```
+
+The tokens above are stored in the config file (`--insecure-storage` or no keyring); a token in the keyring has its own entry per host and account (service `copia-cli:<host>`, account = the login) and no `token` key here.
 
 The active instance is determined by:
 1. `--host` flag
 2. `COPIA_HOST` environment variable
-3. Git remote URL of the current repo (auto-detect)
-4. First entry in config file
+3. The config key `default_host`, when it names a host in `hosts`
+4. The alphabetically first host in the config file
 
 The repository a command works on is determined by:
 1. `-R/--repo` flag

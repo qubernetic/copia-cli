@@ -4,6 +4,7 @@
 package cmdutil
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -17,54 +18,109 @@ type Factory struct {
 	Config   func() (*config.Config, error)
 	BaseRepo func() (string, string, error) // returns owner, repo
 	Browser  Browser
+	// Keyring is the OS keyring the stored tokens live in; nil reads the
+	// config file only.
+	Keyring config.TokenStore
 
 	// Overrides (flags only ��� env vars resolved in ResolveAuth)
 	Token string
 	Host  string
 	Repo  string // -R/--repo flag override for BaseRepo
+
+	// envTokenWarned is set once the warning that COPIA_TOKEN is ignored
+	// has been printed, so it appears at most once per process.
+	envTokenWarned bool
 }
 
-// ResolveAuth returns the host and token, resolving in order:
-// 1. --token/--host flags (highest priority)
-// 2. COPIA_TOKEN/COPIA_HOST env vars
-// 3. Config file (lowest priority)
+// envTokenIgnored explains why COPIA_TOKEN was not used: it is sent only to
+// a host --host or COPIA_HOST names, never to one the config picks.
+const envTokenIgnored = "COPIA_TOKEN is ignored because no host is named; set COPIA_HOST (or --host) to the host the token belongs to"
+
+// envTokenOtherHost explains why COPIA_TOKEN was not used: --host names
+// another host than COPIA_HOST, the host the token belongs to.
+const envTokenOtherHost = "COPIA_TOKEN is ignored because --host names another host than COPIA_HOST; the token is sent only to the host COPIA_HOST names"
+
+// ResolveAuth returns the host and token. The host comes from --host, then
+// COPIA_HOST, then the config's default host. The token comes from:
+// 1. --token (highest priority)
+// 2. COPIA_TOKEN, only when the host came from COPIA_HOST, or from --host
+// with COPIA_HOST unset or naming the same host, so the token never goes to
+// a host the config picks or to another host than COPIA_HOST names
+// 3. The stored token of the host's active account: the config file, then
+// the OS keyring (lowest priority)
+//
+// When COPIA_TOKEN is set but passed over, the stored token is used and a
+// warning goes to ErrOut once; the token value itself is never printed.
 func (f *Factory) ResolveAuth() (host, token string, err error) {
-	// 1. Flags (already set by Cobra if provided)
 	host = f.Host
 	token = f.Token
-
-	// 2. Env vars (only if flag not set)
+	envHost := os.Getenv("COPIA_HOST")
 	if host == "" {
-		host = os.Getenv("COPIA_HOST")
+		host = envHost
 	}
-	if token == "" {
-		token = os.Getenv("COPIA_TOKEN")
+	// reason says why COPIA_TOKEN does not apply to host, empty when it does.
+	reason := ""
+	switch {
+	case host == "":
+		reason = envTokenIgnored
+	case envHost != "" && !sameHost(host, envHost):
+		reason = envTokenOtherHost
+	}
+	envToken := os.Getenv("COPIA_TOKEN")
+	if token == "" && reason == "" {
+		token = envToken
+	}
+	// COPIA_TOKEN was passed over for the stored token of the host.
+	envTokenSkipped := token == "" && envToken != ""
+	hint := ""
+	if envTokenSkipped {
+		hint = ". " + reason
 	}
 
-	// 3. Config fallback
 	if host == "" || token == "" {
 		cfg, err := f.Config()
 		if err != nil {
 			return "", "", err
 		}
 		if host == "" {
-			h, _ := cfg.DefaultHost()
-			host = h
+			host, _ = cfg.DefaultHost()
 		}
 		if token == "" && host != "" {
-			if hc, ok := cfg.Hosts[host]; ok {
-				token = hc.Token
+			token, _, err = config.LookupToken(cfg, host, f.Keyring)
+			if err != nil && !errors.Is(err, config.ErrTokenNotFound) {
+				return "", "", fmt.Errorf("reading the token for %s: %w%s", host, err, hint)
 			}
 		}
 	}
 
 	if host == "" {
-		return "", "", fmt.Errorf("no host configured. Run 'copia auth login' first")
+		return "", "", fmt.Errorf("no host configured. Run 'copia auth login' first%s", hint)
 	}
 	if token == "" {
-		return "", "", fmt.Errorf("no token configured for %s. Run 'copia auth login' first", host)
+		return "", "", fmt.Errorf("no token configured for %s. Run 'copia auth login' first%s", host, hint)
+	}
+	if envTokenSkipped && !f.envTokenWarned {
+		f.envTokenWarned = true
+		if f.IOStreams != nil {
+			_, _ = fmt.Fprintln(f.IOStreams.ErrOut, "warning: "+reason)
+		}
 	}
 	return host, token, nil
+}
+
+// sameHost reports whether a and b name the same host: the host name
+// compared ASCII case-insensitively and the same port, a missing port being
+// 443. A host that does not parse or has a non-ASCII name is never the same
+// host.
+func sameHost(a, b string) bool {
+	u, err := ParseHost(a)
+	if err != nil {
+		return false
+	}
+	if _, err := ParseHost(b); err != nil {
+		return false
+	}
+	return MatchesHost(u, "https://"+b)
 }
 
 // ResolveHost returns the host in the order of ResolveAuth (--host flag,

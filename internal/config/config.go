@@ -4,6 +4,7 @@ package config
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -13,23 +14,65 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// HostConfig stores credentials for a single Copia/Gitea instance.
+// HostConfig stores the accounts of a single Copia/Gitea instance, as gh
+// does: Users holds every account by login and User names the active one.
 type HostConfig struct {
-	Token string `yaml:"token"`
+	// Token is the token of the config shape before several accounts, when
+	// it belonged to User. Load and Save move it to Users[User].
+	Token string `yaml:"token,omitempty"`
 	User  string `yaml:"user"`
+	Users map[string]*UserConfig `yaml:"users,omitempty"`
 	// Extra keeps the keys this version does not know, so a save writes
 	// them back unchanged.
 	Extra map[string]any `yaml:",inline"`
 }
 
+// UserConfig stores one account of a host. Token is empty when the token
+// lives in the OS keyring (see LookupToken).
+type UserConfig struct {
+	Token string `yaml:"token,omitempty"`
+	// Extra keeps the keys this version does not know.
+	Extra map[string]any `yaml:",inline"`
+}
+
+// Logins returns the logins of the host's accounts in alphabetical order.
+func (hc *HostConfig) Logins() []string {
+	return slices.Sorted(maps.Keys(hc.migrated().Users))
+}
+
+// migrated returns hc in the shape with several accounts: a token of the old
+// shape moves to the account of User, and User always has an account. The
+// result is a copy whenever it differs, so hc stays as it is.
+func (hc *HostConfig) migrated() *HostConfig {
+	if hc.User == "" || (hc.Token == "" && hc.Users[hc.User] != nil) {
+		return hc
+	}
+	out := *hc
+	out.Users = make(map[string]*UserConfig, len(hc.Users)+1)
+	maps.Copy(out.Users, hc.Users)
+	account := UserConfig{}
+	if old := hc.Users[hc.User]; old != nil {
+		account = *old
+	}
+	if account.Token == "" {
+		account.Token = hc.Token
+	}
+	out.Users[hc.User] = &account
+	out.Token = ""
+	return &out
+}
+
 // Config is the top-level configuration: the hosts and the settings that
 // `copia-cli config` reads and writes.
 type Config struct {
-	Hosts   map[string]*HostConfig `yaml:"hosts"`
-	Output  string                 `yaml:"output,omitempty"`
-	Browser string                 `yaml:"browser,omitempty"`
-	Pager   string                 `yaml:"pager,omitempty"`
-	Editor  string                 `yaml:"editor,omitempty"`
+	// DefaultHostName is the host `auth login` logged in to last; read it
+	// through DefaultHost, which also handles an unset or stale value.
+	DefaultHostName string                 `yaml:"default_host,omitempty"`
+	Hosts           map[string]*HostConfig `yaml:"hosts"`
+	Output          string                 `yaml:"output,omitempty"`
+	Browser         string                 `yaml:"browser,omitempty"`
+	Pager           string                 `yaml:"pager,omitempty"`
+	Editor          string                 `yaml:"editor,omitempty"`
 	// Aliases maps an alias name to its expansion, as `copia-cli alias`
 	// manages them.
 	Aliases map[string]string `yaml:"aliases,omitempty"`
@@ -140,7 +183,33 @@ func Load(path string) (*Config, error) {
 	if cfg.Hosts == nil {
 		cfg.Hosts = map[string]*HostConfig{}
 	}
+	for host, hc := range cfg.Hosts {
+		if hc == nil {
+			hc = &HostConfig{}
+		}
+		// An account written as a bare key ("jane:") has no value.
+		for login, u := range hc.Users {
+			if u == nil {
+				hc.Users[login] = &UserConfig{}
+			}
+		}
+		cfg.Hosts[host] = hc.migrated()
+	}
 	return cfg, nil
+}
+
+// migrated returns c with every host in the shape with several accounts,
+// leaving c and its hosts unchanged.
+func (c *Config) migrated() *Config {
+	out := *c
+	out.Hosts = make(map[string]*HostConfig, len(c.Hosts))
+	for host, hc := range c.Hosts {
+		if hc != nil {
+			hc = hc.migrated()
+		}
+		out.Hosts[host] = hc
+	}
+	return &out
 }
 
 // Save writes config to path as a new file with 0600 permissions. It refuses
@@ -150,7 +219,7 @@ func Load(path string) (*Config, error) {
 // same directory that replaces path only once it is complete, so a failed
 // save leaves the old file as it was.
 func Save(path string, cfg *Config) error {
-	data, err := yaml.Marshal(cfg)
+	data, err := yaml.Marshal(cfg.migrated())
 	if err != nil {
 		return fmt.Errorf("marshaling config: %w", err)
 	}
@@ -225,10 +294,79 @@ func writeAndClose(f *os.File, data []byte) error {
 	return f.Close()
 }
 
-// DefaultHost returns the first host entry. Returns empty string and nil if no hosts configured.
+// DefaultHost returns the host named by default_host. When default_host is
+// unset or names a host that is no longer configured, it returns the
+// alphabetically first host. Returns empty string and nil if no hosts
+// configured.
 func (c *Config) DefaultHost() (string, *HostConfig) {
-	for host, hc := range c.Hosts {
-		return host, hc
+	if hc, ok := c.Hosts[c.DefaultHostName]; ok {
+		return c.DefaultHostName, hc
 	}
-	return "", nil
+	hosts := c.HostNames()
+	if len(hosts) == 0 {
+		return "", nil
+	}
+	return hosts[0], c.Hosts[hosts[0]]
+}
+
+// HostNames returns the configured hosts in alphabetical order.
+func (c *Config) HostNames() []string {
+	return slices.Sorted(maps.Keys(c.Hosts))
+}
+
+// RemoveHost deletes a host. When it was the default host, default_host
+// moves to the alphabetically first remaining host, or is cleared when none
+// remains.
+func (c *Config) RemoveHost(host string) {
+	delete(c.Hosts, host)
+	if c.DefaultHostName != host {
+		return
+	}
+	c.DefaultHostName = ""
+	if hosts := c.HostNames(); len(hosts) > 0 {
+		c.DefaultHostName = hosts[0]
+	}
+}
+
+// RemoveAccount deletes the account user of host and returns the host's
+// active account afterwards. When user was the active account, the
+// alphabetically first remaining account becomes active. When no account
+// remains, the host is removed as RemoveHost does and the result is empty.
+func (c *Config) RemoveAccount(host, user string) string {
+	hc := c.Hosts[host]
+	if hc == nil {
+		return ""
+	}
+	hc = hc.migrated()
+	delete(hc.Users, user)
+	if len(hc.Users) == 0 {
+		c.RemoveHost(host)
+		return ""
+	}
+	if _, ok := hc.Users[hc.User]; !ok {
+		hc.User = hc.Logins()[0]
+	}
+	c.Hosts[host] = hc
+	return hc.User
+}
+
+// SwitchAccount makes user the active account of host and host the default
+// host. An unknown host or account changes nothing, and so does a host whose
+// old-shape token has no login: saving would bind that token to user.
+func (c *Config) SwitchAccount(host, user string) error {
+	hc := c.Hosts[host]
+	if hc == nil {
+		return fmt.Errorf("not logged in to %s", host)
+	}
+	if hc.User == "" && hc.Token != "" {
+		return fmt.Errorf("the token of %s has no account; run auth login", host)
+	}
+	hc = hc.migrated()
+	if _, ok := hc.Users[user]; !ok {
+		return fmt.Errorf("not logged in to %s account %s", host, user)
+	}
+	hc.User = user
+	c.Hosts[host] = hc
+	c.DefaultHostName = host
+	return nil
 }

@@ -178,7 +178,7 @@ func TestSet(t *testing.T) {
 
 			cfg, err := config.Load(path)
 			require.NoError(t, err)
-			assert.Equal(t, "secret", cfg.Hosts["app.copia.io"].Token)
+			assert.Equal(t, "secret", cfg.Hosts["app.copia.io"].Users["john"].Token)
 			info, err := os.Stat(path)
 			require.NoError(t, err)
 			assert.Equal(t, os.FileMode(0600), info.Mode().Perm())

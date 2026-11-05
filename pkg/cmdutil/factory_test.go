@@ -9,6 +9,7 @@ import (
 	"github.com/qubernetic/copia-cli/pkg/iostreams"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/zalando/go-keyring"
 )
 
 func TestFactory_ResolveAuth_FlagOverride(t *testing.T) {
@@ -69,6 +70,8 @@ func TestFactory_ResolveAuth_FlagBeatsEnv(t *testing.T) {
 }
 
 func TestFactory_ResolveAuth_ConfigFallback(t *testing.T) {
+	t.Setenv("COPIA_TOKEN", "")
+	t.Setenv("COPIA_HOST", "")
 	ios, _, _, _ := iostreams.Test()
 	f := &Factory{
 		IOStreams: ios,
@@ -87,7 +90,331 @@ func TestFactory_ResolveAuth_ConfigFallback(t *testing.T) {
 	assert.Equal(t, "config-token", token)
 }
 
+func TestFactory_ResolveAuth_StoredToken(t *testing.T) {
+	tests := []struct {
+		name       string
+		host       *config.HostConfig
+		keyringErr error
+		noKeyring  bool
+		wantToken  string
+		wantErr    string
+	}{
+		{
+			name:      "keyring token",
+			host:      &config.HostConfig{User: "john"},
+			wantToken: "keyring-token",
+		},
+		{
+			name:      "config file token before keyring",
+			host:      &config.HostConfig{User: "john", Token: "file-token"},
+			wantToken: "file-token",
+		},
+		{
+			name: "keyring token of the active account",
+			host: &config.HostConfig{User: "jane", Users: map[string]*config.UserConfig{
+				"john": {Token: "file-token"}, "jane": {},
+			}},
+			wantToken: "keyring-token-jane",
+		},
+		{
+			name: "config file token of the active account",
+			host: &config.HostConfig{User: "john", Users: map[string]*config.UserConfig{
+				"john": {Token: "file-token"}, "jane": {},
+			}},
+			wantToken: "file-token",
+		},
+		{
+			name:      "no keyring store",
+			host:      &config.HostConfig{User: "john"},
+			noKeyring: true,
+			wantErr:   "no token configured for app.copia.io",
+		},
+		{
+			name:       "keyring unavailable",
+			host:       &config.HostConfig{User: "john"},
+			keyringErr: errors.New("no secret service"),
+			wantErr:    "no secret service",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("COPIA_TOKEN", "")
+			t.Setenv("COPIA_HOST", "")
+			keyring.MockInit()
+			require.NoError(t, keyring.Set("copia-cli:app.copia.io", "john", "keyring-token"))
+			require.NoError(t, keyring.Set("copia-cli:app.copia.io", "jane", "keyring-token-jane"))
+			if tt.keyringErr != nil {
+				keyring.MockInitWithError(tt.keyringErr)
+				t.Cleanup(keyring.MockInit)
+			}
+			ios, _, _, _ := iostreams.Test()
+			f := &Factory{
+				IOStreams: ios,
+				Config: func() (*config.Config, error) {
+					return &config.Config{Hosts: map[string]*config.HostConfig{"app.copia.io": tt.host}}, nil
+				},
+			}
+			if !tt.noKeyring {
+				f.Keyring = config.NewKeyringStore()
+			}
+
+			host, token, err := f.ResolveAuth()
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, "app.copia.io", host)
+			assert.Equal(t, tt.wantToken, token)
+		})
+	}
+}
+
+// TestFactory_ResolveAuth_EnvTokenOnlyForNamedHost pins that COPIA_TOKEN is
+// sent only to the host --host or COPIA_HOST names, never to a host the
+// config picks, and that its value appears in no output or error.
+func TestFactory_ResolveAuth_EnvTokenOnlyForNamedHost(t *testing.T) {
+	const envToken = "env-secret-token"
+	const hint = "COPIA_TOKEN is ignored because no host is named; set COPIA_HOST (or --host) to the host the token belongs to"
+	const warning = "warning: " + hint + "\n"
+	const otherHostHint = "COPIA_TOKEN is ignored because --host names another host than COPIA_HOST; the token is sent only to the host COPIA_HOST names"
+	const otherHostWarning = "warning: " + otherHostHint + "\n"
+	twoHosts := map[string]*config.HostConfig{
+		"a.example.com": {Token: "token-a"},
+		"b.example.com": {Token: "token-b"},
+	}
+	tests := []struct {
+		name        string
+		flagHost    string
+		flagToken   string
+		envHost     string
+		defaultHost string
+		hosts       map[string]*config.HostConfig
+		keyringErr  error
+		wantHost    string
+		wantToken   string
+		wantWarning string
+		wantErr     string
+	}{
+		{
+			name:      "COPIA_HOST names the host",
+			envHost:   "b.example.com",
+			hosts:     twoHosts,
+			wantHost:  "b.example.com",
+			wantToken: envToken,
+		},
+		{
+			name:      "COPIA_HOST names a host without a stored token",
+			envHost:   "new.example.com",
+			hosts:     twoHosts,
+			wantHost:  "new.example.com",
+			wantToken: envToken,
+		},
+		{
+			name:      "--host names the host",
+			flagHost:  "b.example.com",
+			hosts:     twoHosts,
+			wantHost:  "b.example.com",
+			wantToken: envToken,
+		},
+		{
+			name:        "host from default_host",
+			defaultHost: "b.example.com",
+			hosts:       twoHosts,
+			wantHost:    "b.example.com",
+			wantToken:   "token-b",
+			wantWarning: warning,
+		},
+		{
+			name:        "host from the alphabetical fallback",
+			hosts:       twoHosts,
+			wantHost:    "a.example.com",
+			wantToken:   "token-a",
+			wantWarning: warning,
+		},
+		{
+			name:        "config host without a stored token",
+			defaultHost: "a.example.com",
+			hosts:       map[string]*config.HostConfig{"a.example.com": {}},
+			wantErr:     "no token configured for a.example.com. Run 'copia auth login' first. " + hint,
+		},
+		{
+			name:    "no host anywhere",
+			hosts:   map[string]*config.HostConfig{},
+			wantErr: "no host configured. Run 'copia auth login' first. " + hint,
+		},
+		{
+			name:        "--host names another host than COPIA_HOST",
+			flagHost:    "b.example.com",
+			envHost:     "a.example.com",
+			hosts:       twoHosts,
+			wantHost:    "b.example.com",
+			wantToken:   "token-b",
+			wantWarning: otherHostWarning,
+		},
+		{
+			name:     "--host names another host than COPIA_HOST without a stored token",
+			flagHost: "b.example.com",
+			envHost:  "a.example.com",
+			hosts:    map[string]*config.HostConfig{"a.example.com": {Token: "token-a"}},
+			wantErr:  "no token configured for b.example.com. Run 'copia auth login' first. " + otherHostHint,
+		},
+		{
+			name:      "--host names COPIA_HOST in another case",
+			flagHost:  "a.example.com",
+			envHost:   "A.example.com",
+			hosts:     twoHosts,
+			wantHost:  "a.example.com",
+			wantToken: envToken,
+		},
+		{
+			name:      "--host names COPIA_HOST with the default port",
+			flagHost:  "a.example.com:443",
+			envHost:   "a.example.com",
+			hosts:     twoHosts,
+			wantHost:  "a.example.com:443",
+			wantToken: envToken,
+		},
+		{
+			name:      "COPIA_HOST names --host with the default port",
+			flagHost:  "a.example.com",
+			envHost:   "a.example.com:443",
+			hosts:     twoHosts,
+			wantHost:  "a.example.com",
+			wantToken: envToken,
+		},
+		{
+			name:        "--host names COPIA_HOST with another port",
+			flagHost:    "a.example.com:8443",
+			envHost:     "a.example.com",
+			hosts:       map[string]*config.HostConfig{"a.example.com:8443": {Token: "token-8443"}},
+			wantHost:    "a.example.com:8443",
+			wantToken:   "token-8443",
+			wantWarning: otherHostWarning,
+		},
+		{
+			name:        "COPIA_HOST does not parse",
+			flagHost:    "a.example.com",
+			envHost:     "a.example.com/path",
+			hosts:       twoHosts,
+			wantHost:    "a.example.com",
+			wantToken:   "token-a",
+			wantWarning: otherHostWarning,
+		},
+		{
+			name:        "--host does not parse",
+			flagHost:    "user@a.example.com",
+			envHost:     "a.example.com",
+			hosts:       map[string]*config.HostConfig{"user@a.example.com": {Token: "token-user"}},
+			wantHost:    "user@a.example.com",
+			wantToken:   "token-user",
+			wantWarning: otherHostWarning,
+		},
+		{
+			// Unicode folds σ and ς together, IDNA does not: xn--x-0mb and
+			// xn--x-ymb are two hosts.
+			name:        "--host names COPIA_HOST with a Unicode case fold of sigma",
+			flagHost:    "xς.example",
+			envHost:     "xσ.example",
+			hosts:       map[string]*config.HostConfig{"xς.example": {Token: "token-final-sigma"}},
+			wantHost:    "xς.example",
+			wantToken:   "token-final-sigma",
+			wantWarning: otherHostWarning,
+		},
+		{
+			name:        "--host names COPIA_HOST with a Kelvin sign for k",
+			flagHost:    "Kspace.example",
+			envHost:     "kspace.example",
+			hosts:       map[string]*config.HostConfig{"Kspace.example": {Token: "token-kelvin"}},
+			wantHost:    "Kspace.example",
+			wantToken:   "token-kelvin",
+			wantWarning: otherHostWarning,
+		},
+		{
+			name:       "--host names another host than COPIA_HOST with the keyring unavailable",
+			flagHost:   "b.example.com",
+			envHost:    "a.example.com",
+			hosts:      map[string]*config.HostConfig{"b.example.com": {User: "john"}},
+			keyringErr: errors.New("no secret service"),
+			wantErr:    "reading the token for b.example.com: OS keyring: no secret service. " + otherHostHint,
+		},
+		{
+			name:      "--token beats COPIA_TOKEN with another host than COPIA_HOST",
+			flagToken: "flag-token",
+			flagHost:  "b.example.com",
+			envHost:   "a.example.com",
+			hosts:     twoHosts,
+			wantHost:  "b.example.com",
+			wantToken: "flag-token",
+		},
+		{
+			name:      "--token beats COPIA_TOKEN with COPIA_HOST",
+			flagToken: "flag-token",
+			envHost:   "b.example.com",
+			hosts:     twoHosts,
+			wantHost:  "b.example.com",
+			wantToken: "flag-token",
+		},
+		{
+			name:      "--token beats COPIA_TOKEN with --host",
+			flagToken: "flag-token",
+			flagHost:  "b.example.com",
+			hosts:     twoHosts,
+			wantHost:  "b.example.com",
+			wantToken: "flag-token",
+		},
+		{
+			name:        "--token beats the stored token of the config host",
+			flagToken:   "flag-token",
+			defaultHost: "b.example.com",
+			hosts:       twoHosts,
+			wantHost:    "b.example.com",
+			wantToken:   "flag-token",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			keyring.MockInit()
+			if tt.keyringErr != nil {
+				keyring.MockInitWithError(tt.keyringErr)
+				t.Cleanup(keyring.MockInit)
+			}
+			t.Setenv("COPIA_TOKEN", envToken)
+			t.Setenv("COPIA_HOST", tt.envHost)
+			ios, _, stdout, stderr := iostreams.Test()
+			f := &Factory{
+				IOStreams: ios,
+				Host:      tt.flagHost,
+				Token:     tt.flagToken,
+				Keyring:   config.NewKeyringStore(),
+				Config: func() (*config.Config, error) {
+					return &config.Config{DefaultHostName: tt.defaultHost, Hosts: tt.hosts}, nil
+				},
+			}
+
+			for range 3 {
+				host, token, err := f.ResolveAuth()
+				if tt.wantErr != "" {
+					require.EqualError(t, err, tt.wantErr)
+					assert.NotContains(t, err.Error(), envToken)
+					continue
+				}
+				require.NoError(t, err)
+				assert.Equal(t, tt.wantHost, host)
+				assert.Equal(t, tt.wantToken, token)
+			}
+
+			assert.Equal(t, tt.wantWarning, stderr.String())
+			assert.Empty(t, stdout.String())
+			assert.NotContains(t, stderr.String(), envToken)
+		})
+	}
+}
+
 func TestFactory_ResolveAuth_NoConfig(t *testing.T) {
+	t.Setenv("COPIA_TOKEN", "")
+	t.Setenv("COPIA_HOST", "")
 	ios, _, _, _ := iostreams.Test()
 	f := &Factory{
 		IOStreams: ios,
@@ -358,3 +685,41 @@ func TestFactory_Pager(t *testing.T) {
 }
 
 func ptr(s string) *string { return &s }
+
+func TestFactory_DefaultHostOfThreeHosts(t *testing.T) {
+	tests := []struct {
+		name        string
+		defaultHost string
+		wantHost    string
+	}{
+		{name: "stored default host", defaultHost: "b.example.com", wantHost: "b.example.com"},
+		{name: "unset default host", wantHost: "a.example.com"},
+		{name: "stale default host", defaultHost: "gone.example.com", wantHost: "a.example.com"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("COPIA_HOST", "")
+			t.Setenv("COPIA_TOKEN", "")
+			ios, _, _, _ := iostreams.Test()
+			f := &Factory{IOStreams: ios, Config: func() (*config.Config, error) {
+				return &config.Config{DefaultHostName: tt.defaultHost, Hosts: map[string]*config.HostConfig{
+					"c.example.com": {Token: "token-c"},
+					"a.example.com": {Token: "token-a"},
+					"b.example.com": {Token: "token-b"},
+				}}, nil
+			}}
+
+			for range 50 {
+				host, err := f.ResolveHost()
+				require.NoError(t, err)
+				require.Equal(t, tt.wantHost, host)
+
+				host, token, err := f.ResolveAuth()
+				require.NoError(t, err)
+				require.Equal(t, tt.wantHost, host)
+				require.Equal(t, "token-"+tt.wantHost[:1], token)
+			}
+		})
+	}
+}

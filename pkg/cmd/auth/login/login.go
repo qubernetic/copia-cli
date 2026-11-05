@@ -21,6 +21,10 @@ type LoginOptions struct {
 	Token      string
 	ConfigPath string
 	HTTPClient *http.Client
+	// Keyring receives the token; nil or InsecureStorage writes it to the
+	// config file instead.
+	Keyring         config.TokenStore
+	InsecureStorage bool
 }
 
 // NewCmdLogin creates the `copia auth login` command.
@@ -35,7 +39,25 @@ func NewCmdLogin(f *cmdutil.Factory) *cobra.Command {
 The default authentication mode is interactive, prompting for a token.
 Use --host and --token for non-interactive login in CI environments.
 
-Token precedence: --token flag > COPIA_TOKEN env var > config file.`,
+The host becomes the default host (the config key default_host), which the
+other commands use when neither --host nor COPIA_HOST is given.
+
+A host keeps several accounts. Logging in adds the account of the token, or
+updates it when it is known, and makes it the host's active account, whose
+token the other commands use. The other accounts of the host stay stored.
+
+The token is stored in the OS keyring (macOS Keychain, Windows Credential
+Manager, the Secret Service on Linux). When no keyring is available, the
+token is stored in plain text in the config file and a warning says so.
+Use --insecure-storage to store it in the config file on purpose.
+
+Token precedence: --token flag > COPIA_TOKEN env var, only when --host or
+COPIA_HOST names the host > the stored token of the host's active account
+(config file, then OS keyring). With the host taken from the config,
+COPIA_TOKEN is ignored with a warning. It is also ignored with a warning
+when --host names another host than COPIA_HOST (host name regardless of
+case, a missing port counting as 443), since the token belongs to the host
+COPIA_HOST names.`,
 		Example: `  # Interactive login
   $ copia-cli auth login
 
@@ -44,6 +66,7 @@ Token precedence: --token flag > COPIA_TOKEN env var > config file.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.IO = f.IOStreams
 			opts.ConfigPath = config.DefaultPath()
+			opts.Keyring = f.Keyring
 
 			if f.Token != "" {
 				opts.Token = f.Token
@@ -77,6 +100,7 @@ Token precedence: --token flag > COPIA_TOKEN env var > config file.`,
 
 	cmd.Flags().StringVar(&opts.Host, "host", "", "Copia instance hostname (default: app.copia.io)")
 	cmd.Flags().StringVar(&opts.Token, "token", "", "Personal access token")
+	cmd.Flags().BoolVar(&opts.InsecureStorage, "insecure-storage", false, "Save the token in plain text in the config file instead of the OS keyring")
 
 	return cmd
 }
@@ -119,15 +143,29 @@ func LoginRun(opts *LoginOptions) error {
 		return err
 	}
 
-	cfg.Hosts[opts.Host] = &config.HostConfig{
-		Token: opts.Token,
-		User:  user.Login,
+	var keyringErr error
+	fileToken := opts.Token
+	if opts.Keyring != nil && !opts.InsecureStorage {
+		keyringErr = opts.Keyring.Set(opts.Host, user.Login, opts.Token)
+		if keyringErr == nil {
+			// A token in the keyring leaves none in the config file, which
+			// also moves a token stored there by an earlier login.
+			fileToken = ""
+		}
 	}
+	// FileStore.Set adds or updates the account in cfg only and cannot fail;
+	// Save writes it. The account becomes the host's active account.
+	_ = config.FileStore{Config: cfg}.Set(opts.Host, user.Login, fileToken)
+	cfg.Hosts[opts.Host].User = user.Login
+	cfg.DefaultHostName = opts.Host
 
 	if err := config.Save(opts.ConfigPath, cfg); err != nil {
 		return err
 	}
 
+	if keyringErr != nil {
+		_, _ = fmt.Fprintf(opts.IO.ErrOut, "warning: could not store the token in the OS keyring (%v); stored it in the config file %s instead\n", keyringErr, opts.ConfigPath)
+	}
 	_, _ = fmt.Fprintf(opts.IO.Out, "Logged in as %s on %s\n", user.Login, opts.Host)
 	return nil
 }
