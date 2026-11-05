@@ -44,7 +44,7 @@ browser: firefox --new-tab
 The top-level keys beside `hosts` are the settings of `copia-cli config` (`output`, `browser`, `pager`, `editor`); `config set` changes one of them and keeps `hosts` and the tokens as they are.
 
 **Security considerations:**
-- File permissions should be `600` (owner read/write only); every save drops any permission bit beyond `600`
+- File permissions are `600` (owner read/write only): every save writes a new `600` file to a temporary file beside it and renames it over the old one, so a failed save leaves the old file as it was. A save refuses a config path that is not a regular file (a symlink, for example) and a file the user cannot write; a config directory that group or others can write is set to `700`, and the save fails if that is not possible
 - On Windows, stored in `%USERPROFILE%\.config\copia\config.yml`
 - Token can also be set via `COPIA_TOKEN` environment variable (takes precedence)
 - Token can also be passed per-command via `--token` flag (takes highest precedence)

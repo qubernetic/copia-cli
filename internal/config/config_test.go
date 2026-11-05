@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -210,4 +211,108 @@ func TestSave_RestoresMode0600(t *testing.T) {
 	info, err := os.Stat(path)
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0600), info.Mode().Perm())
+}
+
+func TestSave_RefusesSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks need extra privileges on Windows")
+	}
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.yml")
+	require.NoError(t, os.WriteFile(target, []byte("keep: me\n"), 0644))
+	path := filepath.Join(dir, "config.yml")
+	require.NoError(t, os.Symlink(target, path))
+
+	err := Save(path, &Config{Hosts: map[string]*HostConfig{"app.copia.io": {Token: "secret"}}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), path)
+	assert.Contains(t, err.Error(), "not a regular file")
+
+	data, err := os.ReadFile(target)
+	require.NoError(t, err)
+	assert.Equal(t, "keep: me\n", string(data))
+	info, err := os.Stat(target)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0644), info.Mode().Perm())
+}
+
+func TestSave_TightensWritableDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no Unix permission bits")
+	}
+	dir := filepath.Join(t.TempDir(), "copia")
+	require.NoError(t, os.Mkdir(dir, 0700))
+	require.NoError(t, os.Chmod(dir, 0777))
+
+	require.NoError(t, Save(filepath.Join(dir, "config.yml"), &Config{Hosts: map[string]*HostConfig{}}))
+
+	info, err := os.Stat(dir)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0700), info.Mode().Perm())
+}
+
+func TestSave_ReplacesWithNew0600File(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yml")
+	require.NoError(t, os.WriteFile(path, []byte("hosts: {}\n"), 0600))
+	if runtime.GOOS != "windows" {
+		require.NoError(t, os.Chmod(path, 0666))
+	}
+
+	require.NoError(t, Save(path, &Config{Hosts: map[string]*HostConfig{"app.copia.io": {Token: "t1", User: "u1"}}}))
+
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(path)
+		require.NoError(t, err)
+		assert.Equal(t, os.FileMode(0600), info.Mode().Perm())
+	}
+	loaded, err := Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, "t1", loaded.Hosts["app.copia.io"].Token)
+	leftovers, err := filepath.Glob(filepath.Join(dir, ".config-*"))
+	require.NoError(t, err)
+	assert.Empty(t, leftovers)
+}
+
+func TestSave_KeepsOldFileOnError(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs Unix permissions that bind the user")
+	}
+	dir := filepath.Join(t.TempDir(), "copia")
+	require.NoError(t, os.Mkdir(dir, 0700))
+	path := filepath.Join(dir, "config.yml")
+	require.NoError(t, Save(path, &Config{Hosts: map[string]*HostConfig{"app.copia.io": {Token: "old", User: "u1"}}}))
+	require.NoError(t, os.Chmod(dir, 0500))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0700) })
+
+	err := Save(path, &Config{Hosts: map[string]*HostConfig{"app.copia.io": {Token: "new", User: "u1"}}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "writing config")
+
+	loaded, err := Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, "old", loaded.Hosts["app.copia.io"].Token)
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	assert.Len(t, entries, 1)
+}
+
+func TestSave_RefusesReadOnlyFile(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs Unix permissions that bind the user")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yml")
+	require.NoError(t, os.WriteFile(path, []byte("hosts: {}\n"), 0400))
+
+	err := Save(path, &Config{Hosts: map[string]*HostConfig{"app.copia.io": {Token: "t1"}}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "writing config")
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, "hosts: {}\n", string(data))
+	leftovers, err := filepath.Glob(filepath.Join(dir, ".config-*"))
+	require.NoError(t, err)
+	assert.Empty(t, leftovers)
 }
