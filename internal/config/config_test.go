@@ -501,3 +501,46 @@ func TestConfig_RemoveAccount_LastAccountRemovesHost(t *testing.T) {
 	assert.NotContains(t, cfg.Hosts, "a.example.com")
 	assert.Equal(t, "b.example.com", cfg.DefaultHostName)
 }
+
+func TestConfig_SwitchAccount(t *testing.T) {
+	tests := []struct {
+		name        string
+		host        string
+		user        string
+		wantErr     string
+		wantActive  string
+		wantDefault string
+	}{
+		{name: "other account of the default host", host: "app.copia.io", user: "jane", wantActive: "jane", wantDefault: "app.copia.io"},
+		{name: "account of another host", host: "b.example.com", user: "u2", wantActive: "joe", wantDefault: "b.example.com"},
+		{name: "unknown host", host: "c.example.com", user: "u2", wantErr: "not logged in to c.example.com", wantActive: "joe", wantDefault: "app.copia.io"},
+		{name: "unknown login", host: "app.copia.io", user: "jim", wantErr: "not logged in to app.copia.io account jim", wantActive: "joe", wantDefault: "app.copia.io"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{DefaultHostName: "app.copia.io", Hosts: map[string]*HostConfig{
+				"app.copia.io":  {User: "joe", Users: map[string]*UserConfig{"joe": {Token: "t1"}, "jane": {}}},
+				"b.example.com": {User: "u2", Users: map[string]*UserConfig{"u2": {}}},
+			}}
+			err := cfg.SwitchAccount(tt.host, tt.user)
+			if tt.wantErr != "" {
+				require.EqualError(t, err, tt.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tt.wantActive, cfg.Hosts["app.copia.io"].User)
+			assert.Equal(t, tt.wantDefault, cfg.DefaultHostName)
+			assert.Equal(t, "t1", cfg.Hosts["app.copia.io"].Users["joe"].Token)
+		})
+	}
+}
+
+func TestConfig_SwitchAccount_OldShape(t *testing.T) {
+	cfg := &Config{Hosts: map[string]*HostConfig{"a.example.com": {Token: "t1", User: "u1"}}}
+
+	require.NoError(t, cfg.SwitchAccount("a.example.com", "u1"))
+	assert.Equal(t, "a.example.com", cfg.DefaultHostName)
+	assert.Equal(t, "u1", cfg.Hosts["a.example.com"].User)
+	assert.Equal(t, "t1", cfg.Hosts["a.example.com"].Users["u1"].Token)
+}
