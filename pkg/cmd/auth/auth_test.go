@@ -15,5 +15,5 @@ func TestNewCmdAuth_Subcommands(t *testing.T) {
 	for _, c := range cmd.Commands() {
 		names = append(names, c.Name())
 	}
-	assert.ElementsMatch(t, []string{"login", "logout", "status", "switch"}, names)
+	assert.ElementsMatch(t, []string{"git-credential", "login", "logout", "status", "switch"}, names)
 }
