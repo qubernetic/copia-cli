@@ -184,6 +184,23 @@ func TestSaveAndLoad_Settings(t *testing.T) {
 	assert.Contains(t, string(data), "output: json\n")
 }
 
+func TestSaveAndLoad_Aliases(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yml")
+	cfg := &Config{
+		Hosts:   map[string]*HostConfig{"app.copia.io": {Token: "t1", User: "u1"}},
+		Aliases: map[string]string{"il": "issue list -L 1", "x": "!echo hi"},
+	}
+	require.NoError(t, Save(path, cfg))
+
+	loaded, err := Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, cfg, loaded)
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "aliases:\n    il: issue list -L 1\n    x: '!echo hi'\n")
+}
+
 func TestSave_OmitsUnsetSettings(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yml")
 	require.NoError(t, Save(path, &Config{Hosts: map[string]*HostConfig{"app.copia.io": {Token: "t1", User: "u1"}}}))

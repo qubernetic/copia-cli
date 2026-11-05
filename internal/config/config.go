@@ -30,6 +30,9 @@ type Config struct {
 	Browser string                 `yaml:"browser,omitempty"`
 	Pager   string                 `yaml:"pager,omitempty"`
 	Editor  string                 `yaml:"editor,omitempty"`
+	// Aliases maps an alias name to its expansion, as `copia-cli alias`
+	// manages them.
+	Aliases map[string]string `yaml:"aliases,omitempty"`
 	// Extra keeps the top-level keys this version does not know, so a save
 	// writes them back unchanged.
 	Extra map[string]any `yaml:",inline"`
