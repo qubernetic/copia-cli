@@ -23,7 +23,7 @@ func NewCmdLogout(f *cmdutil.Factory) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "logout",
 		Short: "Log out of a Copia instance",
-		Long:  "Remove the stored authentication credentials for a Copia host. This does not revoke the token on the server.",
+		Long:  "Remove the stored authentication credentials for a Copia host. This does not revoke the token on the server. Without --host it logs out of the default host. When the default host is logged out, the alphabetically first remaining host becomes the default.",
 		Example: "  $ copia-cli auth logout --host app.copia.io",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.IO = f.IOStreams
@@ -61,7 +61,7 @@ func logoutRun(opts *LogoutOptions) error {
 		return fmt.Errorf("not logged in to %s", opts.Host)
 	}
 
-	delete(cfg.Hosts, opts.Host)
+	cfg.RemoveHost(opts.Host)
 
 	if err := config.Save(opts.ConfigPath, cfg); err != nil {
 		return err

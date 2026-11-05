@@ -28,7 +28,7 @@ func NewCmdStatus(f *cmdutil.Factory) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "status",
 		Short:   "View authentication status",
-		Long:    "Display the authentication state for each configured Copia host, including the active user, the masked token and token validity. Use --show-token to print the token itself.",
+		Long:    "Display the authentication state for each configured Copia host, including the active user, the masked token and token validity. The hosts are listed in alphabetical order and the default host is marked with (default). Use --show-token to print the token itself.",
 		Example: "  $ copia-cli auth status\n  $ copia-cli auth status --show-token",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.IO = f.IOStreams
@@ -66,10 +66,12 @@ func StatusRun(opts *StatusOptions) error {
 		_, _ = fmt.Fprintln(opts.IO.ErrOut, "warning: printing the token to a non-terminal output; it may end up in a log or a file")
 	}
 
-	for host, hc := range cfg.Hosts {
+	defaultHost, _ := cfg.DefaultHost()
+	for _, host := range cfg.HostNames() {
 		if opts.Host != "" && host != opts.Host {
 			continue
 		}
+		hc := cfg.Hosts[host]
 		tokenStatus := "Token valid"
 		if opts.HTTPClient != nil {
 			url := fmt.Sprintf("https://%s/api/v1/user", host)
@@ -95,7 +97,11 @@ func StatusRun(opts *StatusOptions) error {
 			token = hc.Token
 		}
 
-		_, _ = fmt.Fprintf(opts.IO.Out, "%s\n  User: %s\n  Token: %s\n  %s\n", host, hc.User, token, tokenStatus)
+		label := host
+		if host == defaultHost {
+			label += " (default)"
+		}
+		_, _ = fmt.Fprintf(opts.IO.Out, "%s\n  User: %s\n  Token: %s\n  %s\n", label, hc.User, token, tokenStatus)
 	}
 
 	return nil

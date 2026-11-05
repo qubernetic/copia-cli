@@ -68,7 +68,7 @@ func TestStatusRun_MasksToken(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.NotContains(t, stdout.String(), token)
-	assert.Equal(t, "app.copia.io\n  User: john\n  Token: "+strings.Repeat("*", 40)+"\n  Token valid\n", stdout.String())
+	assert.Equal(t, "app.copia.io (default)\n  User: john\n  Token: "+strings.Repeat("*", 40)+"\n  Token valid\n", stdout.String())
 }
 
 func TestStatusRun_ShowToken(t *testing.T) {
@@ -79,12 +79,12 @@ func TestStatusRun_ShowToken(t *testing.T) {
 	}{
 		{
 			name: "all hosts",
-			want: "app.copia.io\n  User: john\n  Token: abc123\n  Token valid\n",
+			want: "app.copia.io (default)\n  User: john\n  Token: abc123\n  Token valid\n",
 		},
 		{
 			name: "specific host",
 			host: "app.copia.io",
-			want: "app.copia.io\n  User: john\n  Token: abc123\n  Token valid\n",
+			want: "app.copia.io (default)\n  User: john\n  Token: abc123\n  Token valid\n",
 		},
 	}
 
@@ -322,7 +322,7 @@ func TestNewCmdStatus_AllHosts(t *testing.T) {
 	err := runStatusCmd(t, &cmdutil.Factory{IOStreams: ios})
 	require.NoError(t, err)
 	out := stdout.String()
-	assert.Contains(t, out, "app.copia.io\n  User: john\n  Token: ****\n  Token valid\n")
+	assert.Contains(t, out, "app.copia.io (default)\n  User: john\n  Token: ****\n  Token valid\n")
 	assert.Contains(t, out, "other.example.com\n  User: jane\n  Token: ***\n  Token invalid (HTTP 401)\n")
 	assert.Len(t, reg.Requests, 2)
 }
@@ -407,12 +407,12 @@ func TestStatusRun_RequestErrors(t *testing.T) {
 			responder: func(*http.Request) (*http.Response, error) {
 				return nil, errors.New("boom")
 			},
-			want: "app.copia.io\n  User: john\n  Token: ***\n  Error: ",
+			want: "app.copia.io (default)\n  User: john\n  Token: ***\n  Error: ",
 		},
 		{
 			name: "invalid host",
 			host: "bad host",
-			want: "bad host\n  User: john\n  Token: ***\n  Error: ",
+			want: "bad host (default)\n  User: john\n  Token: ***\n  Error: ",
 		},
 	}
 
@@ -451,5 +451,47 @@ func TestStatusRun_NoHTTPClient(t *testing.T) {
 	ios, _, stdout, _ := iostreams.Test()
 	err := StatusRun(&StatusOptions{IO: ios, ConfigPath: configPath})
 	require.NoError(t, err)
-	assert.Equal(t, "app.copia.io\n  User: john\n  Token: ***\n  Token valid\n", stdout.String())
+	assert.Equal(t, "app.copia.io (default)\n  User: john\n  Token: ***\n  Token valid\n", stdout.String())
+}
+
+func TestStatusRun_MarksDefaultHost(t *testing.T) {
+	tests := []struct {
+		name        string
+		defaultHost string
+		want        string
+	}{
+		{
+			name:        "stored default host",
+			defaultHost: "b.example.com",
+			want: "a.example.com\n  User: u1\n  Token: *\n  Token valid\n" +
+				"b.example.com (default)\n  User: u2\n  Token: *\n  Token valid\n" +
+				"c.example.com\n  User: u3\n  Token: *\n  Token valid\n",
+		},
+		{
+			name: "unset default host",
+			want: "a.example.com (default)\n  User: u1\n  Token: *\n  Token valid\n" +
+				"b.example.com\n  User: u2\n  Token: *\n  Token valid\n" +
+				"c.example.com\n  User: u3\n  Token: *\n  Token valid\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configPath := filepath.Join(t.TempDir(), "config.yml")
+			require.NoError(t, config.Save(configPath, &config.Config{
+				DefaultHostName: tt.defaultHost,
+				Hosts: map[string]*config.HostConfig{
+					"c.example.com": {Token: "c", User: "u3"},
+					"a.example.com": {Token: "a", User: "u1"},
+					"b.example.com": {Token: "b", User: "u2"},
+				},
+			}))
+
+			for range 20 {
+				ios, _, stdout, _ := iostreams.Test()
+				require.NoError(t, StatusRun(&StatusOptions{IO: ios, ConfigPath: configPath}))
+				require.Equal(t, tt.want, stdout.String())
+			}
+		})
+	}
 }

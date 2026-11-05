@@ -329,3 +329,32 @@ func TestLoginRun_KeepsOtherHosts(t *testing.T) {
 	assert.Len(t, cfg.Hosts, 2)
 	assert.Equal(t, "jane", cfg.Hosts["other.example.com"].User)
 }
+
+func TestLoginRun_SetsDefaultHost(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	reg.Register(httpmock.REST("GET", "/api/v1/user"),
+		httpmock.StringResponse(http.StatusOK, `{"login":"john","id":1}`))
+
+	configPath := filepath.Join(t.TempDir(), "config.yml")
+	require.NoError(t, config.Save(configPath, &config.Config{
+		DefaultHostName: "a.example.com",
+		Hosts: map[string]*config.HostConfig{
+			"a.example.com": {Token: "other", User: "jane"},
+		},
+	}))
+
+	ios, _, _, _ := iostreams.Test()
+	err := LoginRun(&LoginOptions{
+		IO:         ios,
+		Host:       "z.example.com",
+		Token:      "tok",
+		ConfigPath: configPath,
+		HTTPClient: &http.Client{Transport: reg},
+	})
+	require.NoError(t, err)
+
+	cfg, err := config.Load(configPath)
+	require.NoError(t, err)
+	assert.Equal(t, "z.example.com", cfg.DefaultHostName)
+}
