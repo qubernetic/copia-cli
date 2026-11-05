@@ -134,7 +134,7 @@ copia-cli auth setup-git                       # every host you are logged in to
 copia-cli auth setup-git --host app.copia.io   # one host
 ```
 
-For each host it writes two entries to the global git config (`~/.gitconfig`, or the file `GIT_CONFIG_GLOBAL` names); the empty first entry drops the other helpers for that host, so git stores the token nowhere else:
+For each host it writes two entries to the global git config (`~/.gitconfig`, or the file `GIT_CONFIG_GLOBAL` names). The empty first entry drops the helpers git reads before it for that host (earlier in the global file, under `credential.helper`, a key with the port or a key with a path). Helpers git reads after it, later in the global file or in the repository's config, the worktree's config or a `-c` option, still take part, as with gh: they receive `store` and `erase` with the token and answer `get` when copia-cli prints nothing:
 
 ```bash
 git config --global --replace-all credential.https://app.copia.io.helper ''

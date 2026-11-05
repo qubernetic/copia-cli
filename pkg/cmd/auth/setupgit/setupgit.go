@@ -36,7 +36,7 @@ func NewCmdSetupGit(f *cmdutil.Factory) *cobra.Command {
 		Short: "Set up git to use copia-cli as a credential helper",
 		Long: `Configure git to use copia-cli as the credential helper of every Copia host you are logged in to, so git clone, fetch and push over https authenticate with the token of the host's active account.
 
-For each host it writes two values of credential.https://<host>.helper to the global git config: an empty value, which drops every helper configured before it for that host, and then "!'<path of copia-cli>' auth git-credential". Running it again changes nothing.
+For each host it writes two values of credential.https://<host>.helper to the global git config: an empty value, which drops every helper configured before it for that host, and then "!'<path of copia-cli>' auth git-credential". A helper configured after it, later in the global config or in a repository's config, still takes part. Running it again changes nothing.
 
 With --host it configures that host only, which must be logged in unless --force is given.`,
 		Example: "  $ copia-cli auth setup-git\n  $ copia-cli auth setup-git --host app.copia.io",
@@ -132,9 +132,9 @@ func setupGitRun(opts *SetupGitOptions) error {
 	return nil
 }
 
-// configure sets copia-cli as the only credential helper of the https URL of
-// host in the global git config. The empty value first drops every helper
-// configured before it, so git asks no other helper for the host.
+// configure sets copia-cli as the credential helper of the https URL of host
+// in the global git config. The empty value first drops every helper
+// configured before it; one configured after it still takes part, as in gh.
 func configure(host, executable string) error {
 	key := "credential.https://" + host + ".helper"
 	helper := "!" + shellQuote(executable) + " auth git-credential"

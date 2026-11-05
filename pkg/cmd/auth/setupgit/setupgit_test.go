@@ -167,18 +167,72 @@ func TestSetupGitRun_Hosts(t *testing.T) {
 	}
 }
 
+// fakeHelper writes a credential helper script to dir that appends its name
+// and arguments to the file log, and returns its path.
+func fakeHelper(t *testing.T, dir, name, log string) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\necho "+name+" \"$@\" >> '"+strings.ReplaceAll(log, "'", `'\''`)+"'\n"), 0o700))
+	return path
+}
+
+// TestSetupGitRun_ReplacesEarlierHelpers checks, the way git reads it, that
+// the empty entry drops the helpers configured before it for the host, under
+// the plain key, the key with the default port and a key with a path.
 func TestSetupGitRun_ReplacesEarlierHelpers(t *testing.T) {
 	global := gitHome(t)
-	require.NoError(t, os.WriteFile(global, []byte("[credential \"https://a.example.com\"]\n\thelper = store\n\thelper = cache\n[credential]\n\thelper = osxkeychain\n"), 0o600))
+	dir := t.TempDir()
+	log := filepath.Join(dir, "log")
+	earlier := "[credential]\n\thelper = " + fakeHelper(t, dir, "plain", log) + "\n" +
+		"[credential \"https://a.example.com:443\"]\n\thelper = " + fakeHelper(t, dir, "port", log) + "\n" +
+		"[credential \"https://a.example.com/x/repo.git\"]\n\thelper = " + fakeHelper(t, dir, "path", log) + "\n"
+	require.NoError(t, os.WriteFile(global, []byte(earlier), 0o600))
+	exe := fakeHelper(t, dir, "copia-cli", log)
 	ios, _, _, _ := iostreams.Test()
 
-	err := setupGitRun(&SetupGitOptions{IO: ios, Config: loadConfig(t, twoHosts), Host: "a.example.com", Executable: "/usr/bin/copia-cli"})
+	err := setupGitRun(&SetupGitOptions{IO: ios, Config: loadConfig(t, twoHosts), Host: "a.example.com", Executable: exe})
 
 	require.NoError(t, err)
-	assert.Equal(t, []string{"", "!'/usr/bin/copia-cli' auth git-credential"}, helpers(t, "a.example.com"))
+	assert.Equal(t, []string{"", "!" + shellQuote(exe) + " auth git-credential"}, helpers(t, "a.example.com"))
 	out, err := exec.Command("git", "config", "--global", "--get-all", "credential.helper").Output()
 	require.NoError(t, err)
-	assert.Equal(t, "osxkeychain\n", string(out), "the helper of every other URL stays")
+	assert.Equal(t, filepath.Join(dir, "plain")+"\n", string(out), "the helper of every other URL stays")
+
+	for _, request := range []string{
+		"protocol=https\nhost=a.example.com\n\n",
+		"protocol=https\nhost=a.example.com\npath=x/repo.git\n\n",
+	} {
+		require.NoError(t, os.RemoveAll(log))
+		fill := exec.Command("git", "-c", "credential.useHttpPath=true", "credential", "fill")
+		fill.Stdin = strings.NewReader(request)
+		fill.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+		_, _ = fill.Output()
+
+		got, err := os.ReadFile(log)
+		require.NoError(t, err, "git did not run the helper")
+		assert.Equal(t, "copia-cli auth git-credential get\n", string(got), "only the copia-cli helper runs")
+	}
+}
+
+// TestSetupGitRun_LaterHelpersStay documents what the empty entry does not
+// do, as with gh: a helper configured after it still takes part.
+func TestSetupGitRun_LaterHelpersStay(t *testing.T) {
+	gitHome(t)
+	dir := t.TempDir()
+	log := filepath.Join(dir, "log")
+	exe := fakeHelper(t, dir, "copia-cli", log)
+	later := fakeHelper(t, dir, "later", log)
+	ios, _, _, _ := iostreams.Test()
+	require.NoError(t, setupGitRun(&SetupGitOptions{IO: ios, Config: loadConfig(t, twoHosts), Host: "a.example.com", Executable: exe}))
+
+	fill := exec.Command("git", "-c", "credential.helper="+later, "credential", "fill")
+	fill.Stdin = strings.NewReader("protocol=https\nhost=a.example.com\n\n")
+	fill.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	_, _ = fill.Output()
+
+	got, err := os.ReadFile(log)
+	require.NoError(t, err, "git did not run the helpers")
+	assert.Equal(t, "copia-cli auth git-credential get\nlater get\n", string(got), "a later helper still runs")
 }
 
 func TestSetupGitRun_RerunChangesNothing(t *testing.T) {
