@@ -32,6 +32,7 @@ type ListOptions struct {
 	Mention    string
 	Milestone  string
 	Search     string
+	Web        bool
 	JSON      cmdutil.JSONFlags
 }
 
@@ -61,17 +62,26 @@ Use --label to filter by one or more label names.
 Use --assignee, --author and --mention to filter by a user login; "@me" in
 --assignee and --author stands for the authenticated user.
 Use --milestone to filter by a milestone name and --search to match a keyword.
-Use --limit to control how many issues are returned (default 30).`,
+Use --limit to control how many issues are returned (default 30).
+
+Use --web to open the issue list in the browser instead; no API call is made,
+so no token is needed. The browser list applies --state, --search, --author
+and --assignee @me; --label, --milestone, --mention and other assignees are
+not applied there.`,
 		Aliases: []string{"ls"},
 		Example: `  $ copia-cli issue list
   $ copia-cli issue list --state closed
   $ copia-cli issue list --assignee @me --milestone v1.0
   $ copia-cli issue list --author jane --search "plc timeout"
+  $ copia-cli issue list --assignee @me --web
   $ copia-cli issue list --json number,title,state
   $ copia-cli issue list --json number,title --jq '.[].title'
   $ copia-cli issue list --json number,title --template '{{range .}}{{tablerow .number .title}}{{end}}'`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.IO = f.IOStreams
+			if opts.Web {
+				return openList(f, opts)
+			}
 			host, token, err := f.ResolveAuth()
 			if err != nil {
 				return err
@@ -98,6 +108,7 @@ Use --limit to control how many issues are returned (default 30).`,
 	cmd.Flags().StringVar(&opts.Mention, "mention", "", "Filter by mentioned `login`")
 	cmd.Flags().StringVarP(&opts.Milestone, "milestone", "m", "", "Filter by milestone `name`")
 	cmd.Flags().StringVarP(&opts.Search, "search", "S", "", "Search issues with a keyword `query`")
+	cmd.Flags().BoolVarP(&opts.Web, "web", "w", false, "List issues in the web browser")
 	cmdutil.AddJSONFlags(cmd, &opts.JSON, validJSONFields)
 
 	return cmd
@@ -114,10 +125,8 @@ func ListRun(opts *ListOptions) error {
 		return err
 	}
 
-	switch opts.State {
-	case "open", "closed", "all":
-	default:
-		return fmt.Errorf("invalid state %q: valid values are {open|closed|all}", opts.State)
+	if err := validateState(opts.State); err != nil {
+		return err
 	}
 
 	u := fmt.Sprintf("https://%s/api/v1/repos/%s/%s/issues?state=%s&type=issues",
@@ -159,6 +168,70 @@ func ListRun(opts *ListOptions) error {
 		_, _ = fmt.Fprintf(w, "#%d\t%s\t%s\t%s\n", i.Number, i.Title, i.State, labels)
 	}
 	return w.Flush()
+}
+
+func validateState(state string) error {
+	switch state {
+	case "open", "closed", "all":
+		return nil
+	}
+	return fmt.Errorf("invalid state %q: valid values are {open|closed|all}", state)
+}
+
+// openList opens the issue list of the repository in the browser with the
+// filters the Gitea web list reads: state, q, poster (a login) and type for
+// the signed-in user's own issues (@me). The web list takes labels,
+// milestones and other assignees only by ID, which would need an API call,
+// so those flags, like --mention, only produce a warning.
+func openList(f *cmdutil.Factory, opts *ListOptions) error {
+	if err := validateState(opts.State); err != nil {
+		return err
+	}
+	host, err := f.ResolveHost()
+	if err != nil {
+		return err
+	}
+	owner, repo, err := f.ResolveRepo()
+	if err != nil {
+		return err
+	}
+
+	q := url.Values{}
+	q.Set("state", opts.State)
+	if opts.Search != "" {
+		q.Set("q", opts.Search)
+	}
+
+	var ignored []string
+	if len(opts.Labels) > 0 {
+		ignored = append(ignored, "label")
+	}
+	switch opts.Assignee {
+	case "":
+	case "@me":
+		q.Set("type", "assigned")
+	default:
+		ignored = append(ignored, "assignee")
+	}
+	switch {
+	case opts.Author == "":
+	case opts.Author != "@me":
+		q.Set("poster", opts.Author)
+	case q.Has("type"):
+		// The web list has one type, already taken by --assignee @me.
+		ignored = append(ignored, "author")
+	default:
+		q.Set("type", "created_by")
+	}
+	if opts.Mention != "" {
+		ignored = append(ignored, "mention")
+	}
+	if opts.Milestone != "" {
+		ignored = append(ignored, "milestone")
+	}
+	cmdutil.WarnWebIgnored(opts.IO, ignored...)
+
+	return cmdutil.OpenInBrowser(opts.IO, f.Browser, cmdutil.RepoWebURL(host, owner, repo, "issues")+"?"+q.Encode())
 }
 
 // filterQuery returns the query parameters of the --assignee, --author,
