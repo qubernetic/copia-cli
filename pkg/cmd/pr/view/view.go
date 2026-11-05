@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/qubernetic/copia-cli/pkg/cmd/issue/shared"
@@ -13,7 +14,7 @@ import (
 	"github.com/qubernetic/copia-cli/pkg/iostreams"
 )
 
-var validJSONFields = []string{"number", "title", "body", "state", "mergeable", "user", "base", "head", "created_at", "html_url"}
+var validJSONFields = []string{"number", "title", "body", "state", "mergeable", "user", "base", "head", "labels", "created_at", "html_url"}
 
 // ViewOptions holds all inputs for the pr view command.
 type ViewOptions struct {
@@ -32,21 +33,26 @@ type userRef struct {
 	Login string `json:"login"`
 }
 
+type labelRef struct {
+	Name string `json:"name"`
+}
+
 type branchRef struct {
 	Label string `json:"label"`
 }
 
 type prDetail struct {
-	Number    int64     `json:"number"`
-	Title     string    `json:"title"`
-	Body      string    `json:"body"`
-	State     string    `json:"state"`
-	Mergeable bool      `json:"mergeable"`
-	HTMLURL   string    `json:"html_url"`
-	User      userRef   `json:"user"`
-	Base      branchRef `json:"base"`
-	Head      branchRef `json:"head"`
-	CreatedAt string    `json:"created_at"`
+	Number    int64      `json:"number"`
+	Title     string     `json:"title"`
+	Body      string     `json:"body"`
+	State     string     `json:"state"`
+	Mergeable bool       `json:"mergeable"`
+	HTMLURL   string     `json:"html_url"`
+	User      userRef    `json:"user"`
+	Base      branchRef  `json:"base"`
+	Head      branchRef  `json:"head"`
+	Labels    []labelRef `json:"labels"`
+	CreatedAt string     `json:"created_at"`
 }
 
 // NewCmdView creates the `copia pr view` command.
@@ -150,6 +156,13 @@ func ViewRun(opts *ViewOptions) error {
 	_, _ = fmt.Fprintf(opts.IO.Out, "#%d %s\n", pr.Number, pr.Title)
 	_, _ = fmt.Fprintf(opts.IO.Out, "State: %s  Author: %s  Mergeable: %v\n", pr.State, pr.User.Login, pr.Mergeable)
 	_, _ = fmt.Fprintf(opts.IO.Out, "Branches: %s <- %s\n", pr.Base.Label, pr.Head.Label)
+	if len(pr.Labels) > 0 {
+		names := make([]string, 0, len(pr.Labels))
+		for _, l := range pr.Labels {
+			names = append(names, l.Name)
+		}
+		_, _ = fmt.Fprintf(opts.IO.Out, "Labels: %s\n", strings.Join(names, ", "))
+	}
 
 	if pr.Body != "" {
 		_, _ = fmt.Fprintf(opts.IO.Out, "\n%s\n", pr.Body)

@@ -28,8 +28,7 @@ func TestRepoList_Run(t *testing.T) {
 
 	err := repolist.ListRun(opts)
 	require.NoError(t, err)
-	assert.NotEmpty(t, stdout.String())
-	t.Logf("Output: %s", stdout.String())
+	assertOutputNotEmpty(t, stdout.String())
 }
 
 func TestRepoList_JSON(t *testing.T) {
@@ -47,8 +46,7 @@ func TestRepoList_JSON(t *testing.T) {
 
 	err := repolist.ListRun(opts)
 	require.NoError(t, err)
-	assert.Contains(t, stdout.String(), "full_name")
-	t.Logf("Output: %s", stdout.String())
+	assertOutputContains(t, stdout.String(), "full_name")
 }
 
 func TestRepoView_Run(t *testing.T) {
@@ -67,9 +65,8 @@ func TestRepoView_Run(t *testing.T) {
 	err := repoview.ViewRun(opts)
 	require.NoError(t, err)
 	output := stdout.String()
-	assert.Contains(t, output, env.Owner+"/"+env.Repo)
-	assert.Contains(t, output, "Default branch")
-	t.Logf("Output: %s", output)
+	assertOutputContains(t, output, env.Owner+"/"+env.Repo)
+	assertOutputContains(t, output, "Default branch")
 }
 
 func TestRepoView_NotFound(t *testing.T) {
@@ -87,5 +84,5 @@ func TestRepoView_NotFound(t *testing.T) {
 
 	err := repoview.ViewRun(opts)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not found")
+	assert.ErrorContains(t, err, "not found")
 }

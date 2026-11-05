@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	releasecreate "github.com/qubernetic/copia-cli/pkg/cmd/release/create"
@@ -32,8 +31,7 @@ func TestRelease_Lifecycle(t *testing.T) {
 		Notes:      "Created by integration test. Will be deleted.",
 	})
 	require.NoError(t, err)
-	assert.Contains(t, createOut.String(), tag)
-	t.Logf("Create: %s", createOut.String())
+	assertOutputContains(t, createOut.String(), tag)
 
 	// Cleanup: delete at end
 	defer func() {
@@ -47,7 +45,6 @@ func TestRelease_Lifecycle(t *testing.T) {
 			Repo:       env.Repo,
 			Tag:        tag,
 		})
-		t.Logf("Deleted release %s", tag)
 	}()
 
 	// List releases
@@ -62,8 +59,7 @@ func TestRelease_Lifecycle(t *testing.T) {
 		Limit:      10,
 	})
 	require.NoError(t, err)
-	assert.Contains(t, listOut.String(), tag)
-	t.Logf("List: %s", listOut.String())
+	assertOutputContains(t, listOut.String(), tag)
 
 	// Delete release
 	deleteIO, deleteOut, _ := testIO()
@@ -77,6 +73,5 @@ func TestRelease_Lifecycle(t *testing.T) {
 		Tag:        tag,
 	})
 	require.NoError(t, err)
-	assert.Contains(t, deleteOut.String(), "Deleted")
-	t.Logf("Delete: %s", deleteOut.String())
+	assertOutputContains(t, deleteOut.String(), "Deleted")
 }

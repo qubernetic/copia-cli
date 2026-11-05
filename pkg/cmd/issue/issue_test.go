@@ -22,8 +22,14 @@ func TestNewCmdIssue_RegistersSubcommands(t *testing.T) {
 		"create":  "General commands",
 		"view":    "Targeted commands",
 		"close":   "Targeted commands",
+		"reopen":  "Targeted commands",
 		"comment": "Targeted commands",
 		"edit":    "Targeted commands",
+		"delete":  "Targeted commands",
+		"pin":     "Targeted commands",
+		"unpin":   "Targeted commands",
+		"lock":    "Targeted commands",
+		"unlock":  "Targeted commands",
 	}, groupOf)
 
 	var titles []string

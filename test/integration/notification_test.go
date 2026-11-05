@@ -13,7 +13,7 @@ import (
 
 func TestNotificationList_Run(t *testing.T) {
 	env := loadTestEnv(t)
-	ios, stdout, _ := testIO()
+	ios, _, _ := testIO()
 
 	opts := &notiflist.ListOptions{
 		IO:         ios,
@@ -25,12 +25,11 @@ func TestNotificationList_Run(t *testing.T) {
 
 	err := notiflist.ListRun(opts)
 	require.NoError(t, err)
-	t.Logf("Notifications: %s", stdout.String())
 }
 
 func TestNotificationList_All(t *testing.T) {
 	env := loadTestEnv(t)
-	ios, stdout, _ := testIO()
+	ios, _, _ := testIO()
 
 	opts := &notiflist.ListOptions{
 		IO:         ios,
@@ -46,5 +45,4 @@ func TestNotificationList_All(t *testing.T) {
 		// Copia/Gitea server returns 500 for ?all=true on some versions
 		t.Skipf("Skipping --all test: server returned error: %v", err)
 	}
-	t.Logf("All notifications: %s", stdout.String())
 }

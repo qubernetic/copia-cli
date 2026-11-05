@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/qubernetic/copia-cli/pkg/cmd/issue/shared"
+	prshared "github.com/qubernetic/copia-cli/pkg/cmd/pr/shared"
 	"github.com/qubernetic/copia-cli/pkg/cmdutil"
 	"github.com/qubernetic/copia-cli/pkg/iostreams"
 )
@@ -161,7 +162,7 @@ func CreateRun(opts *CreateOptions) error {
 	}
 
 	title := opts.Title
-	if opts.Draft && !hasWIPPrefix(title) {
+	if opts.Draft && !prshared.HasWIPPrefix(title) {
 		title = "WIP: " + title
 	}
 
@@ -234,13 +235,6 @@ func CreateRun(opts *CreateOptions) error {
 		return requestReviewers(opts, result.Number)
 	}
 	return nil
-}
-
-// hasWIPPrefix reports whether title already starts with one of Gitea's
-// default work-in-progress prefixes, which Gitea matches case-insensitively.
-func hasWIPPrefix(title string) bool {
-	upper := strings.ToUpper(title)
-	return strings.HasPrefix(upper, "WIP:") || strings.HasPrefix(upper, "[WIP]")
 }
 
 // requestReviewers asks for all reviews in one request. A value with a slash

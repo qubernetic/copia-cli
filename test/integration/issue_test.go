@@ -3,6 +3,7 @@
 package integration
 
 import (
+	"bytes"
 	"fmt"
 	"net/http"
 	"testing"
@@ -13,8 +14,13 @@ import (
 	issueclose "github.com/qubernetic/copia-cli/pkg/cmd/issue/close"
 	issuecomment "github.com/qubernetic/copia-cli/pkg/cmd/issue/comment"
 	issuecreate "github.com/qubernetic/copia-cli/pkg/cmd/issue/create"
+	issuedelete "github.com/qubernetic/copia-cli/pkg/cmd/issue/delete"
 	issueedit "github.com/qubernetic/copia-cli/pkg/cmd/issue/edit"
 	issuelist "github.com/qubernetic/copia-cli/pkg/cmd/issue/list"
+	issuelock "github.com/qubernetic/copia-cli/pkg/cmd/issue/lock"
+	issuepin "github.com/qubernetic/copia-cli/pkg/cmd/issue/pin"
+	issuereopen "github.com/qubernetic/copia-cli/pkg/cmd/issue/reopen"
+	issueunpin "github.com/qubernetic/copia-cli/pkg/cmd/issue/unpin"
 	issueview "github.com/qubernetic/copia-cli/pkg/cmd/issue/view"
 )
 
@@ -35,8 +41,7 @@ func TestIssue_FullLifecycle(t *testing.T) {
 	}
 	err := issuecreate.CreateRun(createOpts)
 	require.NoError(t, err)
-	assert.Contains(t, createOut.String(), "Created issue #")
-	t.Logf("Create: %s", createOut.String())
+	assertOutputContains(t, createOut.String(), "Created issue #")
 
 	// Extract issue number from output
 	var issueNumber int64
@@ -52,7 +57,6 @@ func TestIssue_FullLifecycle(t *testing.T) {
 			Owner: env.Owner, Repo: env.Repo,
 			Number: issueNumber,
 		})
-		t.Logf("Closed issue #%d", issueNumber)
 	}()
 
 	// View
@@ -64,8 +68,7 @@ func TestIssue_FullLifecycle(t *testing.T) {
 		Number: issueNumber,
 	})
 	require.NoError(t, err)
-	assert.Contains(t, viewOut.String(), "[integration-test] CLI lifecycle test")
-	t.Logf("View: %s", viewOut.String())
+	assertOutputContains(t, viewOut.String(), "[integration-test] CLI lifecycle test")
 
 	// Comment
 	commentIO, _, _ := testIO()
@@ -77,7 +80,6 @@ func TestIssue_FullLifecycle(t *testing.T) {
 		Body:   "Integration test comment via CommentRun.",
 	})
 	require.NoError(t, err)
-	t.Logf("Comment added to #%d", issueNumber)
 
 	// Edit title
 	editIO, _, _ := testIO()
@@ -89,7 +91,6 @@ func TestIssue_FullLifecycle(t *testing.T) {
 		Title:  "[integration-test] CLI lifecycle test (edited)",
 	})
 	require.NoError(t, err)
-	t.Logf("Edited issue #%d", issueNumber)
 
 	// Close
 	closeIO, closeOut, _ := testIO()
@@ -100,13 +101,36 @@ func TestIssue_FullLifecycle(t *testing.T) {
 		Number: issueNumber,
 	})
 	require.NoError(t, err)
-	assert.Contains(t, closeOut.String(), "Closed issue")
-	t.Logf("Close: %s", closeOut.String())
+	assertOutputContains(t, closeOut.String(), "Closed issue")
+
+	// Reopen with a comment; the deferred cleanup closes it again
+	reopenIO, reopenOut, _ := testIO()
+	err = issuereopen.ReopenRun(&issuereopen.ReopenOptions{
+		IO: reopenIO, HTTPClient: &http.Client{},
+		Host: env.Host, Token: env.Token,
+		Owner: env.Owner, Repo: env.Repo,
+		Number:  issueNumber,
+		Comment: "Reopened by integration test via ReopenRun.",
+	})
+	require.NoError(t, err)
+	assertOutputEqual(t, reopenOut.String(), fmt.Sprintf("Reopened issue #%d\n", issueNumber))
+
+	// Reopen again: the issue is open, so nothing is sent
+	againIO, againOut, againErr := testIO()
+	err = issuereopen.ReopenRun(&issuereopen.ReopenOptions{
+		IO: againIO, HTTPClient: &http.Client{},
+		Host: env.Host, Token: env.Token,
+		Owner: env.Owner, Repo: env.Repo,
+		Number: issueNumber,
+	})
+	require.NoError(t, err)
+	assertOutputEmpty(t, againOut.String())
+	assertOutputContains(t, againErr.String(), "is already open")
 }
 
 func TestIssue_List(t *testing.T) {
 	env := loadTestEnv(t)
-	ios, stdout, _ := testIO()
+	ios, _, _ := testIO()
 
 	opts := &issuelist.ListOptions{
 		IO:         ios,
@@ -121,7 +145,6 @@ func TestIssue_List(t *testing.T) {
 
 	err := issuelist.ListRun(opts)
 	require.NoError(t, err)
-	t.Logf("Output: %s", stdout.String())
 }
 
 func TestIssue_ViewNotFound(t *testing.T) {
@@ -135,5 +158,206 @@ func TestIssue_ViewNotFound(t *testing.T) {
 		Number: 99999,
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not found")
+	assert.ErrorContains(t, err, "not found")
+}
+
+func TestIssue_Delete(t *testing.T) {
+	env := loadTestEnv(t)
+
+	createIO, createOut, _ := testIO()
+	err := issuecreate.CreateRun(&issuecreate.CreateOptions{
+		IO: createIO, HTTPClient: &http.Client{},
+		Host: env.Host, Token: env.Token,
+		Owner: env.Owner, Repo: env.Repo,
+		Title: "[integration-test] CLI delete test",
+		Body:  "Created by integration test for DeleteRun.",
+	})
+	require.NoError(t, err)
+
+	var issueNumber int64
+	_, _ = fmt.Sscanf(createOut.String(), "Created issue #%d", &issueNumber)
+	require.Greater(t, issueNumber, int64(0), "failed to parse issue number")
+
+	defer func() {
+		closeIO, _, _ := testIO()
+		_ = issueclose.CloseRun(&issueclose.CloseOptions{
+			IO: closeIO, HTTPClient: &http.Client{},
+			Host: env.Host, Token: env.Token,
+			Owner: env.Owner, Repo: env.Repo,
+			Number: issueNumber,
+		})
+	}()
+
+	deleteOpts := func(confirmed bool) (*issuedelete.DeleteOptions, *bytes.Buffer) {
+		ios, out, _ := testIO()
+		return &issuedelete.DeleteOptions{
+			IO: ios, HTTPClient: &http.Client{},
+			Host: env.Host, Token: env.Token,
+			Owner: env.Owner, Repo: env.Repo,
+			Number:    issueNumber,
+			Confirmed: confirmed,
+		}, out
+	}
+
+	// Without --yes nothing is sent and the issue stays
+	opts, out := deleteOpts(false)
+	err = issuedelete.DeleteRun(opts)
+	assert.ErrorContains(t, err, "use --yes to confirm")
+	assertOutputEmpty(t, out.String())
+
+	// app.copia.io answers the DELETE with HTTP 405, so the issue stays and
+	// the deferred cleanup closes it. Should Copia allow deletion, this fails
+	// and docs/parity.md needs updating.
+	opts, out = deleteOpts(true)
+	err = issuedelete.DeleteRun(opts)
+	assert.ErrorContains(t, err, "does not allow deleting issues (HTTP 405)")
+	assertOutputEmpty(t, out.String())
+
+	viewIO, _, _ := testIO()
+	err = issueview.ViewRun(&issueview.ViewOptions{
+		IO: viewIO, HTTPClient: &http.Client{},
+		Host: env.Host, Token: env.Token,
+		Owner: env.Owner, Repo: env.Repo,
+		Number: issueNumber,
+	})
+	require.NoError(t, err, "the refused issue still exists")
+}
+
+func TestIssue_PinUnpin(t *testing.T) {
+	env := loadTestEnv(t)
+
+	const title = "[integration-test] CLI pin test"
+	createIO, createOut, _ := testIO()
+	err := issuecreate.CreateRun(&issuecreate.CreateOptions{
+		IO: createIO, HTTPClient: &http.Client{},
+		Host: env.Host, Token: env.Token,
+		Owner: env.Owner, Repo: env.Repo,
+		Title: title,
+		Body:  "Created by integration test for PinRun and UnpinRun.",
+	})
+	require.NoError(t, err)
+
+	var issueNumber int64
+	_, _ = fmt.Sscanf(createOut.String(), "Created issue #%d", &issueNumber)
+	require.Greater(t, issueNumber, int64(0), "failed to parse issue number")
+
+	// Cleanup: unpin (a no-op when the test got that far) and close
+	defer func() {
+		unpinIO, _, _ := testIO()
+		_ = issueunpin.UnpinRun(&issueunpin.UnpinOptions{
+			IO: unpinIO, HTTPClient: &http.Client{},
+			Host: env.Host, Token: env.Token,
+			Owner: env.Owner, Repo: env.Repo,
+			Number: issueNumber,
+		})
+		closeIO, _, _ := testIO()
+		_ = issueclose.CloseRun(&issueclose.CloseOptions{
+			IO: closeIO, HTTPClient: &http.Client{},
+			Host: env.Host, Token: env.Token,
+			Owner: env.Owner, Repo: env.Repo,
+			Number: issueNumber,
+		})
+	}()
+
+	pin := func() (string, string, error) {
+		ios, out, errOut := testIO()
+		err := issuepin.PinRun(&issuepin.PinOptions{
+			IO: ios, HTTPClient: &http.Client{},
+			Host: env.Host, Token: env.Token,
+			Owner: env.Owner, Repo: env.Repo,
+			Number: issueNumber,
+		})
+		return out.String(), errOut.String(), err
+	}
+	unpin := func() (string, string, error) {
+		ios, out, errOut := testIO()
+		err := issueunpin.UnpinRun(&issueunpin.UnpinOptions{
+			IO: ios, HTTPClient: &http.Client{},
+			Host: env.Host, Token: env.Token,
+			Owner: env.Owner, Repo: env.Repo,
+			Number: issueNumber,
+		})
+		return out.String(), errOut.String(), err
+	}
+
+	// app.copia.io answers the pin request with HTTP 404 (found by the
+	// integration job of #369), so the issue stays unpinned. Should Copia
+	// serve the route, this fails and docs/parity.md needs updating.
+	out, errOut, err := pin()
+	assert.ErrorContains(t, err, "does not support pinning issues (HTTP 404 on POST")
+	assertOutputEmpty(t, out)
+	assertOutputEmpty(t, errOut)
+
+	out, errOut, err = unpin()
+	assert.ErrorContains(t, err, "does not support unpinning issues (HTTP 404 on DELETE")
+	assertOutputEmpty(t, out)
+	assertOutputEmpty(t, errOut)
+}
+
+func TestIssue_LockUnlock(t *testing.T) {
+	env := loadTestEnv(t)
+
+	const title = "[integration-test] CLI lock test"
+	createIO, createOut, _ := testIO()
+	err := issuecreate.CreateRun(&issuecreate.CreateOptions{
+		IO: createIO, HTTPClient: &http.Client{},
+		Host: env.Host, Token: env.Token,
+		Owner: env.Owner, Repo: env.Repo,
+		Title: title,
+		Body:  "Created by integration test for LockRun and UnlockRun.",
+	})
+	require.NoError(t, err)
+
+	var issueNumber int64
+	_, _ = fmt.Sscanf(createOut.String(), "Created issue #%d", &issueNumber)
+	require.Greater(t, issueNumber, int64(0), "failed to parse issue number")
+
+	run := func(fn func(*issuelock.LockOptions) error, reason string) (string, string, error) {
+		ios, out, errOut := testIO()
+		err := fn(&issuelock.LockOptions{
+			IO: ios, HTTPClient: &http.Client{},
+			Host: env.Host, Token: env.Token,
+			Owner: env.Owner, Repo: env.Repo,
+			Number: issueNumber,
+			Reason: reason,
+		})
+		return out.String(), errOut.String(), err
+	}
+
+	// Cleanup: unlock (a no-op when the test got that far) and close
+	defer func() {
+		_, _, _ = run(issuelock.UnlockRun, "")
+		closeIO, _, _ := testIO()
+		_ = issueclose.CloseRun(&issueclose.CloseOptions{
+			IO: closeIO, HTTPClient: &http.Client{},
+			Host: env.Host, Token: env.Token,
+			Owner: env.Owner, Repo: env.Repo,
+			Number: issueNumber,
+		})
+	}()
+
+	// app.copia.io answers the lock request with HTTP 404 (found by the
+	// integration job of #370), so the issue stays unlocked. Should Copia
+	// serve the route, this fails and docs/parity.md needs updating.
+	out, errOut, err := run(issuelock.LockRun, "resolved")
+	assert.ErrorContains(t, err, "does not support locking issues (HTTP 404 on PUT")
+	assertOutputEmpty(t, out)
+	assertOutputEmpty(t, errOut)
+
+	// The issue is not locked, so unlock reads is_locked and sends nothing
+	out, errOut, err = run(issuelock.UnlockRun, "")
+	require.NoError(t, err)
+	assertOutputEmpty(t, out)
+	assertOutputContains(t, errOut, fmt.Sprintf("#%d (%s) is not locked\n", issueNumber, title))
+
+	// Gitea answers DELETE on the lock route of an unlocked issue with 204, so
+	// a 404 shows that Copia does not serve the unlock route either.
+	unlockURL := fmt.Sprintf("https://%s/api/v1/repos/%s/%s/issues/%d/lock", env.Host, env.Owner, env.Repo, issueNumber)
+	req, err := http.NewRequest(http.MethodDelete, unlockURL, nil)
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "token "+env.Token)
+	resp, err := (&http.Client{}).Do(req)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	assertStatusCode(t, resp.StatusCode, http.StatusNotFound)
 }
