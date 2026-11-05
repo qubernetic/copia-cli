@@ -86,7 +86,7 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 | `gh pr comment` | Full | `copia-cli pr comment` | [x] |
 | `gh pr edit` | Full | `copia-cli pr edit` | [x] |
 | `gh pr ready` | Full | `copia-cli pr ready` | [x] |
-| `gh pr update-branch` | Full | `copia-cli pr update-branch` | [ ] |
+| `gh pr update-branch` | Full | `copia-cli pr update-branch` | [x] |
 
 `gh pr comment`: `POST /repos/{owner}/{repo}/issues/{index}/comments`, since Gitea keeps pull request comments on the issue of the same index. `--body/-b` or `--body-file/-F` (`-` reads stdin) is required; there is no editor and no `--web`. The argument is a number, `#<n>` or a pull request URL.
 
@@ -96,7 +96,7 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 
 `gh pr reopen`: `PATCH /repos/{owner}/{repo}/pulls/{index}` with `state: open`. The pull request is read first: an open one is left alone and a merged one fails, as in `gh`. `--comment/-c` posts to `/repos/{owner}/{repo}/issues/{index}/comments` before the reopen. The argument is a number, `#<n>` or a pull request URL.
 
-`gh pr update-branch`: `POST /repos/{owner}/{repo}/pulls/{index}/update` with `style=merge`, or `style=rebase` for `--rebase`.
+`gh pr update-branch`: `POST /repos/{owner}/{repo}/pulls/{index}/update` with `style=merge`, or `style=rebase` for `--rebase`. The pull request is read first: a closed or merged one fails, since Gitea answers it with HTTP 422 without a message. Gitea answers an up-to-date branch with HTTP 500, so for a head branch in the same repository the command first asks `GET /repos/{owner}/{repo}/compare/{head}...{base}` and leaves the branch alone when the base has no new commit, as `gh` does; for a head branch in a fork, or when the compare fails, the update is sent and the server decides. HTTP 409 (merge or rebase conflict) and 422 show the server message. The argument is a number, `#<n>` or a pull request URL; `gh`'s default to the pull request of the current branch is not implemented.
 
 ## release
 
@@ -159,8 +159,8 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 
 | Status | Count |
 |--------|-------|
-| Implemented | 47 |
-| Not yet implemented (Full parity) | 14 |
+| Implemented | 48 |
+| Not yet implemented (Full parity) | 13 |
 | Not yet implemented (Partial) | 7 |
 | Not yet implemented (client side, `repo set-default`) | 1 |
 | No equivalent | 12 |
