@@ -126,7 +126,7 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 | `copia-cli api` | [x] |
 | `copia-cli search repos` | [x] |
 | `copia-cli search issues` | [x] |
-| `copia-cli search prs` (`gh search prs`: query, `--state`, `--label`, `--author`, `--assignee`, `--owner`, `-R`, `--limit`; `GET /repos/issues/search?type=pulls`, `--assignee` only for the authenticated user, `-R` filters on the client side, labels match any name) | [x] |
+| `copia-cli search prs` (`gh search prs`: query, `--state`, `--label`, `--author`, `--assignee`, `--owner`, `-R`, `--limit`; `GET /repos/issues/search?type=pulls`, `--assignee` only for the authenticated user, `-R` filters on the client side, labels match any name; app.copia.io ignores `created_by`, found by the `integration` job of #376, so `--author` is also checked on each result) | [x] |
 | `copia-cli org list` | [x] |
 | `copia-cli org view` | [x] |
 | `copia-cli notification list` | [x] |
