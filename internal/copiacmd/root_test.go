@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -222,4 +223,20 @@ func TestMain_ShellAliasExitCode(t *testing.T) {
 	assert.Equal(t, 3, code)
 	assert.Equal(t, "out\n", stdout)
 	assert.Equal(t, "err\n", stderr)
+}
+
+func TestExecute_ShellAliasError(t *testing.T) {
+	ios, _, _, _ := iostreams.Test()
+	f := NewFactory(ios)
+	f.Config = func() (*config.Config, error) {
+		return &config.Config{Aliases: map[string]string{"fail": "!exit 3"}}, nil
+	}
+
+	err := Execute(f, []string{"fail"})
+	var aliasErr *ShellAliasError
+	require.ErrorAs(t, err, &aliasErr)
+	assert.Equal(t, 3, aliasErr.Err.ExitCode())
+	assert.EqualError(t, err, "shell alias: exit status 3")
+	var exitErr *exec.ExitError
+	assert.ErrorAs(t, err, &exitErr)
 }
