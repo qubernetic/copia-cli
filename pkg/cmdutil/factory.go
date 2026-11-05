@@ -108,3 +108,21 @@ func ValidateLimit(limit int) error {
 	}
 	return nil
 }
+
+// ConfigValue returns the value of a setting key of the config file, or its
+// default when it is unset. An unknown key or a config file that cannot be
+// read gives the empty string, so the caller falls back to the next source.
+func (f *Factory) ConfigValue(key string) string {
+	if f.Config == nil {
+		return ""
+	}
+	cfg, err := f.Config()
+	if err != nil {
+		return ""
+	}
+	value, err := cfg.Get(key)
+	if err != nil {
+		return ""
+	}
+	return value
+}

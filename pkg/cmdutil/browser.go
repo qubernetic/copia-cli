@@ -14,15 +14,17 @@ type Browser interface {
 }
 
 // NewBrowser returns the Browser that opens a URL with the command in
-// COPIA_BROWSER or BROWSER, otherwise with the operating system's opener
-// (xdg-open, open, or rundll32 on Windows).
-func NewBrowser() Browser {
-	return &systemBrowser{goos: runtime.GOOS, getenv: os.Getenv, run: startCommand}
+// COPIA_BROWSER, the config key browser (read with configValue) or BROWSER,
+// otherwise with the operating system's opener (xdg-open, open, or
+// rundll32 on Windows).
+func NewBrowser(configValue func(key string) string) Browser {
+	return &systemBrowser{goos: runtime.GOOS, getenv: os.Getenv, config: configValue, run: startCommand}
 }
 
 type systemBrowser struct {
 	goos   string
 	getenv func(string) string
+	config func(string) string
 	run    func(name string, args ...string) error
 }
 
@@ -35,8 +37,8 @@ func (b *systemBrowser) Browse(url string) error {
 }
 
 func (b *systemBrowser) command(url string) (string, []string) {
-	for _, key := range []string{"COPIA_BROWSER", "BROWSER"} {
-		if fields := strings.Fields(b.getenv(key)); len(fields) > 0 {
+	for _, value := range []string{b.getenv("COPIA_BROWSER"), b.config("browser"), b.getenv("BROWSER")} {
+		if fields := strings.Fields(value); len(fields) > 0 {
 			return fields[0], append(fields[1:], url)
 		}
 	}

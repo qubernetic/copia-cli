@@ -68,8 +68,8 @@ func Main() int {
 			return config.Load(config.DefaultPath())
 		},
 		BaseRepo: cmdutil.DetectBaseRepo(),
-		Browser:  cmdutil.NewBrowser(),
 	}
+	f.Browser = cmdutil.NewBrowser(f.ConfigValue)
 
 	// Note: env vars (COPIA_TOKEN, COPIA_HOST) are resolved in
 	// Factory.ResolveAuth() with correct precedence:

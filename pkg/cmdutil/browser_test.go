@@ -14,6 +14,7 @@ func TestSystemBrowser_Browse(t *testing.T) {
 		name     string
 		goos     string
 		env      map[string]string
+		config   string
 		wantName string
 		wantArgs []string
 	}{
@@ -50,6 +51,29 @@ func TestSystemBrowser_Browse(t *testing.T) {
 			wantArgs: []string{url},
 		},
 		{
+			name:     "config browser beats BROWSER",
+			goos:     "linux",
+			env:      map[string]string{"BROWSER": "firefox"},
+			config:   "chromium --incognito",
+			wantName: "chromium",
+			wantArgs: []string{"--incognito", url},
+		},
+		{
+			name:     "COPIA_BROWSER beats config browser",
+			goos:     "linux",
+			env:      map[string]string{"COPIA_BROWSER": "lynx", "BROWSER": "firefox"},
+			config:   "chromium",
+			wantName: "lynx",
+			wantArgs: []string{url},
+		},
+		{
+			name:     "config browser beats system opener",
+			goos:     "darwin",
+			config:   "chromium",
+			wantName: "chromium",
+			wantArgs: []string{url},
+		},
+		{
 			name:     "blank COPIA_BROWSER falls through",
 			goos:     "linux",
 			env:      map[string]string{"COPIA_BROWSER": "  ", "BROWSER": "firefox"},
@@ -65,6 +89,12 @@ func TestSystemBrowser_Browse(t *testing.T) {
 			b := &systemBrowser{
 				goos:   tt.goos,
 				getenv: func(k string) string { return tt.env[k] },
+				config: func(k string) string {
+					if k == "browser" {
+						return tt.config
+					}
+					return ""
+				},
 				run: func(name string, args ...string) error {
 					gotName, gotArgs = name, args
 					return nil
@@ -82,6 +112,7 @@ func TestSystemBrowser_Browse_RunError(t *testing.T) {
 	b := &systemBrowser{
 		goos:   "linux",
 		getenv: func(string) string { return "" },
+		config: func(string) string { return "" },
 		run:    func(string, ...string) error { return errors.New("exec: \"xdg-open\": not found") },
 	}
 
@@ -90,10 +121,11 @@ func TestSystemBrowser_Browse_RunError(t *testing.T) {
 }
 
 func TestNewBrowser_UsesSystemDefaults(t *testing.T) {
-	b, ok := NewBrowser().(*systemBrowser)
+	b, ok := NewBrowser(func(key string) string { return "value of " + key }).(*systemBrowser)
 	if assert.True(t, ok) {
 		assert.NotEmpty(t, b.goos)
 		assert.NotNil(t, b.getenv)
+		assert.Equal(t, "value of browser", b.config("browser"))
 		assert.NotNil(t, b.run)
 	}
 }
