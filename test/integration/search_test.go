@@ -116,8 +116,15 @@ func TestSearchPRs_Run(t *testing.T) {
 	require.NoError(t, err)
 	assertOutputEqual(t, out, "0\n")
 
-	_, err = search(func(o *searchprs.SearchOptions) { o.Author = token + "-nobody" })
-	require.ErrorContains(t, err, "no user named", "created_by with an unknown user")
+	// Gitea 1.26 answers created_by with an unknown user with HTTP 404;
+	// app.copia.io ignores created_by (found by the integration job of
+	// #376), so the command checks the author of each result.
+	out, err = search(func(o *searchprs.SearchOptions) { o.Author = token + "-nobody" })
+	if err != nil {
+		require.ErrorContains(t, err, "no user named", "created_by with an unknown user")
+	} else {
+		assertOutputEqual(t, out, "0\n")
+	}
 
 	status, _ = apiCall(t, env, "assign pull request", "PATCH",
 		fmt.Sprintf("/repos/%s/%s/issues/%d", env.Owner, env.Repo, pr.Number), map[string]any{"assignees": []string{me.Login}})
