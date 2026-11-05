@@ -37,6 +37,8 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 | `gh repo sync` | Partial | `copia-cli repo sync` | [ ] |
 | `gh repo deploy-key` | Full | `copia-cli repo deploy-key` | [ ] |
 
+`gh repo view --web/-w`: client side, no API call and no token, opened as for the issue commands: `/{owner}/{repo}` of the argument, `-R` or the git remote. gh's `--branch` does not exist in `repo view`.
+
 `gh repo sync`: `POST /repos/{owner}/{repo}/merge-upstream` (`branch`, `ff_only`) brings a branch of a fork up to date with its upstream on the server. There is no `--force` (hard reset) and no sync of a local clone, which `gh` does with git.
 
 `gh repo deploy-key`: `GET` and `POST /repos/{owner}/{repo}/keys`, `DELETE /repos/{owner}/{repo}/keys/{id}` for list, add and delete.
@@ -123,6 +125,8 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 | `gh label edit` | Full | `copia-cli label edit` | [ ] |
 | `gh label delete` | Full | `copia-cli label delete` | [ ] |
 
+`gh label list --web/-w`: client side, no API call and no token; opens `/{owner}/{repo}/labels`.
+
 ## config
 
 | gh command | Parity | Copia CLI | Status |
@@ -150,9 +154,9 @@ Client side, no API call. Aliases are stored under the top-level key `aliases` o
 | Command | Status |
 |---------|--------|
 | `copia-cli api` | [x] |
-| `copia-cli search repos` | [x] |
-| `copia-cli search issues` | [x] |
-| `copia-cli search prs` (`gh search prs`: query, `--state`, `--label`, `--author`, `--assignee`, `--owner`, `-R`, `--limit`; `GET /repos/issues/search?type=pulls`, `--assignee` only for the authenticated user, `-R` filters on the client side, labels match any name; app.copia.io ignores `created_by`, found by the `integration` job of #376, so `--author` is also checked on each result) | [x] |
+| `copia-cli search repos` (`--web/-w` opens `/explore/repos` with `q`, and `--sort`/`--order` as the explore sort names of Gitea 1.26, for example `moststars`) | [x] |
+| `copia-cli search issues` (`--web/-w` opens `/{owner}/{repo}/issues` with `q` and `state`, default `all`; `--label` is not applied there) | [x] |
+| `copia-cli search prs` (`gh search prs`: query, `--state`, `--label`, `--author`, `--assignee`, `--owner`, `-R`, `--limit`; `GET /repos/issues/search?type=pulls`, `--assignee` only for the authenticated user, `-R` filters on the client side, labels match any name; app.copia.io ignores `created_by`, found by the `integration` job of #376, so `--author` is also checked on each result. `--web/-w`: Copia has no web search across repositories, so it opens the pull request dashboard `/pulls`, or `/org/{owner}/pulls` with `--owner` (organization members only), with `q`, `state` (the dashboard knows open and closed, open by default), `poster` and `assignee` as logins and `type=created_by` or `type=assigned` for `@me`; with `-R` it opens `/{owner}/{repo}/pulls`, which takes the assignee only by ID. `--label` is not applied in the browser) | [x] |
 | `copia-cli org list` | [x] |
 | `copia-cli org view` | [x] |
 | `copia-cli notification list` | [x] |
