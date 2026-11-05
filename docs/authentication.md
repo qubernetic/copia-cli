@@ -127,12 +127,21 @@ copia-cli auth status --host app.copia.io --show-token
 
 ### Use the Token with git
 
-`copia-cli auth git-credential` is a hidden command that git runs as a [credential helper](https://git-scm.com/docs/gitcredentials), as `gh auth git-credential` does. Configure it for each Copia host; the empty first entry drops the other helpers for that host, so git stores the token nowhere else:
+`copia-cli auth git-credential` is a hidden command that git runs as a [credential helper](https://git-scm.com/docs/gitcredentials), as `gh auth git-credential` does. `auth setup-git` configures it, as `gh auth setup-git` does:
 
 ```bash
-git config --global credential.https://app.copia.io.helper ''
-git config --global --add credential.https://app.copia.io.helper '!copia-cli auth git-credential'
+copia-cli auth setup-git                       # every host you are logged in to
+copia-cli auth setup-git --host app.copia.io   # one host
 ```
+
+For each host it writes two entries to the global git config (`~/.gitconfig`, or the file `GIT_CONFIG_GLOBAL` names). The empty first entry drops the helpers git reads before it for that host (earlier in the global file, under `credential.helper`, a key with the port or a key with a path). Helpers git reads after it, later in the global file or in the repository's config, the worktree's config or a `-c` option, still take part, as with gh: they receive `store` and `erase` with the token and answer `get` when copia-cli prints nothing:
+
+```bash
+git config --global --replace-all credential.https://app.copia.io.helper ''
+git config --global --add credential.https://app.copia.io.helper "!'/usr/local/bin/copia-cli' auth git-credential"
+```
+
+The path is the `copia-cli` in your `PATH` when that is a symlink to the running binary, so a symlink such as Homebrew's keeps working after an upgrade; otherwise (a hard link or another binary included) it is the path of the running binary. It is always single-quoted, so a path with spaces works. Running `auth setup-git` again changes nothing. A host you are not logged in to fails with a hint to run `auth login`; `--force` (only with `--host`) configures it anyway, for a login that follows. Without `--host` and with no host logged in, it fails. `COPIA_HOST` does not narrow it, as `GH_HOST` does not for gh; only `--host` does. `auth setup-git` reads no token and makes no API call.
 
 For `get` it reads git's `key=value` lines from standard input. When `protocol` is `https` and `host` is a configured host, it prints `username=<login>` and `password=<token>` of the host's active account, the token read from the config file or the OS keyring as for the other commands. The host matches regardless of case, and its port must match: a missing port is 443, so `copia.example.com:8443` matches only a request for port 8443. A path in the request is ignored. A `username` in the request (from a URL such as `https://jane@app.copia.io/...`) must be the active account's login. Anything else (`http`, an unknown host, another port, another user name, a host without a stored token) prints nothing and exits 0, so git falls back to its next helper or prompt. `store` and `erase` do nothing, since the token stays where `auth login` stored it.
 

@@ -20,7 +20,7 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 | `gh auth switch` | Full | `copia-cli auth switch` | [x] |
 | `gh auth git-credential` | Full | `copia-cli auth git-credential` | [x] |
 | `gh auth token` | Full | `copia-cli auth token` | [ ] |
-| `gh auth setup-git` | None | n/a | — |
+| `gh auth setup-git` | Full | `copia-cli auth setup-git` | [x] |
 
 The default host is the top-level config key `default_host`, which `auth login` sets to the host it logs in to; gh has no such key and defaults to `github.com` (or its only host) unless `GH_HOST` is set. The host order is `--host`, `COPIA_HOST`, `default_host`, then the alphabetically first host; `auth logout` of the default host moves `default_host` to the alphabetically first remaining host. `auth status` lists the hosts in alphabetical order and marks the default one with `(default)`.
 
@@ -28,7 +28,7 @@ Several accounts per host follow gh: the host entry holds `users.<login>` (a `to
 
 Token storage follows gh: `auth login` stores the token in the OS keyring (go-keyring, service `copia-cli:<host>` where gh uses `gh:<host>`, account = the login, every call bounded by a three-second timeout as in gh's `internal/keyring`) and falls back to the config file with a warning on standard error when the keyring fails; `--insecure-storage` writes the config file on request. The stored token is read from the config file first, then from the keyring, as gh does; `auth logout` deletes it from both. `auth status` adds the source to the token line (`Token: **** (keyring)` or `(config file)`), where gh prints it after the account (`(keyring)` or `(<path to hosts.yml>)`). The snap has no `password-manager-service` plug, so it always falls back to the config file.
 
-`auth git-credential` is hidden, as in gh, and answers git's `get` with `username=<login>` and `password=<token>` of the active account of the configured host git asks about (https only, the port must match, a missing one is 443). Like gh it reads a `url` line as well as `protocol`, `host`, `path` and `username`, refuses a request whose `username` is not the active account's login, ignores `--token` and `COPIA_TOKEN`, and does nothing for `store` and `erase`. Where gh exits 1 when it has no credential, copia-cli prints nothing and exits 0, and it prints no `protocol` and `host` lines. A token or login with a character outside printable ASCII is refused, as `repo clone` does. `auth setup-git`, which writes the helper into the git config, is not implemented yet.
+`auth git-credential` is hidden, as in gh, and answers git's `get` with `username=<login>` and `password=<token>` of the active account of the configured host git asks about (https only, the port must match, a missing one is 443). Like gh it reads a `url` line as well as `protocol`, `host`, `path` and `username`, refuses a request whose `username` is not the active account's login, ignores `--token` and `COPIA_TOKEN`, and does nothing for `store` and `erase`. Where gh exits 1 when it has no credential, copia-cli prints nothing and exits 0, and it prints no `protocol` and `host` lines. A token or login with a character outside printable ASCII is refused, as `repo clone` does. `auth setup-git` writes the helper into the global git config as gh does: for each logged-in host (a host with at least one account) or the one `--host` names, `git config --global --replace-all credential.https://<host>.helper ""` and then `--add` of `!'<path>' auth git-credential`. As with gh, the empty value drops only the helpers configured before it; a helper configured after it (later in the global file, repository-local, worktree or `-c`) still takes part. gh's flag is `--hostname/-h`; copia-cli uses `--host`, as its other commands do, and `--force/-f` as gh. The path is the `copia-cli` found in `PATH` when it is a symlink to the running binary (gh does the same, a hard link does not count), otherwise the running binary; gh quotes it only when it contains a space, `$` or a backslash, copia-cli always quotes it, a single quote included. gh prints nothing on success and so does copia-cli; with no host logged in gh prints a hint and exits 1, copia-cli fails with the hint as its error. gh also configures `gist.<host>`, which Copia has no equivalent of.
 
 ## repo
 
@@ -208,10 +208,10 @@ Client side, no API call. Aliases are stored under the top-level key `aliases` o
 
 | Status | Count |
 |--------|-------|
-| Implemented | 63 |
+| Implemented | 64 |
 | Not yet implemented (Full parity) | 12 |
 | Not yet implemented (Partial) | 6 |
-| No equivalent | 13 |
-| **Total implementable** | **81** |
+| No equivalent | 12 |
+| **Total implementable** | **82** |
 
 Counted from the rows above: every `[x]` row, and every other row by its Parity value. The Parity values follow the Gitea 1.26 API (`release/v1.26` swagger); `TestAPI_Version` in `test/integration/api_test.go` logs what Copia's `GET /version` reports in the PR `integration` job. On 2026-11-04 that was `0.59.0`, Copia's own version number, not a Gitea release, so the API does not show which Gitea version Copia is built on; a command's integration test shows whether Copia serves its endpoint.
