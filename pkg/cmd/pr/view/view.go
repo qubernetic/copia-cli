@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/qubernetic/copia-cli/pkg/cmd/issue/shared"
+	prshared "github.com/qubernetic/copia-cli/pkg/cmd/pr/shared"
 	"github.com/qubernetic/copia-cli/pkg/cmdutil"
 	"github.com/qubernetic/copia-cli/pkg/iostreams"
 )
@@ -27,6 +28,7 @@ type ViewOptions struct {
 	Number     int64
 	JSON       cmdutil.JSONFlags
 	Comments   bool
+	Web        bool
 }
 
 type userRef struct {
@@ -62,7 +64,10 @@ func NewCmdView(f *cmdutil.Factory) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "view <number>",
 		Short: "View a pull request",
-		Long:  "Display the title, body, and other information about a pull request.",
+		Long: `Display the title, body, and other information about a pull request.
+
+With --web, open the pull request page in the browser instead. No API call is
+made, so no token is needed.`,
 		Example: `  # View a pull request
   $ copia-cli pr view 7
 
@@ -70,9 +75,22 @@ func NewCmdView(f *cmdutil.Factory) *cobra.Command {
   $ copia-cli pr view 7 --comments
 
   # View as JSON
-  $ copia-cli pr view 7 --json number,title,mergeable`,
+  $ copia-cli pr view 7 --json number,title,mergeable
+
+  # Open the pull request in the browser
+  $ copia-cli pr view 7 --web`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			num, err := strconv.ParseInt(args[0], 10, 64)
+			if err != nil {
+				return fmt.Errorf("invalid PR number: %s", args[0])
+			}
+			opts.Number = num
+
+			if opts.Web {
+				return prshared.OpenPR(f, prshared.PRRef{Number: num}, "")
+			}
+
 			if opts.Comments {
 				opts.JSON.DropDefault()
 			}
@@ -80,11 +98,6 @@ func NewCmdView(f *cmdutil.Factory) *cobra.Command {
 				return fmt.Errorf("specify only one of --comments or --json")
 			}
 
-			num, err := strconv.ParseInt(args[0], 10, 64)
-			if err != nil {
-				return fmt.Errorf("invalid PR number: %s", args[0])
-			}
-			opts.Number = num
 			opts.IO = f.IOStreams
 
 			host, token, err := f.ResolveAuth()
@@ -106,6 +119,7 @@ func NewCmdView(f *cmdutil.Factory) *cobra.Command {
 	}
 
 	cmd.Flags().BoolVarP(&opts.Comments, "comments", "c", false, "View comments")
+	cmd.Flags().BoolVarP(&opts.Web, "web", "w", false, "Open the pull request in the browser")
 	cmdutil.AddJSONFlags(cmd, &opts.JSON, validJSONFields)
 
 	return cmd

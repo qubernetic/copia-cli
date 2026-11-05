@@ -24,6 +24,7 @@ type CommentOptions struct {
 	Repo       string
 	Number     int64
 	Body       string
+	Web        bool
 
 	EditorMode    bool
 	EditorCommand string
@@ -39,9 +40,10 @@ func NewCmdComment(f *cmdutil.Factory) *cobra.Command {
 		Short: "Add a comment to a pull request",
 		Long: "Add a comment to a Copia pull request by number or URL.\n\n" +
 			"The body comes from --body, from a file with --body-file (\"-\" reads standard input), " +
-			"or from the editor with --editor. One of them is required. On success the URL of the new comment is printed.\n\n" +
+			"or from the editor with --editor. One of them, or --web, is required. On success the URL of the new comment is printed.\n\n" +
 			"--editor opens the editor set in COPIA_EDITOR, the config key editor, VISUAL or EDITOR on an empty file " +
-			"and posts the saved text; empty text aborts without a comment.",
+			"and posts the saved text; empty text aborts without a comment.\n\n" +
+			"--web opens the pull request page in the browser to comment there. No API call is made, so no token is needed.",
 		Example: `  # Comment on a pull request
   $ copia-cli pr comment 7 --body "Looks good to me"
 
@@ -50,7 +52,10 @@ func NewCmdComment(f *cmdutil.Factory) *cobra.Command {
   $ echo "Rebased on develop" | copia-cli pr comment https://app.copia.io/my-org/my-repo/pulls/7 -F -
 
   # Write the comment in the editor
-  $ copia-cli pr comment 7 --editor`,
+  $ copia-cli pr comment 7 --editor
+
+  # Comment in the browser
+  $ copia-cli pr comment 7 --web`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ref, err := shared.ParsePRArg(args[0])
@@ -58,10 +63,13 @@ func NewCmdComment(f *cmdutil.Factory) *cobra.Command {
 				return err
 			}
 			opts.Number = ref.Number
+			if opts.Web {
+				return shared.OpenPR(f, ref, "")
+			}
 			opts.IO = f.IOStreams
 
 			if !cmd.Flags().Changed("body") && !cmd.Flags().Changed("body-file") && !opts.EditorMode {
-				return fmt.Errorf("--body, --body-file or --editor required")
+				return fmt.Errorf("--body, --body-file, --editor or --web required")
 			}
 			if bodyFile != "" {
 				b, err := cmdutil.ReadFile(bodyFile, opts.IO.In)
@@ -100,9 +108,13 @@ func NewCmdComment(f *cmdutil.Factory) *cobra.Command {
 	cmd.Flags().StringVarP(&opts.Body, "body", "b", "", "The comment body `text`")
 	cmd.Flags().StringVarP(&bodyFile, "body-file", "F", "", "Read body text from `file` (use \"-\" to read from standard input)")
 	cmd.Flags().BoolVarP(&opts.EditorMode, "editor", "e", false, "Write the comment body in the text editor")
+	cmd.Flags().BoolVarP(&opts.Web, "web", "w", false, "Open the pull request in the browser to add a comment")
 	cmd.MarkFlagsMutuallyExclusive("body", "body-file")
 	cmd.MarkFlagsMutuallyExclusive("body", "editor")
 	cmd.MarkFlagsMutuallyExclusive("body-file", "editor")
+	cmd.MarkFlagsMutuallyExclusive("body", "web")
+	cmd.MarkFlagsMutuallyExclusive("body-file", "web")
+	cmd.MarkFlagsMutuallyExclusive("editor", "web")
 
 	return cmd
 }

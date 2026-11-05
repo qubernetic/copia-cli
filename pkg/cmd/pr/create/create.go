@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -33,6 +34,7 @@ type CreateOptions struct {
 	Reviewers  []string
 	Draft      bool
 	Fill       bool
+	Web        bool
 
 	EditorMode    bool
 	EditorCommand string
@@ -97,7 +99,14 @@ label or milestone fails before the pull request is created.
 --reviewer takes a login or an org/team name and can be repeated. Reviewers
 are requested in one request after the pull request is created; if that
 request fails, the pull request still exists, its URL is printed and the
-command exits with an error.`,
+command exits with an error.
+
+--web opens the compare page of the base and head branches in the browser
+instead, with the new pull request form expanded and --title and --body (or
+the --fill values) filled in. The head branch defaults to the current branch.
+No API call is made, so no token is needed; --label, --assignee and
+--milestone are not applied there, and --draft and --reviewer are not
+supported.`,
 		Example: `  # Create a pull request
   $ copia-cli pr create --title "feat: add wrapper" --base main --head feature/wrapper
 
@@ -117,7 +126,10 @@ command exits with an error.`,
   # Assign yourself, add labels and a milestone, and request reviewers
   $ copia-cli pr create --title "feat: add wrapper" --head feature/wrapper \
       --assignee @me --label plc --label review --milestone v1.0 \
-      --reviewer jane --reviewer my-org/controls`,
+      --reviewer jane --reviewer my-org/controls
+
+  # Finish the pull request of the current branch in the browser
+  $ copia-cli pr create --web --base develop`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.IO = f.IOStreams
 			if bodyFile != "" {
@@ -126,6 +138,9 @@ command exits with an error.`,
 					return err
 				}
 				opts.Body = string(b)
+			}
+			if opts.Web {
+				return openCompare(f, opts)
 			}
 
 			host, token, err := f.ResolveAuth()
@@ -161,11 +176,84 @@ command exits with an error.`,
 	cmd.Flags().BoolVarP(&opts.Draft, "draft", "d", false, "Mark the pull request as work in progress (WIP: title prefix)")
 	cmd.Flags().BoolVarP(&opts.Fill, "fill", "f", false, "Use commit info between the base and head branches for the title and body")
 	cmd.Flags().BoolVarP(&opts.EditorMode, "editor", "e", false, "Write the title and body in the text editor")
+	cmd.Flags().BoolVarP(&opts.Web, "web", "w", false, "Open the web browser to create a pull request")
 	cmd.MarkFlagsMutuallyExclusive("body", "body-file")
 	cmd.MarkFlagsMutuallyExclusive("body", "editor")
 	cmd.MarkFlagsMutuallyExclusive("body-file", "editor")
+	cmd.MarkFlagsMutuallyExclusive("editor", "web")
 
 	return cmd
+}
+
+// openCompare opens the compare page {base}...{head} in the browser. The
+// expand, title and body query parameters are those the Gitea compare page
+// reads to open and fill the new pull request form. The form takes no label,
+// assignee or milestone by name, so those flags only produce a warning; a
+// draft and reviewers fail, as in gh. No API call is made.
+func openCompare(f *cmdutil.Factory, opts *CreateOptions) error {
+	if opts.Draft {
+		return fmt.Errorf("the `--draft` flag is not supported with `--web`")
+	}
+	if len(opts.Reviewers) > 0 {
+		return fmt.Errorf("the `--reviewer` flag is not supported with `--web`")
+	}
+	host, err := f.ResolveHost()
+	if err != nil {
+		return err
+	}
+	owner, repo, err := f.ResolveRepo()
+	if err != nil {
+		return err
+	}
+	if opts.Fill {
+		if err := fill(opts); err != nil {
+			return err
+		}
+	}
+	if opts.Head == "" {
+		head, err := currentBranch()
+		if err != nil {
+			return err
+		}
+		opts.Head = head
+	}
+
+	q := url.Values{}
+	q.Set("expand", "1")
+	if opts.Title != "" {
+		q.Set("title", opts.Title)
+	}
+	if opts.Body != "" {
+		q.Set("body", opts.Body)
+	}
+	path := "compare/" + escapeBranch(opts.Base) + "..." + escapeBranch(opts.Head)
+
+	var ignored []string
+	for _, flag := range []struct {
+		name string
+		set  bool
+	}{
+		{"label", len(opts.Labels) > 0},
+		{"assignee", len(opts.Assignees) > 0},
+		{"milestone", opts.Milestone != ""},
+	} {
+		if flag.set {
+			ignored = append(ignored, flag.name)
+		}
+	}
+	cmdutil.WarnWebIgnored(opts.IO, ignored...)
+
+	return cmdutil.OpenInBrowser(opts.IO, f.Browser, cmdutil.RepoWebURL(host, owner, repo, path)+"?"+q.Encode())
+}
+
+// escapeBranch escapes each segment of a branch name for a URL path and keeps
+// the slashes, which the compare route takes as part of the branch name.
+func escapeBranch(branch string) string {
+	segments := strings.Split(branch, "/")
+	for i, s := range segments {
+		segments[i] = url.PathEscape(s)
+	}
+	return strings.Join(segments, "/")
 }
 
 func CreateRun(opts *CreateOptions) error {
