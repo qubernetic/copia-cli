@@ -144,16 +144,21 @@ func ViewRun(opts *ViewOptions) error {
 		return err
 	}
 
-	if opts.JSON.IsJSON() {
-		return opts.JSON.Print(opts.IO.Out, pr)
-	}
-
 	var comments []shared.Comment
 	if opts.Comments {
 		comments, err = shared.FetchComments(opts.HTTPClient, opts.Host, opts.Token, opts.Owner, opts.Repo, opts.Number)
 		if err != nil {
 			return err
 		}
+	}
+
+	if err := opts.IO.StartPager(); err != nil {
+		_, _ = fmt.Fprintf(opts.IO.ErrOut, "failed to start pager: %v\n", err)
+	}
+	defer opts.IO.StopPager()
+
+	if opts.JSON.IsJSON() {
+		return opts.JSON.Print(opts.IO.Out, pr)
 	}
 
 	_, _ = fmt.Fprintf(opts.IO.Out, "#%d %s\n", pr.Number, pr.Title)
