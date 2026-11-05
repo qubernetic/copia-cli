@@ -17,6 +17,9 @@ import (
 type HostConfig struct {
 	Token string `yaml:"token"`
 	User  string `yaml:"user"`
+	// Extra keeps the keys this version does not know, so a save writes
+	// them back unchanged.
+	Extra map[string]any `yaml:",inline"`
 }
 
 // Config is the top-level configuration: the hosts and the settings that
@@ -27,6 +30,9 @@ type Config struct {
 	Browser string                 `yaml:"browser,omitempty"`
 	Pager   string                 `yaml:"pager,omitempty"`
 	Editor  string                 `yaml:"editor,omitempty"`
+	// Extra keeps the top-level keys this version does not know, so a save
+	// writes them back unchanged.
+	Extra map[string]any `yaml:",inline"`
 }
 
 // Option describes one setting key of the config file.

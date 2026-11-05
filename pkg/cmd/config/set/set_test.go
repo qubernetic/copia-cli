@@ -162,3 +162,20 @@ func TestNewCmdSet_UnknownKeyCreatesNoFile(t *testing.T) {
 	_, err = os.Stat(path)
 	assert.True(t, os.IsNotExist(err))
 }
+
+func TestNewCmdSet_KeepsUnknownHostKeys(t *testing.T) {
+	path := setup(t, "hosts:\n    app.copia.io:\n        token: secret\n        user: john\n        default_org: my-org\ntheme: dark\n")
+
+	_, err := runSet(t, "output", "json")
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "default_org: my-org")
+	assert.Contains(t, string(data), "theme: dark")
+
+	loaded, err := config.Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, "secret", loaded.Hosts["app.copia.io"].Token)
+	assert.Equal(t, "json", loaded.Output)
+}
