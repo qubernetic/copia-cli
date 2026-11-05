@@ -26,6 +26,9 @@ type CreateOptions struct {
 	Labels     []string
 	Assignees  []string
 	Milestone  string
+
+	EditorMode    bool
+	EditorCommand string
 }
 
 type createRequest struct {
@@ -54,7 +57,11 @@ milestone are optional.
 
 --assignee takes a login and can be repeated; @me stands for the authenticated
 user. --milestone takes a milestone name or its numeric ID; an unknown
-milestone fails before the issue is created.`,
+milestone fails before the issue is created.
+
+--editor opens the editor set in COPIA_EDITOR, the config key editor, VISUAL
+or EDITOR on a temporary file: the title on the first line, the body after a
+blank line, prefilled with --title. Empty text aborts without an issue.`,
 		Example: `  # Create an issue with a label
   $ copia-cli issue create --title "Fix sensor mapping" --label bug
 
@@ -62,7 +69,10 @@ milestone fails before the issue is created.`,
   $ copia-cli issue create --title "Add feature" --body "Description here"
 
   # Assign yourself and set a milestone by name
-  $ copia-cli issue create --title "Fix sensor mapping" --assignee @me --milestone v1.0`,
+  $ copia-cli issue create --title "Fix sensor mapping" --assignee @me --milestone v1.0
+
+  # Write the title and body in the editor
+  $ copia-cli issue create --editor --label bug`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.IO = f.IOStreams
 			host, token, err := f.ResolveAuth()
@@ -78,21 +88,33 @@ milestone fails before the issue is created.`,
 			}
 			opts.Owner = owner
 			opts.Repo = repo
+			if opts.EditorMode {
+				opts.EditorCommand = f.Editor()
+			}
 			opts.HTTPClient = cmdutil.NewHTTPClient()
 			return CreateRun(opts)
 		},
 	}
 
-	cmd.Flags().StringVarP(&opts.Title, "title", "t", "", "Issue title (required)")
+	cmd.Flags().StringVarP(&opts.Title, "title", "t", "", "Issue title (required unless --editor is set)")
 	cmd.Flags().StringVarP(&opts.Body, "body", "b", "", "Issue body")
+	cmd.Flags().BoolVarP(&opts.EditorMode, "editor", "e", false, "Write the title and body in the text editor")
 	cmd.Flags().StringSliceVarP(&opts.Labels, "label", "l", nil, "Add labels by name (repository or organization labels)")
 	cmd.Flags().StringSliceVarP(&opts.Assignees, "assignee", "a", nil, "Assign people by their login. Use \"@me\" to self-assign")
 	cmd.Flags().StringVarP(&opts.Milestone, "milestone", "m", "", "Add the issue to a milestone by name or ID")
+	cmd.MarkFlagsMutuallyExclusive("body", "editor")
 
 	return cmd
 }
 
 func CreateRun(opts *CreateOptions) error {
+	if opts.EditorMode {
+		title, body, err := cmdutil.EditTitleBody(opts.IO, opts.EditorCommand, opts.Title, opts.Body)
+		if err != nil {
+			return err
+		}
+		opts.Title, opts.Body = title, body
+	}
 	if opts.Title == "" {
 		return fmt.Errorf("title required")
 	}
