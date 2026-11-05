@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"os/exec"
 )
 
 // IOStreams provides TTY-aware I/O for commands.
@@ -17,6 +18,11 @@ type IOStreams struct {
 	stdinIsTTY  bool
 	stdoutIsTTY bool
 	stderrIsTTY bool
+
+	pagerCommand string
+	pager        *exec.Cmd
+	pagerIn      io.WriteCloser
+	pagedOut     io.Writer
 }
 
 // System returns IOStreams connected to real stdin/stdout/stderr.

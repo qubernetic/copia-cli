@@ -143,3 +143,16 @@ func (f *Factory) OutputFormat() (string, error) {
 	}
 	return "", fmt.Errorf("invalid %s %q: valid values are %s, %s", source, value, OutputTable, OutputJSON)
 }
+
+// Pager returns the pager command, resolving in order: COPIA_PAGER, the
+// config key pager, then PAGER. COPIA_PAGER set to the empty string turns
+// the pager off.
+func (f *Factory) Pager() string {
+	if value, ok := os.LookupEnv("COPIA_PAGER"); ok {
+		return value
+	}
+	if value := f.ConfigValue("pager"); value != "" {
+		return value
+	}
+	return os.Getenv("PAGER")
+}

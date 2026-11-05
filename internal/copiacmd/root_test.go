@@ -151,3 +151,15 @@ func TestExecute_DefaultOutputFormat(t *testing.T) {
 	assert.EqualError(t, err, "no host configured. Run 'copia auth login' first")
 	assert.Empty(t, stdout.String())
 }
+
+func TestExecute_SetsPager(t *testing.T) {
+	t.Setenv("PAGER", "more")
+	t.Setenv("COPIA_PAGER", "")
+	require.NoError(t, os.Unsetenv("COPIA_PAGER"))
+	ios, _, _, _ := iostreams.Test()
+	f := NewFactory(ios)
+	f.Config = func() (*config.Config, error) { return &config.Config{Pager: "less -R"}, nil }
+
+	require.NoError(t, Execute(f, []string{"config", "get", "pager"}))
+	assert.Equal(t, "less -R", ios.GetPager())
+}
