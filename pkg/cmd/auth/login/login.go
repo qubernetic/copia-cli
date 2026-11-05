@@ -21,6 +21,10 @@ type LoginOptions struct {
 	Token      string
 	ConfigPath string
 	HTTPClient *http.Client
+	// Keyring receives the token; nil or InsecureStorage writes it to the
+	// config file instead.
+	Keyring         config.TokenStore
+	InsecureStorage bool
 }
 
 // NewCmdLogin creates the `copia auth login` command.
@@ -38,7 +42,13 @@ Use --host and --token for non-interactive login in CI environments.
 The host becomes the default host (the config key default_host), which the
 other commands use when neither --host nor COPIA_HOST is given.
 
-Token precedence: --token flag > COPIA_TOKEN env var > config file.`,
+The token is stored in the OS keyring (macOS Keychain, Windows Credential
+Manager, the Secret Service on Linux). When no keyring is available, the
+token is stored in plain text in the config file and a warning says so.
+Use --insecure-storage to store it in the config file on purpose.
+
+Token precedence: --token flag > COPIA_TOKEN env var > the stored token
+(config file, then OS keyring).`,
 		Example: `  # Interactive login
   $ copia-cli auth login
 
@@ -47,6 +57,7 @@ Token precedence: --token flag > COPIA_TOKEN env var > config file.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.IO = f.IOStreams
 			opts.ConfigPath = config.DefaultPath()
+			opts.Keyring = f.Keyring
 
 			if f.Token != "" {
 				opts.Token = f.Token
@@ -80,6 +91,7 @@ Token precedence: --token flag > COPIA_TOKEN env var > config file.`,
 
 	cmd.Flags().StringVar(&opts.Host, "host", "", "Copia instance hostname (default: app.copia.io)")
 	cmd.Flags().StringVar(&opts.Token, "token", "", "Personal access token")
+	cmd.Flags().BoolVar(&opts.InsecureStorage, "insecure-storage", false, "Save the token in plain text in the config file instead of the OS keyring")
 
 	return cmd
 }
@@ -122,9 +134,20 @@ func LoginRun(opts *LoginOptions) error {
 		return err
 	}
 
-	cfg.Hosts[opts.Host] = &config.HostConfig{
-		Token: opts.Token,
-		User:  user.Login,
+	hc := cfg.Hosts[opts.Host]
+	if hc == nil {
+		hc = &config.HostConfig{}
+		cfg.Hosts[opts.Host] = hc
+	}
+	hc.User = user.Login
+	// A token in the keyring leaves none in the config file, which also
+	// moves a token stored there by an earlier login.
+	hc.Token = ""
+	var keyringErr error
+	if opts.Keyring == nil || opts.InsecureStorage {
+		hc.Token = opts.Token
+	} else if keyringErr = opts.Keyring.Set(opts.Host, user.Login, opts.Token); keyringErr != nil {
+		hc.Token = opts.Token
 	}
 	cfg.DefaultHostName = opts.Host
 
@@ -132,6 +155,9 @@ func LoginRun(opts *LoginOptions) error {
 		return err
 	}
 
+	if keyringErr != nil {
+		_, _ = fmt.Fprintf(opts.IO.ErrOut, "warning: could not store the token in the OS keyring (%v); stored it in the config file %s instead\n", keyringErr, opts.ConfigPath)
+	}
 	_, _ = fmt.Fprintf(opts.IO.Out, "Logged in as %s on %s\n", user.Login, opts.Host)
 	return nil
 }
