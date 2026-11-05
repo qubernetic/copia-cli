@@ -108,6 +108,20 @@ func TestFactory_ResolveAuth_StoredToken(t *testing.T) {
 			wantToken: "file-token",
 		},
 		{
+			name: "keyring token of the active account",
+			host: &config.HostConfig{User: "jane", Users: map[string]*config.UserConfig{
+				"john": {Token: "file-token"}, "jane": {},
+			}},
+			wantToken: "keyring-token-jane",
+		},
+		{
+			name: "config file token of the active account",
+			host: &config.HostConfig{User: "john", Users: map[string]*config.UserConfig{
+				"john": {Token: "file-token"}, "jane": {},
+			}},
+			wantToken: "file-token",
+		},
+		{
 			name:      "no keyring store",
 			host:      &config.HostConfig{User: "john"},
 			noKeyring: true,
@@ -124,6 +138,7 @@ func TestFactory_ResolveAuth_StoredToken(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			keyring.MockInit()
 			require.NoError(t, keyring.Set("copia-cli:app.copia.io", "john", "keyring-token"))
+			require.NoError(t, keyring.Set("copia-cli:app.copia.io", "jane", "keyring-token-jane"))
 			if tt.keyringErr != nil {
 				keyring.MockInitWithError(tt.keyringErr)
 				t.Cleanup(keyring.MockInit)
