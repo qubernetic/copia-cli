@@ -1,8 +1,10 @@
 package copiacmd
 
 import (
+	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -24,7 +26,7 @@ func TestNewRootCmd_RegistersCommands(t *testing.T) {
 	}
 	for _, want := range []string{
 		"auth", "repo", "issue", "label", "pr", "release",
-		"api", "search", "org", "notification", "browse", "completion", "config",
+		"api", "search", "org", "notification", "browse", "completion", "config", "alias",
 	} {
 		assert.Contains(t, names, want)
 	}
@@ -162,4 +164,79 @@ func TestExecute_SetsPager(t *testing.T) {
 
 	require.NoError(t, Execute(f, []string{"config", "get", "pager"}))
 	assert.Equal(t, "less -R", ios.GetPager())
+}
+
+func TestExecute_Alias(t *testing.T) {
+	tests := []struct {
+		name    string
+		aliases map[string]string
+		args    []string
+		want    string
+		wantErr string
+	}{
+		{name: "expansion", aliases: map[string]string{"cg": "config get pager"}, args: []string{"cg"}, want: "less\n"},
+		{name: "extra arguments", aliases: map[string]string{"cg": "config get"}, args: []string{"cg", "editor"}, want: "vim\n"},
+		{name: "placeholder", aliases: map[string]string{"cg": "config get $1"}, args: []string{"cg", "editor"}, want: "vim\n"},
+		{name: "a built-in command wins", aliases: map[string]string{"config": "!echo shadowed"}, args: []string{"config", "get", "pager"}, want: "less\n"},
+		{name: "help wins", aliases: map[string]string{"help": "!echo shadowed"}, args: []string{"help", "config"}},
+		{name: "shell alias", aliases: map[string]string{"hi": `!printf '%s|%s\n' "$1" "$2"`}, args: []string{"hi", "a b", "$(echo c)"}, want: "a b|$(echo c)\n"},
+		{name: "missing argument", aliases: map[string]string{"cg": "config get $1"}, args: []string{"cg"}, wantErr: "not enough arguments for alias: config get $1"},
+		{name: "unknown command", aliases: map[string]string{"cg": "config get"}, args: []string{"nope"}, wantErr: `unknown command "nope" for "copia-cli"`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ios, _, stdout, _ := iostreams.Test()
+			f := NewFactory(ios)
+			f.Config = func() (*config.Config, error) {
+				return &config.Config{Pager: "less", Editor: "vim", Aliases: tt.aliases}, nil
+			}
+
+			err := Execute(f, tt.args)
+			if tt.wantErr != "" {
+				assert.EqualError(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Contains(t, stdout.String(), tt.want)
+			assert.NotContains(t, stdout.String(), "shadowed")
+		})
+	}
+}
+
+func TestExecute_AliasConfigError(t *testing.T) {
+	ios, _, _, _ := iostreams.Test()
+	f := NewFactory(ios)
+	f.Config = func() (*config.Config, error) { return nil, errors.New("parsing config: bad") }
+
+	assert.EqualError(t, Execute(f, []string{"cg"}), "parsing config: bad")
+	require.NoError(t, Execute(f, []string{"--version"}))
+}
+
+func TestMain_ShellAliasExitCode(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	cfg := &config.Config{Aliases: map[string]string{"fail": "!echo out; echo err >&2; exit 3"}}
+	require.NoError(t, config.Save(filepath.Join(dir, "copia", "config.yml"), cfg))
+
+	code, stdout, stderr := runMain(t, "fail")
+	assert.Equal(t, 3, code)
+	assert.Equal(t, "out\n", stdout)
+	assert.Equal(t, "err\n", stderr)
+}
+
+func TestExecute_ShellAliasError(t *testing.T) {
+	ios, _, _, _ := iostreams.Test()
+	f := NewFactory(ios)
+	f.Config = func() (*config.Config, error) {
+		return &config.Config{Aliases: map[string]string{"fail": "!exit 3"}}, nil
+	}
+
+	err := Execute(f, []string{"fail"})
+	var aliasErr *ShellAliasError
+	require.ErrorAs(t, err, &aliasErr)
+	assert.Equal(t, 3, aliasErr.Err.ExitCode())
+	assert.EqualError(t, err, "shell alias: exit status 3")
+	var exitErr *exec.ExitError
+	assert.ErrorAs(t, err, &exitErr)
 }

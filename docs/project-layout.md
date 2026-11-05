@@ -37,6 +37,7 @@ graph TB
         notification[notification: list/read]
         browse[browse: open repo/issue/PR URL]
         configcmd[config: get/set/list]
+        aliascmd[alias: set/list/delete/import]
         completion[completion: bash/zsh/fish/powershell]
     end
     subgraph API
@@ -53,10 +54,11 @@ graph TB
     copiacmd --> build
     copiacmd --> config
     factory --> iostreams
-    copiacmd --> auth & repo & issue & pr & label & release & apicmd & search & org & notification & browse & configcmd & completion
+    copiacmd --> auth & repo & issue & pr & label & release & apicmd & search & org & notification & browse & configcmd & aliascmd & completion
     auth & repo & issue & pr & label & release & apicmd & search & org & notification --> factory
     browse --> factory
     configcmd --> factory
+    aliascmd --> factory
     completion --> iostreams
     auth & repo & issue & pr & label & release & apicmd & search & org & notification -.-> client
     client --> gitea
@@ -89,6 +91,7 @@ copia-cli/
 │   │   ├── notification/          # list, read
 │   │   ├── browse/                # single command: browse [<number>]
 │   │   ├── config/                # get, set, list
+│   │   ├── alias/                 # set, list, delete, import; expand/ (alias expansion), shared/ (name and expansion checks)
 │   │   └── completion/            # single command: completion <shell> (bash, zsh, fish, powershell)
 │   ├── cmdutil/
 │   │   ├── factory.go             # Factory dependency injection
@@ -126,7 +129,7 @@ copia-cli/
 **Pattern:** `init()` falls back to `debug.ReadBuildInfo()` when `Version == "DEV"`
 
 ### `internal/config/`
-**Purpose:** YAML config management for multi-host credentials and the settings `output`, `browser`, `pager`, `editor` (top-level keys beside `hosts`)
+**Purpose:** YAML config management for multi-host credentials and the settings `output`, `browser`, `pager`, `editor` and `aliases` (top-level keys beside `hosts`)
 **Entry point:** `config.go`
 **Exports:** `Config`, `HostConfig`, `Option`, `Options`, `Load()`, `Save()`, `DefaultPath()`, `DefaultHost()`, `Get()`, `Set()`
 **Pattern:** XDG Base Dir, 0600 permissions, graceful empty-config on missing file
@@ -140,8 +143,8 @@ copia-cli/
 ### `internal/copiacmd/`
 **Purpose:** Root command construction and `Main()` entrypoint
 **Entry point:** `root.go`
-**Exports:** `NewRootCmd(f)`, `Main() int`
-**Pattern:** Constructs Factory, reads env vars, registers all command groups
+**Exports:** `NewRootCmd(f)`, `NewFactory(ios)`, `Execute(f, args)`, `ShellAliasError`, `Main() int`
+**Pattern:** Constructs Factory, reads env vars, registers all command groups; `Execute` expands an alias of the config file before the cobra dispatch when the arguments name no built-in command, and runs a shell alias (`!` prefix) through `sh -c` with the arguments as positional parameters, its exit status becoming the one of `Main`
 
 ### `pkg/api/`
 **Purpose:** Thin factory for Gitea SDK clients
@@ -191,6 +194,7 @@ func xxxRun(opts *XxxOptions) error { ... }  // unexported, testable
 | `notification` | list, read | Raw HTTP (read: PATCH one thread, PUT with `--all`) |
 | `browse` | none (single command `browse [<number>]`) | No API call; URL built client-side, opened with `cmdutil.Browser` |
 | `config` | get, set, list | No API call; reads and writes the settings of `config.yml`, `set` validates before it saves |
+| `alias` | set, list, delete, import | No API call; reads and writes `aliases` of `config.yml`, `set` and `import` refuse a name of a built-in command |
 | `completion` | none (single command `completion <shell>`: bash, zsh, fish, powershell) | No API call; Cobra script generation |
 
 ### `test/integration/`

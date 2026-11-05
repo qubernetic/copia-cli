@@ -3,13 +3,18 @@ package copiacmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/qubernetic/copia-cli/internal/build"
 	"github.com/qubernetic/copia-cli/internal/config"
 	apiCmd "github.com/qubernetic/copia-cli/pkg/cmd/api"
+	aliasCmd "github.com/qubernetic/copia-cli/pkg/cmd/alias"
+	"github.com/qubernetic/copia-cli/pkg/cmd/alias/expand"
 	authCmd "github.com/qubernetic/copia-cli/pkg/cmd/auth"
 	browseCmd "github.com/qubernetic/copia-cli/pkg/cmd/browse"
 	completionCmd "github.com/qubernetic/copia-cli/pkg/cmd/completion"
@@ -56,6 +61,7 @@ func NewRootCmd(f *cmdutil.Factory) *cobra.Command {
 	cmd.AddCommand(notificationCmd.NewCmdNotification(f))
 	cmd.AddCommand(browseCmd.NewCmdBrowse(f))
 	cmd.AddCommand(configCmd.NewCmdConfig(f))
+	cmd.AddCommand(aliasCmd.NewCmdAlias(f))
 	cmd.AddCommand(completionCmd.NewCmdCompletion(f.IOStreams))
 
 	return cmd
@@ -79,11 +85,72 @@ func NewFactory(ios *iostreams.IOStreams) *cmdutil.Factory {
 // Execute runs the root command of f with args. The command context carries
 // f.OutputFormat, the default output format of the commands that take
 // --json, and f.IOStreams pages through f.Pager.
+//
+// When args do not name a built-in command, an alias of the config file in
+// args[0] is expanded first, so a built-in command always wins over an alias
+// of the same name. A shell alias runs through sh instead of the root
+// command; its non-zero exit status comes back as a *ShellAliasError.
 func Execute(f *cmdutil.Factory, args []string) error {
 	f.IOStreams.SetPager(f.Pager())
 	rootCmd := NewRootCmd(f)
+	rootCmd.InitDefaultHelpCmd()
+	if cmd, _, err := rootCmd.Traverse(args); err != nil || cmd == rootCmd {
+		expanded, isShell, err := expandAlias(f, args)
+		if err != nil {
+			return err
+		}
+		if isShell {
+			return runShellAlias(f.IOStreams, expanded)
+		}
+		args = expanded
+	}
 	rootCmd.SetArgs(args)
 	return rootCmd.ExecuteContext(cmdutil.WithOutputFormat(context.Background(), f.OutputFormat))
+}
+
+// expandAlias expands the alias in args[0], leaving a flag and cobra's
+// completion requests alone without reading the config file.
+func expandAlias(f *cmdutil.Factory, args []string) ([]string, bool, error) {
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") ||
+		args[0] == cobra.ShellCompRequestCmd || args[0] == cobra.ShellCompNoDescRequestCmd {
+		return args, false, nil
+	}
+	cfg, err := f.Config()
+	if err != nil {
+		return nil, false, err
+	}
+	return expand.ExpandAlias(cfg.Aliases, args)
+}
+
+// ShellAliasError is the non-zero exit status of a shell alias, which Main
+// returns as the exit code of copia-cli without a message.
+type ShellAliasError struct {
+	Err *exec.ExitError
+}
+
+func (e *ShellAliasError) Error() string { return "shell alias: " + e.Err.Error() }
+
+func (e *ShellAliasError) Unwrap() error { return e.Err }
+
+// runShellAlias runs sh with args and the standard streams of ios.
+func runShellAlias(ios *iostreams.IOStreams, args []string) error {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		return fmt.Errorf("running a shell alias: %w", err)
+	}
+	cmd := exec.Command(sh, args...)
+	cmd.Stdin = ios.In
+	cmd.Stdout = ios.Out
+	cmd.Stderr = ios.ErrOut
+	err = cmd.Run()
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return &ShellAliasError{Err: exitErr}
+	}
+	if err != nil {
+		return fmt.Errorf("running a shell alias: %w", err)
+	}
+	return nil
 }
 
 // Main is the entrypoint called from cmd/copia-cli/main.go.
@@ -94,6 +161,10 @@ func Main() int {
 	f := NewFactory(iostreams.System())
 
 	if err := Execute(f, os.Args[1:]); err != nil {
+		var aliasErr *ShellAliasError
+		if errors.As(err, &aliasErr) && aliasErr.Err.ExitCode() > 0 {
+			return aliasErr.Err.ExitCode()
+		}
 		_, _ = fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return 1
 	}
