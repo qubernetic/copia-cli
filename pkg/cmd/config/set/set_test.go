@@ -65,8 +65,8 @@ func TestNewCmdSet(t *testing.T) {
 			assert.Equal(t, tt.args[1], value)
 
 			tt.want.Hosts = map[string]*config.HostConfig{
-				"app.copia.io":        {Token: "secret", User: "john"},
-				"on-prem.example.com": {Token: "other", User: "jane"},
+				"app.copia.io":        {User: "john", Users: map[string]*config.UserConfig{"john": {Token: "secret"}}},
+				"on-prem.example.com": {User: "jane", Users: map[string]*config.UserConfig{"jane": {Token: "other"}}},
 			}
 			assert.Equal(t, &tt.want, loaded, "hosts untouched")
 
@@ -176,6 +176,6 @@ func TestNewCmdSet_KeepsUnknownHostKeys(t *testing.T) {
 
 	loaded, err := config.Load(path)
 	require.NoError(t, err)
-	assert.Equal(t, "secret", loaded.Hosts["app.copia.io"].Token)
+	assert.Equal(t, "secret", loaded.Hosts["app.copia.io"].Users["john"].Token)
 	assert.Equal(t, "json", loaded.Output)
 }

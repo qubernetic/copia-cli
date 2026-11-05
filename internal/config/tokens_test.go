@@ -103,19 +103,31 @@ func TestFileStore_SetGetDelete(t *testing.T) {
 	assert.ErrorIs(t, err, ErrTokenNotFound)
 
 	require.NoError(t, store.Set("app.copia.io", "john", "secret-1"))
-	assert.Equal(t, &HostConfig{Token: "secret-1", User: "john"}, cfg.Hosts["app.copia.io"])
+	require.NoError(t, store.Set("app.copia.io", "jane", "secret-2"))
+	assert.Equal(t, &HostConfig{Users: map[string]*UserConfig{"john": {Token: "secret-1"}, "jane": {Token: "secret-2"}}}, cfg.Hosts["app.copia.io"])
 
 	got, err := store.Get("app.copia.io", "john")
 	require.NoError(t, err)
 	assert.Equal(t, "secret-1", got)
 
-	_, err = store.Get("app.copia.io", "jane")
+	_, err = store.Get("app.copia.io", "joe")
 	assert.ErrorIs(t, err, ErrTokenNotFound)
 
 	require.NoError(t, store.Delete("app.copia.io", "john"))
-	assert.Empty(t, cfg.Hosts["app.copia.io"].Token)
-	assert.Equal(t, "john", cfg.Hosts["app.copia.io"].User)
+	assert.Equal(t, &HostConfig{Users: map[string]*UserConfig{"john": {}, "jane": {Token: "secret-2"}}}, cfg.Hosts["app.copia.io"])
 	assert.ErrorIs(t, store.Delete("app.copia.io", "john"), ErrTokenNotFound)
+}
+
+func TestFileStore_OldShape(t *testing.T) {
+	cfg := &Config{Hosts: map[string]*HostConfig{"app.copia.io": {Token: "secret-1", User: "john"}}}
+	store := FileStore{Config: cfg}
+
+	got, err := store.Get("app.copia.io", "john")
+	require.NoError(t, err)
+	assert.Equal(t, "secret-1", got)
+
+	require.NoError(t, store.Set("app.copia.io", "jane", "secret-2"))
+	assert.Equal(t, &HostConfig{User: "john", Users: map[string]*UserConfig{"john": {Token: "secret-1"}, "jane": {Token: "secret-2"}}}, cfg.Hosts["app.copia.io"])
 }
 
 func TestFileStore_SetKeepsUnknownKeys(t *testing.T) {
@@ -150,6 +162,30 @@ func TestLookupToken(t *testing.T) {
 			keyring:    map[string]string{"john": "keyring-token"},
 			wantToken:  "keyring-token",
 			wantSource: SourceKeyring,
+		},
+		{
+			name: "keyring token of the active account",
+			hosts: map[string]*HostConfig{"app.copia.io": {User: "jane", Users: map[string]*UserConfig{
+				"john": {Token: "file-token"}, "jane": {},
+			}}},
+			keyring:    map[string]string{"john": "keyring-token-1", "jane": "keyring-token-2"},
+			wantToken:  "keyring-token-2",
+			wantSource: SourceKeyring,
+		},
+		{
+			name: "config file token of the active account",
+			hosts: map[string]*HostConfig{"app.copia.io": {User: "john", Users: map[string]*UserConfig{
+				"john": {Token: "file-token"}, "jane": {},
+			}}},
+			keyring:    map[string]string{"jane": "keyring-token"},
+			wantToken:  "file-token",
+			wantSource: SourceFile,
+		},
+		{
+			name:    "no active account",
+			hosts:   map[string]*HostConfig{"app.copia.io": {Users: map[string]*UserConfig{"john": {Token: "file-token"}}}},
+			keyring: map[string]string{"john": "keyring-token"},
+			wantErr: ErrTokenNotFound,
 		},
 		{
 			name:    "no token anywhere",
@@ -212,4 +248,39 @@ func TestSave_KeyringLoginLeavesNoTokenKey(t *testing.T) {
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
 	assert.NotContains(t, string(data), "token")
+}
+
+func TestLookupUserToken(t *testing.T) {
+	keyring.MockInit()
+	require.NoError(t, keyring.Set("copia-cli:app.copia.io", "jane", "keyring-token"))
+	cfg := &Config{Hosts: map[string]*HostConfig{"app.copia.io": {User: "john", Users: map[string]*UserConfig{
+		"john": {Token: "file-token"}, "jane": {},
+	}}}}
+
+	token, source, err := LookupUserToken(cfg, "app.copia.io", "jane", NewKeyringStore())
+	require.NoError(t, err)
+	assert.Equal(t, "keyring-token", token)
+	assert.Equal(t, SourceKeyring, source)
+
+	token, source, err = LookupUserToken(cfg, "app.copia.io", "john", NewKeyringStore())
+	require.NoError(t, err)
+	assert.Equal(t, "file-token", token)
+	assert.Equal(t, SourceFile, source)
+
+	_, _, err = LookupUserToken(cfg, "app.copia.io", "joe", NewKeyringStore())
+	assert.ErrorIs(t, err, ErrTokenNotFound)
+}
+
+func TestKeyringStore_EntryPerAccount(t *testing.T) {
+	keyring.MockInit()
+	store := NewKeyringStore()
+	require.NoError(t, store.Set("app.copia.io", "john", "secret-1"))
+	require.NoError(t, store.Set("app.copia.io", "jane", "secret-2"))
+
+	require.NoError(t, store.Delete("app.copia.io", "john"))
+	got, err := keyring.Get("copia-cli:app.copia.io", "jane")
+	require.NoError(t, err)
+	assert.Equal(t, "secret-2", got)
+	_, err = keyring.Get("copia-cli:app.copia.io", "john")
+	assert.ErrorIs(t, err, keyring.ErrNotFound)
 }

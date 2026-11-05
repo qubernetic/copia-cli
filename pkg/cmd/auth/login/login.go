@@ -42,6 +42,10 @@ Use --host and --token for non-interactive login in CI environments.
 The host becomes the default host (the config key default_host), which the
 other commands use when neither --host nor COPIA_HOST is given.
 
+A host keeps several accounts. Logging in adds the account of the token, or
+updates it when it is known, and makes it the host's active account, whose
+token the other commands use. The other accounts of the host stay stored.
+
 The token is stored in the OS keyring (macOS Keychain, Windows Credential
 Manager, the Secret Service on Linux). When no keyring is available, the
 token is stored in plain text in the config file and a warning says so.
@@ -144,8 +148,10 @@ func LoginRun(opts *LoginOptions) error {
 			fileToken = ""
 		}
 	}
-	// FileStore.Set changes cfg only and cannot fail; Save writes it.
+	// FileStore.Set adds or updates the account in cfg only and cannot fail;
+	// Save writes it. The account becomes the host's active account.
 	_ = config.FileStore{Config: cfg}.Set(opts.Host, user.Login, fileToken)
+	cfg.Hosts[opts.Host].User = user.Login
 	cfg.DefaultHostName = opts.Host
 
 	if err := config.Save(opts.ConfigPath, cfg); err != nil {

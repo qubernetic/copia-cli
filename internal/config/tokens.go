@@ -127,7 +127,7 @@ func keyringError(err error, token string) error {
 	return fmt.Errorf("OS keyring: %s", msg)
 }
 
-// FileStore keeps tokens in the host entries of Config. Set and Delete change
+// FileStore keeps tokens in the accounts of Config. Set and Delete change
 // Config only; Save writes the change to the config file.
 type FileStore struct {
 	Config *Config
@@ -136,50 +136,87 @@ type FileStore struct {
 // Get returns the token of user on host.
 func (s FileStore) Get(host, user string) (string, error) {
 	hc := s.Config.Hosts[host]
-	if hc == nil || hc.User != user || hc.Token == "" {
+	if hc == nil {
 		return "", ErrTokenNotFound
 	}
-	return hc.Token, nil
+	account := hc.migrated().Users[user]
+	if account == nil || account.Token == "" {
+		return "", ErrTokenNotFound
+	}
+	return account.Token, nil
 }
 
 // Set stores token as the token of user on host, creating the host entry
-// when it is missing.
+// and the account when they are missing. It does not change the host's
+// active account.
 func (s FileStore) Set(host, user, token string) error {
 	hc := s.Config.Hosts[host]
 	if hc == nil {
 		hc = &HostConfig{}
-		s.Config.Hosts[host] = hc
 	}
-	hc.User = user
-	hc.Token = token
+	hc = hc.migrated()
+	if hc.Users == nil {
+		hc.Users = map[string]*UserConfig{}
+	}
+	account := hc.Users[user]
+	if account == nil {
+		account = &UserConfig{}
+		hc.Users[user] = account
+	}
+	account.Token = token
+	s.Config.Hosts[host] = hc
 	return nil
 }
 
-// Delete clears the token of user on host and keeps the host entry.
+// Delete clears the token of user on host and keeps the account.
 func (s FileStore) Delete(host, user string) error {
 	if _, err := s.Get(host, user); err != nil {
 		return err
 	}
-	s.Config.Hosts[host].Token = ""
+	hc := s.Config.Hosts[host].migrated()
+	hc.Users[user].Token = ""
+	s.Config.Hosts[host] = hc
 	return nil
 }
 
-// LookupToken returns the stored token of host's account and where it came
-// from: the config file first, so tokens stored there before the keyring
-// keep working, then keyring when it is not nil. It returns ErrTokenNotFound
-// when neither holds one.
+// LookupToken returns the stored token of the active account of host and
+// where it came from, as LookupUserToken does.
 func LookupToken(cfg *Config, host string, keyring TokenStore) (token, source string, err error) {
+	hc := cfg.Hosts[host]
+	switch {
+	case hc == nil:
+		return "", "", ErrTokenNotFound
+	case hc.User == "" && hc.Token != "":
+		// The old shape without a login has no account to move the token
+		// to, so it stays where it is.
+		return hc.Token, SourceFile, nil
+	case hc.User == "":
+		return "", "", ErrTokenNotFound
+	}
+	return LookupUserToken(cfg, host, hc.User, keyring)
+}
+
+// LookupUserToken returns the stored token of the account user on host and
+// where it came from: the config file first, so tokens stored there before
+// the keyring keep working, then keyring when it is not nil. It returns
+// ErrTokenNotFound when the host has no such account or neither holds a
+// token.
+func LookupUserToken(cfg *Config, host, user string, keyring TokenStore) (token, source string, err error) {
 	hc := cfg.Hosts[host]
 	if hc == nil {
 		return "", "", ErrTokenNotFound
 	}
-	if hc.Token != "" {
-		return hc.Token, SourceFile, nil
-	}
-	if keyring == nil || hc.User == "" {
+	account := hc.migrated().Users[user]
+	if account == nil {
 		return "", "", ErrTokenNotFound
 	}
-	token, err = keyring.Get(host, hc.User)
+	if account.Token != "" {
+		return account.Token, SourceFile, nil
+	}
+	if keyring == nil {
+		return "", "", ErrTokenNotFound
+	}
+	token, err = keyring.Get(host, user)
 	if err != nil {
 		return "", "", err
 	}

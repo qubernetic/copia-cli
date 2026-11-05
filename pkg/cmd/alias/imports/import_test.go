@@ -150,7 +150,7 @@ func TestImport(t *testing.T) {
 				wantAliases = map[string]string{"co": "pr checkout"}
 			}
 			assert.Equal(t, wantAliases, cfg.Aliases)
-			assert.Equal(t, "secret", cfg.Hosts["app.copia.io"].Token)
+			assert.Equal(t, "secret", cfg.Hosts["app.copia.io"].Users["john"].Token)
 		})
 	}
 }
