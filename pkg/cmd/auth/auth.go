@@ -5,6 +5,7 @@ import (
 	loginCmd "github.com/qubernetic/copia-cli/pkg/cmd/auth/login"
 	logoutCmd "github.com/qubernetic/copia-cli/pkg/cmd/auth/logout"
 	statusCmd "github.com/qubernetic/copia-cli/pkg/cmd/auth/status"
+	switchCmd "github.com/qubernetic/copia-cli/pkg/cmd/auth/switch"
 	"github.com/qubernetic/copia-cli/pkg/cmdutil"
 )
 
@@ -19,6 +20,7 @@ func NewCmdAuth(f *cmdutil.Factory) *cobra.Command {
 	cmd.AddCommand(loginCmd.NewCmdLogin(f))
 	cmd.AddCommand(logoutCmd.NewCmdLogout(f))
 	cmd.AddCommand(statusCmd.NewCmdStatus(f))
+	cmd.AddCommand(switchCmd.NewCmdSwitch(f))
 
 	return cmd
 }
