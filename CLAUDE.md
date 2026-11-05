@@ -91,4 +91,4 @@ Phase 4: ~~winget~~, ~~COPR~~, ~~AUR~~, ~~Snap~~, OS keyring, ~~aliases~~, ~~bro
 
 - `docs/api-reference.md` — Full Gitea API endpoint mapping with request/response examples
 - `docs/authentication.md` — Auth methods, token generation, config file format, multi-instance setup
-- `docs/parity.md` — Feature parity tracker against the Gitea 1.26 API (77 implementable: 58 implemented, 12 full, 7 partial; 13 impossible)
+- `docs/parity.md` — Feature parity tracker against the Gitea 1.26 API (78 implementable: 59 implemented, 12 full, 7 partial; 13 impossible)

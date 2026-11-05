@@ -61,6 +61,9 @@ $ copia-cli repo list --visibility private
 # Create an issue
 $ copia-cli issue create --title "Fix sensor mapping" --label bug --assignee @me --milestone v1.0
 
+# Show the open issues assigned to you, mentioning you and opened by you
+$ copia-cli issue status
+
 # List the issues assigned to you in that milestone
 $ copia-cli issue list --assignee @me --milestone v1.0 --search "sensor"
 
