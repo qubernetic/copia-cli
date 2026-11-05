@@ -778,3 +778,32 @@ defer opts.IO.StopPager()
 - When the user quits the pager before the end, the rest of the output is discarded instead of failing with a broken pipe, so no command handles that case.
 - The commands that page: `repo list`, `repo view`, `issue list`, `issue view`, `pr list`, `pr view`, `pr diff`, `label list`, `release list`, `org list`, `org view` and `notification list`. Their unit tests set `ios.SetStdoutTTY(true)` and a pager that cannot be started, which shows that the command calls `StartPager`; `pkg/iostreams/pager_test.go` runs the test binary as a fake pager.
 
+### Editor
+
+`--editor/-e` (gh's flag) lets the user write text in the editor; there are no interactive prompts, so the editor opens only on that flag. The command reads the editor in `RunE` and edits in its `Run` function, before any request, so empty text sends nothing:
+
+```go
+cmd.Flags().BoolVarP(&opts.EditorMode, "editor", "e", false, "Write the comment body in the text editor")
+cmd.MarkFlagsMutuallyExclusive("body", "editor")
+
+// RunE
+if opts.EditorMode {
+	opts.EditorCommand = f.Editor()
+}
+
+// Run
+if opts.EditorMode {
+	body, err := cmdutil.EditBody(opts.IO, opts.EditorCommand)
+	if err != nil {
+		return err // cmdutil.ErrEmptyEdit for blank text
+	}
+	opts.Body = body
+}
+```
+
+- `Factory.Editor` resolves `COPIA_EDITOR`, then the config key `editor`, then `VISUAL`, then `EDITOR`.
+- `cmdutil.EditText` writes the initial text to a new `copia-*.md` file in the temporary directory (`os.CreateTemp`, mode `600`), runs the editor on it with the command's standard streams and removes the file afterwards, also when the editor fails. `cmdutil.SplitCommand` splits the command like a shell (quotes, backslashes, no expansion), as gh does, and it runs without a shell. No editor set fails with a hint naming the settings.
+- `cmdutil.EditTitleBody` (create commands) opens the title, a blank line and the body, and returns the first non-blank line as the title; `cmdutil.EditBody` (comment commands) opens an empty file. Both return `cmdutil.ErrEmptyEdit` for blank text.
+- `--editor` conflicts with `--body` and `--body-file` through `MarkFlagsMutuallyExclusive`, so the conflict fails before `RunE`.
+- Tests use `pkg/cmdutil/editortest`: `editortest.New(t, text)` writes a shell script that records its arguments and the initial text and saves `text`; set its `Command` in `COPIA_EDITOR`.
+

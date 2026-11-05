@@ -47,6 +47,8 @@ The top-level keys beside `hosts` are the settings of `copia-cli config` (`outpu
 
 `pager` names the program the list and view commands and `pr diff` send their output to when standard output is a terminal, for example `less -R`. `COPIA_PAGER` overrides it (set but empty, it turns the pager off), and `PAGER` is used when neither is set. The value is split into words at whitespace and run without a shell.
 
+`editor` names the program that `--editor/-e` of `issue create`, `pr create`, `issue comment` and `pr comment` opens on a temporary file, for example `vim` or `code --wait`. `COPIA_EDITOR` overrides it, and `VISUAL`, then `EDITOR` are used when neither is set; with none of them `--editor` fails. The value is split into words like a shell does (quotes and backslashes group words, nothing is expanded) and run without a shell, with the file name as the last argument. The temporary file (`copia-*.md`, mode `600`) is removed afterwards.
+
 **Security considerations:**
 - File permissions are `600` (owner read/write only): every save writes a new `600` file to a temporary file beside it and renames it over the old one, so a failed save leaves the old file as it was. A save refuses a config path that is not a regular file (a symlink, for example) and a file the user cannot write; a config directory that group or others can write is set to `700`, and the save fails if that is not possible
 - On Windows, stored in `%USERPROFILE%\.config\copia\config.yml`
