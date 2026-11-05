@@ -72,6 +72,10 @@ func (f *Factory) ResolveAuth() (host, token string, err error) {
 	}
 	// COPIA_TOKEN was passed over for the stored token of the host.
 	envTokenSkipped := token == "" && envToken != ""
+	hint := ""
+	if envTokenSkipped {
+		hint = ". " + reason
+	}
 
 	if host == "" || token == "" {
 		cfg, err := f.Config()
@@ -84,15 +88,11 @@ func (f *Factory) ResolveAuth() (host, token string, err error) {
 		if token == "" && host != "" {
 			token, _, err = config.LookupToken(cfg, host, f.Keyring)
 			if err != nil && !errors.Is(err, config.ErrTokenNotFound) {
-				return "", "", fmt.Errorf("reading the token for %s: %w", host, err)
+				return "", "", fmt.Errorf("reading the token for %s: %w%s", host, err, hint)
 			}
 		}
 	}
 
-	hint := ""
-	if envTokenSkipped {
-		hint = ". " + reason
-	}
 	if host == "" {
 		return "", "", fmt.Errorf("no host configured. Run 'copia auth login' first%s", hint)
 	}
@@ -109,8 +109,9 @@ func (f *Factory) ResolveAuth() (host, token string, err error) {
 }
 
 // sameHost reports whether a and b name the same host: the host name
-// compared case-insensitively and the same port, a missing port being 443.
-// A host that does not parse is never the same host.
+// compared ASCII case-insensitively and the same port, a missing port being
+// 443. A host that does not parse or has a non-ASCII name is never the same
+// host.
 func sameHost(a, b string) bool {
 	u, err := ParseHost(a)
 	if err != nil {
