@@ -126,6 +126,7 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 | `copia-cli api` | [x] |
 | `copia-cli search repos` | [x] |
 | `copia-cli search issues` | [x] |
+| `copia-cli search prs` (`gh search prs`: query, `--state`, `--label`, `--author`, `--assignee`, `--owner`, `-R`, `--limit`; `GET /repos/issues/search?type=pulls`, `--assignee` only for the authenticated user, `-R` filters on the client side, labels match any name; app.copia.io ignores `created_by`, found by the `integration` job of #376, so `--author` is also checked on each result) | [x] |
 | `copia-cli org list` | [x] |
 | `copia-cli org view` | [x] |
 | `copia-cli notification list` | [x] |
@@ -159,11 +160,11 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 
 | Status | Count |
 |--------|-------|
-| Implemented | 48 |
-| Not yet implemented (Full parity) | 13 |
+| Implemented | 50 |
+| Not yet implemented (Full parity) | 12 |
 | Not yet implemented (Partial) | 7 |
 | Not yet implemented (client side, `repo set-default`) | 1 |
 | No equivalent | 12 |
-| **Total implementable** | **69** |
+| **Total implementable** | **70** |
 
 Counted from the rows above: every `[x]` row, and every other row by its Parity value. The Parity values follow the Gitea 1.26 API (`release/v1.26` swagger); `TestAPI_Version` in `test/integration/api_test.go` logs what Copia's `GET /version` reports in the PR `integration` job. On 2026-11-04 that was `0.59.0`, Copia's own version number, not a Gitea release, so the API does not show which Gitea version Copia is built on; a command's integration test shows whether Copia serves its endpoint.

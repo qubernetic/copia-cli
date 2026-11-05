@@ -17,7 +17,7 @@ func TestNewCmdSearch_Subcommands(t *testing.T) {
 		names = append(names, c.Name())
 		assert.Equal(t, "General commands", c.GroupID)
 	}
-	assert.ElementsMatch(t, []string{"repos", "issues"}, names)
+	assert.ElementsMatch(t, []string{"repos", "issues", "prs"}, names)
 
 	groups := cmd.Groups()
 	require.Len(t, groups, 1)
