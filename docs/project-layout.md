@@ -28,7 +28,7 @@ graph TB
         auth[auth: login/logout/status]
         repo[repo: list/view/clone/create/delete/fork/set-default]
         issue[issue: list/create/view/close/comment/edit/status]
-        pr[pr: list/create/view/merge/close/review/diff/checkout]
+        pr[pr: list/create/status/view/merge/close/review/diff/checkout]
         label[label: list/create]
         release[release: list/create/delete/upload]
         apicmd[api: raw REST request]
@@ -82,7 +82,7 @@ copia-cli/
 │   │   ├── auth/                  # login, logout, status
 │   │   ├── repo/                  # list, view, clone, create, delete, fork, setdefault
 │   │   ├── issue/                 # list, create, view, close, comment, edit, status
-│   │   ├── pr/                    # list, create, view, merge, close, review, diff, checkout
+│   │   ├── pr/                    # list, create, status, view, merge, close, review, diff, checkout
 │   │   ├── label/                 # list, create
 │   │   ├── release/               # list, create, delete, upload
 │   │   ├── api/                   # single command: api <path>
@@ -187,7 +187,7 @@ func xxxRun(opts *XxxOptions) error { ... }  // unexported, testable
 | `auth` | login, logout, status | Raw HTTP (no SDK) |
 | `repo` | list, view, clone, create, delete, fork, set-default | Raw HTTP + git exec; `set-default` makes no API call |
 | `issue` | list, create, view, close, comment, edit, status | Raw HTTP |
-| `pr` | list, create, view, merge, close, review, diff, checkout | Raw HTTP + git exec |
+| `pr` | list, create, status, view, merge, close, review, diff, checkout | Raw HTTP + git exec |
 | `label` | list, create | Raw HTTP |
 | `release` | list, create, delete, upload | Raw HTTP + multipart |
 | `api` | none (single command `api <path>`) | Raw HTTP, any method (`-X`; GET default, POST when `-f` is set), path prefixed with `/api/v1` |

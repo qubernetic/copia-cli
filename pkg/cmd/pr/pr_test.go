@@ -19,6 +19,7 @@ func TestNewCmdPR_RegistersSubcommands(t *testing.T) {
 	assert.Equal(t, map[string]string{
 		"list":          "General commands",
 		"create":        "General commands",
+		"status":        "General commands",
 		"view":          "Targeted commands",
 		"merge":         "Targeted commands",
 		"close":         "Targeted commands",

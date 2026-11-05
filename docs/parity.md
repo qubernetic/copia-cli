@@ -96,6 +96,7 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 | `gh pr edit` | Full | `copia-cli pr edit` | [x] |
 | `gh pr ready` | Full | `copia-cli pr ready` | [x] |
 | `gh pr update-branch` | Full | `copia-cli pr update-branch` | [x] |
+| `gh pr status` | Partial | `copia-cli pr status` | [x] |
 
 `--web/-w` on `gh pr view`, `gh pr comment`, `gh pr diff`, `gh pr list` and `gh pr create`: client side, no API call and no token, opened as for the issue commands. `view` and `comment` open `/{owner}/{repo}/pulls/{index}` and `diff` opens `/{owner}/{repo}/pulls/{index}/files` (gh opens the files tab too). `list` opens `/{owner}/{repo}/pulls` with `state`; the Gitea 1.26 web list knows `open`, `closed` and `all` only, so `--state merged` opens `state=closed` with a warning. `create` opens `/{owner}/{repo}/compare/{base}...{head}` (each branch name escaped per path segment, the head defaults to the current branch, `--fill` runs first) with `expand=1`, `title` and `body`, which the compare handler reads to open and fill the new pull request form. That form takes no labels, assignees or milestone by name, so those flags print a warning; `--draft` and `--reviewer` fail with `--web` as in gh, and `--web` with `--editor` fails.
 
@@ -108,6 +109,8 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 `gh pr reopen`: `PATCH /repos/{owner}/{repo}/pulls/{index}` with `state: open`. The pull request is read first: an open one is left alone and a merged one fails, as in `gh`. `--comment/-c` posts to `/repos/{owner}/{repo}/issues/{index}/comments` before the reopen. The argument is a number, `#<n>` or a pull request URL.
 
 `gh pr update-branch`: `POST /repos/{owner}/{repo}/pulls/{index}/update` with `style=merge`, or `style=rebase` for `--rebase`. The pull request is read first: a closed or merged one fails, since Gitea answers it with HTTP 422 without a message. Gitea answers an up-to-date branch with HTTP 500, so the command leaves the branch alone when the pull request's `merge_base` equals `base.sha` (the tip of the base branch), as `gh` does with its compare; without a `merge_base` the update is sent and the server decides. Gitea recomputes `merge_base` in the background after a push, so right after an update it can lag for a moment and the next update gets the HTTP 500. `GET /repos/{owner}/{repo}/compare/{basehead}`, which `gh` uses for this check, answers HTTP 404 on app.copia.io (found by the `integration` job of #375). HTTP 409 (merge or rebase conflict) and 422 show the server message. The argument is a number, `#<n>` or a pull request URL; `gh`'s default to the pull request of the current branch is not implemented.
+
+`gh pr status`: one listing of `GET /repos/{owner}/{repo}/pulls?state=open&sort=recentupdate` (every page, also sorted by `updated_at` on the client) gives the pull request of the current branch (matched on `head.ref`) and the ones whose author is the user of `GET /user`. When the branch has no open pull request, the first page of `state=closed` (the 50 most recently updated) is searched, as gh also shows a closed or merged one; the list has no head filter, so older closed pull requests are not searched, which would read every page; a closed one of the default branch (`base.repo.default_branch`) is left out, as in gh. The review requests come from `GET /repos/issues/search?type=pulls&state=open&review_requested=true&owner={owner}`, kept when `repository.full_name` is this repository and shown from the open listing. Each section shows ten pull requests and `And N more`. `-R` leaves out the current branch, as in gh. `--conflict-status/-c` prints `✓ No merge conflicts` or `× Merge conflicts` from Gitea's `mergeable`, which is also false while Gitea still checks. Partial: no check or review summary line (`pr checks` is not implemented and Gitea has no review decision), and the branch is matched by name only, not through gh's push remote and `merge` ref. `--json` prints one object with gh's keys `currentBranch` (a pull request or `null`), `createdBy` and `needsReview`; the fields are the Gitea names (`number`, `title`, `state`, `html_url`, `user`, `head`, `base`, `updated_at`, `mergeable`, `draft`), and a merged pull request has the state `merged`.
 
 ## release
 
@@ -195,10 +198,10 @@ Client side, no API call. Aliases are stored under the top-level key `aliases` o
 
 | Status | Count |
 |--------|-------|
-| Implemented | 59 |
+| Implemented | 60 |
 | Not yet implemented (Full parity) | 12 |
 | Not yet implemented (Partial) | 7 |
 | No equivalent | 13 |
-| **Total implementable** | **78** |
+| **Total implementable** | **79** |
 
 Counted from the rows above: every `[x]` row, and every other row by its Parity value. The Parity values follow the Gitea 1.26 API (`release/v1.26` swagger); `TestAPI_Version` in `test/integration/api_test.go` logs what Copia's `GET /version` reports in the PR `integration` job. On 2026-11-04 that was `0.59.0`, Copia's own version number, not a Gitea release, so the API does not show which Gitea version Copia is built on; a command's integration test shows whether Copia serves its endpoint.
