@@ -1161,6 +1161,65 @@ func TestSnapPackRunsLikeRelease(t *testing.T) {
 	}
 }
 
+// timeoutFlag matches a go test -timeout flag in either of its two forms.
+var timeoutFlag = regexp.MustCompile(`^--?(test\.)?timeout(=.+)?$`)
+
+// goTestTimeout reports whether a run block runs go test with -timeout.
+func goTestTimeout(run string) bool {
+	for _, line := range strings.Split(run, "\n") {
+		fields := strings.Fields(line)
+		for i := 0; i+1 < len(fields); i++ {
+			if fields[i] != "go" || fields[i+1] != "test" {
+				continue
+			}
+			for j, f := range fields[i+2:] {
+				m := timeoutFlag.FindStringSubmatch(f)
+				if m == nil {
+					continue
+				}
+				if m[2] != "" || i+2+j+1 < len(fields) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func TestGoTestTimeout(t *testing.T) {
+	for run, want := range map[string]bool{
+		"go test -tags=integration ./...":                false,
+		"go test -tags=integration -timeout 30m ./...":   true,
+		"go test -timeout=30m ./...":                     true,
+		"go test --timeout 30m ./...":                    true,
+		"go test -test.timeout=30m ./...":                true,
+		"echo start\ngo test -count=1 -timeout 1h ./...": true,
+		"go test -run TestTimeout ./...":                 false,
+		"go vet -timeout 30m ./...":                      false,
+		"go test ./... -timeout":                         false,
+		"timeout 30m go test -tags=integration ./...":    false,
+	} {
+		if got := goTestTimeout(run); got != want {
+			t.Errorf("goTestTimeout(%q) = %v, want %v", run, got, want)
+		}
+	}
+}
+
+// TestIntegrationTestsHaveATimeout keeps the integration package, which runs
+// longer against app.copia.io than go test's default of 10 minutes, from
+// panicking in whichever test is running at that mark: the Integration tests
+// step sets -timeout, identical in ci.yml and integration-scheduled.yml.
+func TestIntegrationTestsHaveATimeout(t *testing.T) {
+	ci := stepRun(t, "ci.yml", "Integration tests")
+	scheduled := stepRun(t, "integration-scheduled.yml", "Integration tests")
+	if ci != scheduled {
+		t.Errorf("integration-scheduled.yml Integration tests run block differs from ci.yml:\n%s\nwant:\n%s", scheduled, ci)
+	}
+	if !goTestTimeout(ci) {
+		t.Errorf("ci.yml: Integration tests runs go test without -timeout: %q", strings.TrimSpace(ci))
+	}
+}
+
 // versionRun is the only verbose go test of an integration job: it prints the
 // version Copia reports and nothing else.
 const versionRun = `go test -tags=integration -v -run '^TestAPI_Version$' ./test/integration/`
