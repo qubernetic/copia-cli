@@ -17,7 +17,8 @@ func TestNewCmdAlias_Subcommands(t *testing.T) {
 		groups[c.Name()] = c.GroupID
 	}
 	assert.Equal(t, map[string]string{
-		"list": "General commands",
-		"set":  "General commands",
+		"delete": "General commands",
+		"list":   "General commands",
+		"set":    "General commands",
 	}, groups)
 }

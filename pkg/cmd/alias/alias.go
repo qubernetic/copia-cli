@@ -3,6 +3,7 @@ package alias
 
 import (
 	"github.com/spf13/cobra"
+	deleteCmd "github.com/qubernetic/copia-cli/pkg/cmd/alias/delete"
 	listCmd "github.com/qubernetic/copia-cli/pkg/cmd/alias/list"
 	setCmd "github.com/qubernetic/copia-cli/pkg/cmd/alias/set"
 	"github.com/qubernetic/copia-cli/pkg/cmdutil"
@@ -19,6 +20,7 @@ Run "copia-cli help alias set" to learn more.`,
 	}
 
 	cmdutil.AddGroup(cmd, "General commands",
+		deleteCmd.NewCmdDelete(f),
 		listCmd.NewCmdList(f),
 		setCmd.NewCmdSet(f),
 	)
