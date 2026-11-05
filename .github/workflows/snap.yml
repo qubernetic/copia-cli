@@ -8,19 +8,115 @@ permissions:
   contents: read
 
 jobs:
-  snap:
-    runs-on: ubuntu-latest
+  # build packs the snap as root on its own runner, without any secret, and
+  # hands it on as an artifact with its sha256.
+  build:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      sha256: ${{ steps.snap.outputs.sha256 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
-      - uses: snapcore/action-build@3bdaa03e1ba6bf59a65f84a751d943d549a54e79 # v1.3.0
-        id: build
+      - name: Extract version
+        id: version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          script/check-release-version.sh "$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - uses: snapcore/action-publish@214b86e5ca036ead1668c79afb81e550e6c54d40 # v1.2.0
+      - name: Install snapcraft
+        run: sudo snap install snapcraft --classic --channel=9.x/stable
+
+      - name: Pack snap
+        run: sudo snapcraft pack --destructive-mode
+
+      - name: Check snap metadata
+        id: snap
         env:
-          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          snap_file="copia-cli_${VERSION}_amd64.snap"
+          unsquashfs -d snap-root "$snap_file" meta/snap.yaml
+          name=$(yq '.name' snap-root/meta/snap.yaml)
+          version=$(yq '.version' snap-root/meta/snap.yaml)
+          architectures=$(yq -o=json -I=0 '.architectures' snap-root/meta/snap.yaml | tr -d '"')
+          echo "name: $name"
+          echo "version: $version"
+          echo "architectures: $architectures"
+          if [ "$name" != copia-cli ]; then
+            echo "::error::meta/snap.yaml name is $name, want copia-cli"
+            exit 1
+          fi
+          if [ "$version" != "$VERSION" ]; then
+            echo "::error::meta/snap.yaml version is $version, want $VERSION"
+            exit 1
+          fi
+          if [ "$architectures" != '[amd64]' ]; then
+            echo "::error::meta/snap.yaml architectures is $architectures, want [amd64]"
+            exit 1
+          fi
+          echo "sha256=$(sha256sum "$snap_file" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          echo "file=$snap_file" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          snap: ${{ steps.build.outputs.snap }}
-          release: stable
+          name: snap
+          path: ${{ steps.snap.outputs.file }}
+          if-no-files-found: error
+          retention-days: 1
+
+  # upload runs no repository code: it checks the artifact against the sha256
+  # and metadata build reported, then hands the Snap Store credentials to the
+  # upload step alone.
+  upload:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions: {}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: snap
+
+      - name: Verify snap
+        id: snap
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          SHA256: ${{ needs.build.outputs.sha256 }}
+        run: |
+          snap_file="copia-cli_${VERSION}_amd64.snap"
+          echo "$SHA256  $snap_file" | sha256sum -c -
+          unsquashfs -d snap-root "$snap_file" meta/snap.yaml
+          name=$(yq '.name' snap-root/meta/snap.yaml)
+          version=$(yq '.version' snap-root/meta/snap.yaml)
+          architectures=$(yq -o=json -I=0 '.architectures' snap-root/meta/snap.yaml | tr -d '"')
+          echo "name: $name"
+          echo "version: $version"
+          echo "architectures: $architectures"
+          if [ "$name" != copia-cli ]; then
+            echo "::error::meta/snap.yaml name is $name, want copia-cli"
+            exit 1
+          fi
+          if [ "$version" != "$VERSION" ]; then
+            echo "::error::meta/snap.yaml version is $version, want $VERSION"
+            exit 1
+          fi
+          if [ "$architectures" != '[amd64]' ]; then
+            echo "::error::meta/snap.yaml architectures is $architectures, want [amd64]"
+            exit 1
+          fi
+          echo "file=$snap_file" >> "$GITHUB_OUTPUT"
+
+      - name: Install snapcraft
+        run: sudo snap install snapcraft --classic --channel=9.x/stable
+
+      - name: Upload snap
+        env:
+          SNAP_FILE: ${{ steps.snap.outputs.file }}
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        run: snapcraft upload --release stable "$SNAP_FILE"
