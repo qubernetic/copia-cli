@@ -2,12 +2,15 @@ package logout
 
 import (
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/qubernetic/copia-cli/internal/config"
+	orglist "github.com/qubernetic/copia-cli/pkg/cmd/org/list"
 	"github.com/qubernetic/copia-cli/pkg/cmdutil"
+	"github.com/qubernetic/copia-cli/pkg/httpmock"
 	"github.com/qubernetic/copia-cli/pkg/iostreams"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -75,6 +78,52 @@ func TestLogoutRun_MovesDefaultHost(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "b.example.com", cfg.DefaultHostName)
 	assert.NotContains(t, cfg.Hosts, "a.example.com")
+}
+
+// TestNewCmdLogout_EnvTokenNotSentToNewDefaultHost pins that logging out of
+// the default host while COPIA_TOKEN is set without COPIA_HOST does not send
+// COPIA_TOKEN to the host that becomes the default: the next command uses
+// that host's stored token.
+func TestNewCmdLogout_EnvTokenNotSentToNewDefaultHost(t *testing.T) {
+	const envToken = "env-secret-token"
+	keyring.MockInit()
+	configPath := setTempConfigHome(t)
+	t.Setenv("COPIA_TOKEN", envToken)
+	require.NoError(t, config.Save(configPath, &config.Config{
+		DefaultHostName: "a.example.com",
+		Hosts: map[string]*config.HostConfig{
+			"a.example.com": {Token: "token-a", User: "u1"},
+			"b.example.com": {User: "u2"},
+		},
+	}))
+	require.NoError(t, keyring.Set("copia-cli:b.example.com", "u2", "token-b"))
+
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+	reg.Register(httpmock.REST("GET", "/api/v1/user/orgs"), httpmock.StringResponse(http.StatusOK, `[]`))
+
+	ios, _, stdout, stderr := iostreams.Test()
+	f := &cmdutil.Factory{
+		IOStreams: ios,
+		Keyring:   config.NewKeyringStore(),
+		Config:    func() (*config.Config, error) { return config.Load(configPath) },
+	}
+	require.NoError(t, runLogoutCmd(t, f))
+
+	cmd := orglist.NewCmdList(f)
+	cmd.SetArgs([]string{})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	require.NoError(t, cmd.Execute())
+
+	require.Len(t, reg.Requests, 1)
+	assert.Equal(t, "b.example.com", reg.Requests[0].URL.Host)
+	assert.Equal(t, "token token-b", reg.Requests[0].Header.Get("Authorization"))
+	assert.Contains(t, stdout.String(), "Logged out of a.example.com")
+	assert.Contains(t, stderr.String(), "warning: COPIA_TOKEN is ignored because no host is named")
+	assert.NotContains(t, stdout.String(), envToken)
+	assert.NotContains(t, stderr.String(), envToken)
 }
 
 func setTempConfigHome(t *testing.T) string {

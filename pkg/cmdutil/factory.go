@@ -26,35 +26,48 @@ type Factory struct {
 	Token string
 	Host  string
 	Repo  string // -R/--repo flag override for BaseRepo
+
+	// envTokenWarned is set once the warning that COPIA_TOKEN is ignored
+	// has been printed, so it appears at most once per process.
+	envTokenWarned bool
 }
 
-// ResolveAuth returns the host and token, resolving in order:
-// 1. --token/--host flags (highest priority)
-// 2. COPIA_TOKEN/COPIA_HOST env vars
-// 3. The stored token of the host's account: the config file, then the OS
-// keyring (lowest priority)
+// envTokenIgnored explains why COPIA_TOKEN was not used: it is sent only to
+// the host --host or COPIA_HOST names.
+const envTokenIgnored = "COPIA_TOKEN is ignored because no host is named; set COPIA_HOST (or --host) to the host the token belongs to"
+
+// ResolveAuth returns the host and token. The host comes from --host, then
+// COPIA_HOST, then the config's default host. The token comes from:
+// 1. --token (highest priority)
+// 2. COPIA_TOKEN, only when the host came from --host or COPIA_HOST, so the
+// token never goes to a host the config picks
+// 3. The stored token of the host's active account: the config file, then
+// the OS keyring (lowest priority)
+//
+// When COPIA_TOKEN is set but the host came from the config, the stored
+// token is used and a warning goes to ErrOut once; the token value itself
+// is never printed.
 func (f *Factory) ResolveAuth() (host, token string, err error) {
-	// 1. Flags (already set by Cobra if provided)
 	host = f.Host
 	token = f.Token
-
-	// 2. Env vars (only if flag not set)
 	if host == "" {
 		host = os.Getenv("COPIA_HOST")
 	}
-	if token == "" {
-		token = os.Getenv("COPIA_TOKEN")
+	hostNamed := host != ""
+	envToken := os.Getenv("COPIA_TOKEN")
+	if token == "" && hostNamed {
+		token = envToken
 	}
+	// COPIA_TOKEN was passed over for the token of a host the config picks.
+	envTokenSkipped := token == "" && envToken != ""
 
-	// 3. Config fallback
 	if host == "" || token == "" {
 		cfg, err := f.Config()
 		if err != nil {
 			return "", "", err
 		}
 		if host == "" {
-			h, _ := cfg.DefaultHost()
-			host = h
+			host, _ = cfg.DefaultHost()
 		}
 		if token == "" && host != "" {
 			token, _, err = config.LookupToken(cfg, host, f.Keyring)
@@ -64,11 +77,21 @@ func (f *Factory) ResolveAuth() (host, token string, err error) {
 		}
 	}
 
+	hint := ""
+	if envTokenSkipped {
+		hint = ". " + envTokenIgnored
+	}
 	if host == "" {
-		return "", "", fmt.Errorf("no host configured. Run 'copia auth login' first")
+		return "", "", fmt.Errorf("no host configured. Run 'copia auth login' first%s", hint)
 	}
 	if token == "" {
-		return "", "", fmt.Errorf("no token configured for %s. Run 'copia auth login' first", host)
+		return "", "", fmt.Errorf("no token configured for %s. Run 'copia auth login' first%s", host, hint)
+	}
+	if envTokenSkipped && !f.envTokenWarned {
+		f.envTokenWarned = true
+		if f.IOStreams != nil {
+			_, _ = fmt.Fprintln(f.IOStreams.ErrOut, "warning: "+envTokenIgnored)
+		}
 	}
 	return host, token, nil
 }

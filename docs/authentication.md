@@ -51,7 +51,7 @@ The commands read the stored token from the config file first, then from the key
 copia-cli auth logout --host app.copia.io --user john
 ```
 
-`auth switch` makes another stored account active and its host the default host, then prints `Switched active account for <host> to <login>`. `--host` and `--user` (`-u`) name the account. `--host` alone is enough when the host has one account (the host becomes the default host) or two (the other one becomes active). Without flags it switches to the other account when exactly two accounts are stored in total, on one host or on two. Otherwise it fails and lists the stored accounts, one `<host> <login>` per line, so you can pick one with `--host` and `--user`; there is no prompt. An unknown host or login fails and leaves the config file as it was. No token is read or moved, and `COPIA_TOKEN` still beats the token of the active account (a warning says so when it is set). `COPIA_TOKEN` is sent to the default host when `COPIA_HOST` is not set, so while it is set without `COPIA_HOST`, `auth switch` refuses to switch to an account on another host and leaves the config file as it was; unset `COPIA_TOKEN` first. A host entry of the old shape with a token but no login cannot be switched on; run `auth login` for that host first.
+`auth switch` makes another stored account active and its host the default host, then prints `Switched active account for <host> to <login>`. `--host` and `--user` (`-u`) name the account. `--host` alone is enough when the host has one account (the host becomes the default host) or two (the other one becomes active). Without flags it switches to the other account when exactly two accounts are stored in total, on one host or on two. Otherwise it fails and lists the stored accounts, one `<host> <login>` per line, so you can pick one with `--host` and `--user`; there is no prompt. An unknown host or login fails and leaves the config file as it was. No token is read or moved. `COPIA_TOKEN` applies only with `COPIA_HOST` (or `--host`), so a switch never sends it to the new default host; when it is set, a warning says so. A host entry of the old shape with a token but no login cannot be switched on; run `auth login` for that host first.
 
 ```bash
 copia-cli auth switch
@@ -94,7 +94,7 @@ The other top-level keys beside `hosts` are the settings of `copia-cli config` (
 **Security considerations:**
 - File permissions are `600` (owner read/write only): every save writes a new `600` file to a temporary file beside it and renames it over the old one, so a failed save leaves the old file as it was. A save refuses a config path that is not a regular file (a symlink, for example) and a file the user cannot write; a config directory that group or others can write is set to `700`, and the save fails if that is not possible
 - On Windows, stored in `%USERPROFILE%\.config\copia\config.yml`
-- Token can also be set via `COPIA_TOKEN` environment variable (takes precedence)
+- Token can also be set via `COPIA_TOKEN` environment variable, together with `COPIA_HOST` (or `--host`) naming the host it belongs to; without them it is ignored with a warning (see [Auth Precedence](#auth-precedence))
 - Token can also be passed per-command via `--token` flag (takes highest precedence)
 
 ### Check the Auth Status
@@ -127,9 +127,27 @@ copia-cli auth status --host app.copia.io --show-token
 
 ## Auth Precedence
 
+The host comes from `--host`, then `COPIA_HOST`, then the config's default host (`default_host`, or the alphabetically first host). The token comes from:
+
 1. `--token` flag (per-command)
-2. `COPIA_TOKEN` environment variable
+2. `COPIA_TOKEN` environment variable, only when the host came from `--host` or `COPIA_HOST`
 3. The stored token of the active account of the active host: the config file (`~/.config/copia/config.yml`) first, then the OS keyring
+
+`COPIA_TOKEN` is bound to the host you name, so it never goes to a host the config picks: `auth logout`, `auth switch`, `auth login` and the alphabetical fallback all move the default host. When `COPIA_TOKEN` is set but the host comes from the config, the commands use the stored token and print once on standard error:
+
+```text
+warning: COPIA_TOKEN is ignored because no host is named; set COPIA_HOST (or --host) to the host the token belongs to
+```
+
+When that host has no stored token, the `no token configured` error carries the same hint. The token value appears in no output or error.
+
+In CI, set both variables:
+
+```bash
+export COPIA_HOST=app.copia.io
+export COPIA_TOKEN="$COPIA_CI_TOKEN"
+copia-cli repo list
+```
 
 ## Alternative Auth Methods
 

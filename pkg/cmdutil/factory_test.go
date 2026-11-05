@@ -70,6 +70,8 @@ func TestFactory_ResolveAuth_FlagBeatsEnv(t *testing.T) {
 }
 
 func TestFactory_ResolveAuth_ConfigFallback(t *testing.T) {
+	t.Setenv("COPIA_TOKEN", "")
+	t.Setenv("COPIA_HOST", "")
 	ios, _, _, _ := iostreams.Test()
 	f := &Factory{
 		IOStreams: ios,
@@ -136,6 +138,8 @@ func TestFactory_ResolveAuth_StoredToken(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("COPIA_TOKEN", "")
+			t.Setenv("COPIA_HOST", "")
 			keyring.MockInit()
 			require.NoError(t, keyring.Set("copia-cli:app.copia.io", "john", "keyring-token"))
 			require.NoError(t, keyring.Set("copia-cli:app.copia.io", "jane", "keyring-token-jane"))
@@ -167,7 +171,143 @@ func TestFactory_ResolveAuth_StoredToken(t *testing.T) {
 	}
 }
 
+// TestFactory_ResolveAuth_EnvTokenOnlyForNamedHost pins that COPIA_TOKEN is
+// sent only to the host --host or COPIA_HOST names, never to a host the
+// config picks, and that its value appears in no output or error.
+func TestFactory_ResolveAuth_EnvTokenOnlyForNamedHost(t *testing.T) {
+	const envToken = "env-secret-token"
+	const warning = "warning: COPIA_TOKEN is ignored because no host is named; set COPIA_HOST (or --host) to the host the token belongs to\n"
+	const hint = "COPIA_TOKEN is ignored because no host is named; set COPIA_HOST (or --host) to the host the token belongs to"
+	twoHosts := map[string]*config.HostConfig{
+		"a.example.com": {Token: "token-a"},
+		"b.example.com": {Token: "token-b"},
+	}
+	tests := []struct {
+		name        string
+		flagHost    string
+		flagToken   string
+		envHost     string
+		defaultHost string
+		hosts       map[string]*config.HostConfig
+		wantHost    string
+		wantToken   string
+		wantWarning bool
+		wantErr     string
+	}{
+		{
+			name:      "COPIA_HOST names the host",
+			envHost:   "b.example.com",
+			hosts:     twoHosts,
+			wantHost:  "b.example.com",
+			wantToken: envToken,
+		},
+		{
+			name:      "COPIA_HOST names a host without a stored token",
+			envHost:   "new.example.com",
+			hosts:     twoHosts,
+			wantHost:  "new.example.com",
+			wantToken: envToken,
+		},
+		{
+			name:      "--host names the host",
+			flagHost:  "b.example.com",
+			hosts:     twoHosts,
+			wantHost:  "b.example.com",
+			wantToken: envToken,
+		},
+		{
+			name:        "host from default_host",
+			defaultHost: "b.example.com",
+			hosts:       twoHosts,
+			wantHost:    "b.example.com",
+			wantToken:   "token-b",
+			wantWarning: true,
+		},
+		{
+			name:        "host from the alphabetical fallback",
+			hosts:       twoHosts,
+			wantHost:    "a.example.com",
+			wantToken:   "token-a",
+			wantWarning: true,
+		},
+		{
+			name:        "config host without a stored token",
+			defaultHost: "a.example.com",
+			hosts:       map[string]*config.HostConfig{"a.example.com": {}},
+			wantErr:     "no token configured for a.example.com. Run 'copia auth login' first. " + hint,
+		},
+		{
+			name:    "no host anywhere",
+			hosts:   map[string]*config.HostConfig{},
+			wantErr: "no host configured. Run 'copia auth login' first. " + hint,
+		},
+		{
+			name:      "--token beats COPIA_TOKEN with COPIA_HOST",
+			flagToken: "flag-token",
+			envHost:   "b.example.com",
+			hosts:     twoHosts,
+			wantHost:  "b.example.com",
+			wantToken: "flag-token",
+		},
+		{
+			name:      "--token beats COPIA_TOKEN with --host",
+			flagToken: "flag-token",
+			flagHost:  "b.example.com",
+			hosts:     twoHosts,
+			wantHost:  "b.example.com",
+			wantToken: "flag-token",
+		},
+		{
+			name:        "--token beats the stored token of the config host",
+			flagToken:   "flag-token",
+			defaultHost: "b.example.com",
+			hosts:       twoHosts,
+			wantHost:    "b.example.com",
+			wantToken:   "flag-token",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			keyring.MockInit()
+			t.Setenv("COPIA_TOKEN", envToken)
+			t.Setenv("COPIA_HOST", tt.envHost)
+			ios, _, stdout, stderr := iostreams.Test()
+			f := &Factory{
+				IOStreams: ios,
+				Host:      tt.flagHost,
+				Token:     tt.flagToken,
+				Keyring:   config.NewKeyringStore(),
+				Config: func() (*config.Config, error) {
+					return &config.Config{DefaultHostName: tt.defaultHost, Hosts: tt.hosts}, nil
+				},
+			}
+
+			for range 3 {
+				host, token, err := f.ResolveAuth()
+				if tt.wantErr != "" {
+					require.EqualError(t, err, tt.wantErr)
+					assert.NotContains(t, err.Error(), envToken)
+					continue
+				}
+				require.NoError(t, err)
+				assert.Equal(t, tt.wantHost, host)
+				assert.Equal(t, tt.wantToken, token)
+			}
+
+			if tt.wantWarning {
+				assert.Equal(t, warning, stderr.String())
+			} else {
+				assert.Empty(t, stderr.String())
+			}
+			assert.Empty(t, stdout.String())
+			assert.NotContains(t, stderr.String(), envToken)
+		})
+	}
+}
+
 func TestFactory_ResolveAuth_NoConfig(t *testing.T) {
+	t.Setenv("COPIA_TOKEN", "")
+	t.Setenv("COPIA_HOST", "")
 	ios, _, _, _ := iostreams.Test()
 	f := &Factory{
 		IOStreams: ios,
