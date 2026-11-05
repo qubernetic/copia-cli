@@ -51,8 +51,10 @@ Manager, the Secret Service on Linux). When no keyring is available, the
 token is stored in plain text in the config file and a warning says so.
 Use --insecure-storage to store it in the config file on purpose.
 
-Token precedence: --token flag > COPIA_TOKEN env var > the stored token
-(config file, then OS keyring).`,
+Token precedence: --token flag > COPIA_TOKEN env var, only when --host or
+COPIA_HOST names the host > the stored token of the host's active account
+(config file, then OS keyring). With the host taken from the config,
+COPIA_TOKEN is ignored with a warning.`,
 		Example: `  # Interactive login
   $ copia-cli auth login
 
