@@ -113,7 +113,7 @@ func TestNewCmdLogout(t *testing.T) {
 				"other.example.com": {Token: "b", User: "jane"},
 			},
 			args:     []string{"--host", "other.example.com"},
-			wantOut:  "Logged out of other.example.com\n",
+			wantOut:  "Logged out of other.example.com account jane\n",
 			wantLeft: []string{"app.copia.io"},
 		},
 		{
@@ -123,7 +123,7 @@ func TestNewCmdLogout(t *testing.T) {
 				"other.example.com": {Token: "b", User: "jane"},
 			},
 			factHost: "app.copia.io",
-			wantOut:  "Logged out of app.copia.io\n",
+			wantOut:  "Logged out of app.copia.io account john\n",
 			wantLeft: []string{"other.example.com"},
 		},
 		{
@@ -131,7 +131,7 @@ func TestNewCmdLogout(t *testing.T) {
 			hosts: map[string]*config.HostConfig{
 				"app.copia.io": {Token: "a", User: "john"},
 			},
-			wantOut:  "Logged out of app.copia.io\n",
+			wantOut:  "Logged out of app.copia.io account john\n",
 			wantLeft: []string{},
 		},
 		{
@@ -142,7 +142,7 @@ func TestNewCmdLogout(t *testing.T) {
 				"b.example.com": {Token: "b", User: "u2"},
 				"c.example.com": {Token: "c", User: "u3"},
 			},
-			wantOut:  "Logged out of c.example.com\n",
+			wantOut:  "Logged out of c.example.com account u3\n",
 			wantLeft: []string{"a.example.com", "b.example.com"},
 		},
 		{
@@ -152,7 +152,7 @@ func TestNewCmdLogout(t *testing.T) {
 				"b.example.com": {Token: "b", User: "u2"},
 				"a.example.com": {Token: "a", User: "u1"},
 			},
-			wantOut:  "Logged out of a.example.com\n",
+			wantOut:  "Logged out of a.example.com account u1\n",
 			wantLeft: []string{"b.example.com", "c.example.com"},
 		},
 		{
@@ -272,7 +272,7 @@ func TestLogoutRun_TokenStorage(t *testing.T) {
 			name:        "keyring unavailable",
 			fileToken:   "file-token",
 			keyring:     func() config.TokenStore { return failingStore{err: config.ErrKeyringTimeout} },
-			wantWarning: "warning: could not delete the token of app.copia.io from the OS keyring: timed out waiting for the OS keyring\n",
+			wantWarning: "warning: could not delete the token of john on app.copia.io from the OS keyring: timed out waiting for the OS keyring\n",
 		},
 	}
 	for _, tt := range tests {
@@ -289,7 +289,7 @@ func TestLogoutRun_TokenStorage(t *testing.T) {
 			ios, _, stdout, stderr := iostreams.Test()
 			err := logoutRun(&LogoutOptions{IO: ios, Host: "app.copia.io", ConfigPath: configPath, Keyring: tt.keyring()})
 			require.NoError(t, err)
-			assert.Equal(t, "Logged out of app.copia.io\n", stdout.String())
+			assert.Equal(t, "Logged out of app.copia.io account john\n", stdout.String())
 			assert.Equal(t, tt.wantWarning, stderr.String())
 
 			loaded, err := config.Load(configPath)
@@ -319,4 +319,116 @@ func TestNewCmdLogout_Keyring(t *testing.T) {
 
 	_, err := keyring.Get("copia-cli:app.copia.io", "john")
 	assert.ErrorIs(t, err, keyring.ErrNotFound)
+}
+
+func TestLogoutRun_OneOfSeveralAccounts(t *testing.T) {
+	tests := []struct {
+		name       string
+		user       string
+		wantOut    string
+		wantErr    string
+		wantActive string
+		wantLogins []string
+		wantGone   string
+	}{
+		{
+			name:       "active account without --user",
+			wantOut:    "Logged out of app.copia.io account joe\nSwitched active account for app.copia.io to jane\n",
+			wantActive: "jane",
+			wantLogins: []string{"jane", "john"},
+			wantGone:   "joe",
+		},
+		{
+			name:       "active account with --user",
+			user:       "joe",
+			wantOut:    "Logged out of app.copia.io account joe\nSwitched active account for app.copia.io to jane\n",
+			wantActive: "jane",
+			wantLogins: []string{"jane", "john"},
+			wantGone:   "joe",
+		},
+		{
+			name:       "other account",
+			user:       "john",
+			wantOut:    "Logged out of app.copia.io account john\n",
+			wantActive: "joe",
+			wantLogins: []string{"jane", "joe"},
+			wantGone:   "john",
+		},
+		{
+			name:       "unknown account",
+			user:       "jim",
+			wantErr:    "not logged in to app.copia.io account jim",
+			wantActive: "joe",
+			wantLogins: []string{"jane", "joe", "john"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			keyring.MockInit()
+			for _, login := range []string{"john", "joe", "jane"} {
+				require.NoError(t, keyring.Set("copia-cli:app.copia.io", login, "keyring-token-"+login))
+			}
+			configPath := filepath.Join(t.TempDir(), "config.yml")
+			require.NoError(t, config.Save(configPath, &config.Config{Hosts: map[string]*config.HostConfig{
+				"app.copia.io": {User: "joe", Users: map[string]*config.UserConfig{"john": {}, "joe": {}, "jane": {Token: "file-token"}}},
+			}}))
+
+			ios, _, stdout, stderr := iostreams.Test()
+			err := logoutRun(&LogoutOptions{IO: ios, Host: "app.copia.io", User: tt.user, ConfigPath: configPath, Keyring: config.NewKeyringStore()})
+			if tt.wantErr != "" {
+				require.EqualError(t, err, tt.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tt.wantOut, stdout.String())
+			assert.Empty(t, stderr.String())
+
+			loaded, err := config.Load(configPath)
+			require.NoError(t, err)
+			hc := loaded.Hosts["app.copia.io"]
+			assert.Equal(t, tt.wantActive, hc.User)
+			assert.Equal(t, tt.wantLogins, hc.Logins())
+			assert.Equal(t, "file-token", hc.Users["jane"].Token)
+
+			// Only the removed account's keyring entry is gone.
+			for _, login := range []string{"john", "joe", "jane"} {
+				_, err := keyring.Get("copia-cli:app.copia.io", login)
+				if login == tt.wantGone {
+					assert.ErrorIs(t, err, keyring.ErrNotFound)
+				} else {
+					assert.NoError(t, err)
+				}
+			}
+		})
+	}
+}
+
+func TestNewCmdLogout_UserFlag(t *testing.T) {
+	keyring.MockInit()
+	configPath := setTempConfigHome(t)
+	require.NoError(t, config.Save(configPath, &config.Config{Hosts: map[string]*config.HostConfig{
+		"app.copia.io": {User: "joe", Users: map[string]*config.UserConfig{"john": {Token: "t1"}, "joe": {Token: "t2"}}},
+	}}))
+
+	ios, _, _, _ := iostreams.Test()
+	require.NoError(t, runLogoutCmd(t, &cmdutil.Factory{IOStreams: ios}, "--user", "john"))
+
+	loaded, err := config.Load(configPath)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"joe"}, loaded.Hosts["app.copia.io"].Logins())
+}
+
+func TestLogoutRun_HostWithoutAccount(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yml")
+	require.NoError(t, config.Save(configPath, &config.Config{Hosts: map[string]*config.HostConfig{
+		"app.copia.io": {Token: "legacy-token"},
+	}}))
+
+	ios, _, stdout, _ := iostreams.Test()
+	require.NoError(t, logoutRun(&LogoutOptions{IO: ios, Host: "app.copia.io", ConfigPath: configPath}))
+	assert.Equal(t, "Logged out of app.copia.io\n", stdout.String())
+
+	loaded, err := config.Load(configPath)
+	require.NoError(t, err)
+	assert.Empty(t, loaded.Hosts)
 }
