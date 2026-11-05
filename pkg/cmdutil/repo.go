@@ -41,14 +41,119 @@ func ParseRemoteURL(rawURL string) (owner, repo string, err error) {
 	return SplitOwnerRepo(path)
 }
 
-// DetectBaseRepo returns a function that detects owner/repo from the git remote "origin".
+// RemoteResolvedKey is the git config key under remote.<name> that marks the
+// default remote of a repository, set by `repo set-default` (gh uses
+// gh-resolved).
+const RemoteResolvedKey = "copia-resolved"
+
+// Remote is a git remote whose URL names a repository.
+type Remote struct {
+	Name     string
+	Owner    string
+	Repo     string
+	Resolved bool // marked as the default by `repo set-default`
+}
+
+// FullName returns "owner/repo".
+func (r Remote) FullName() string {
+	return r.Owner + "/" + r.Repo
+}
+
+// ListRemotes returns the git remotes of the current repository in config
+// order. A remote whose URL does not name an owner and a repository is left
+// out.
+func ListRemotes() ([]Remote, error) {
+	if err := exec.Command("git", "rev-parse", "--git-dir").Run(); err != nil {
+		return nil, fmt.Errorf("must be run from inside a git repository")
+	}
+	// git remote -v applies url.<base>.insteadOf, as git remote get-url does.
+	out, err := exec.Command("git", "remote", "-v").Output()
+	if err != nil {
+		return nil, fmt.Errorf("could not list the git remotes: %w", err)
+	}
+	var names []string
+	urls := map[string]string{}
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 3 || fields[2] != "(fetch)" {
+			continue
+		}
+		if _, seen := urls[fields[0]]; !seen {
+			names = append(names, fields[0])
+			urls[fields[0]] = fields[1]
+		}
+	}
+
+	// Exit status 1 means no remote is marked.
+	out, _ = exec.Command("git", "config", "--get-regexp", `^remote\..*\.`+RemoteResolvedKey+`$`).Output()
+	resolved := map[string]bool{}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		key, value, _ := strings.Cut(line, " ")
+		name := strings.TrimSuffix(strings.TrimPrefix(key, "remote."), "."+RemoteResolvedKey)
+		resolved[name] = value != ""
+	}
+
+	var remotes []Remote
+	for _, name := range names {
+		owner, repo, err := ParseRemoteURL(urls[name])
+		if err != nil {
+			continue
+		}
+		remotes = append(remotes, Remote{Name: name, Owner: owner, Repo: repo, Resolved: resolved[name]})
+	}
+	return remotes, nil
+}
+
+// SetDefaultRemote marks the remote name as the default of the current
+// repository and removes the mark from every other remote.
+func SetDefaultRemote(name string) error {
+	if err := UnsetDefaultRemote(); err != nil {
+		return err
+	}
+	out, err := exec.Command("git", "config", "remote."+name+"."+RemoteResolvedKey, "base").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("could not set the default remote: %s", strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// UnsetDefaultRemote removes the default mark from every remote of the
+// current repository.
+func UnsetDefaultRemote() error {
+	remotes, err := ListRemotes()
+	if err != nil {
+		return err
+	}
+	for _, r := range remotes {
+		if !r.Resolved {
+			continue
+		}
+		out, err := exec.Command("git", "config", "--unset-all", "remote."+r.Name+"."+RemoteResolvedKey).CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("could not unset the default remote: %s", strings.TrimSpace(string(out)))
+		}
+	}
+	return nil
+}
+
+// DetectBaseRepo returns a function that detects owner/repo from the git
+// remote marked by `repo set-default`, otherwise from the remote "origin".
 func DetectBaseRepo() func() (string, string, error) {
 	return func() (string, string, error) {
-		out, err := exec.Command("git", "remote", "get-url", "origin").Output()
+		remotes, err := ListRemotes()
 		if err != nil {
 			return "", "", fmt.Errorf("not in a git repository or no origin remote configured")
 		}
-		remoteURL := strings.TrimSpace(string(out))
-		return ParseRemoteURL(remoteURL)
+		for _, r := range remotes {
+			if r.Resolved {
+				return r.Owner, r.Repo, nil
+			}
+		}
+		for _, r := range remotes {
+			if r.Name == "origin" {
+				return r.Owner, r.Repo, nil
+			}
+		}
+		return "", "", fmt.Errorf("no default remote and no origin remote configured; run `copia-cli repo set-default` or use -R owner/repo")
 	}
 }
