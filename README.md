@@ -91,6 +91,9 @@ $ copia-cli pr create --title "docs: add manual" --base develop --body-file note
 $ copia-cli pr create --title "feat: add safety interlock" --base develop \
     --assignee @me --label plc --milestone v1.0 --reviewer jane --reviewer my-org/controls
 
+# Show the PR of the current branch, your open PRs and the ones waiting for your review
+$ copia-cli pr status
+
 # Merge it
 $ copia-cli pr merge 7 --merge --delete-branch --body "Tested on the line 3 PLC"
 
