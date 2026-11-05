@@ -56,6 +56,26 @@ func TestLogoutRun_HostNotFound(t *testing.T) {
 	assert.Contains(t, err.Error(), "not logged in to unknown.host.com")
 }
 
+func TestLogoutRun_MovesDefaultHost(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yml")
+	require.NoError(t, config.Save(configPath, &config.Config{
+		DefaultHostName: "a.example.com",
+		Hosts: map[string]*config.HostConfig{
+			"c.example.com": {Token: "c", User: "u3"},
+			"a.example.com": {Token: "a", User: "u1"},
+			"b.example.com": {Token: "b", User: "u2"},
+		},
+	}))
+
+	ios, _, _, _ := iostreams.Test()
+	require.NoError(t, logoutRun(&LogoutOptions{IO: ios, Host: "a.example.com", ConfigPath: configPath}))
+
+	cfg, err := config.Load(configPath)
+	require.NoError(t, err)
+	assert.Equal(t, "b.example.com", cfg.DefaultHostName)
+	assert.NotContains(t, cfg.Hosts, "a.example.com")
+}
+
 func setTempConfigHome(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -77,8 +97,9 @@ func TestNewCmdLogout(t *testing.T) {
 	tests := []struct {
 		name      string
 		hosts     map[string]*config.HostConfig
-		rawConfig string
-		factHost  string
+		rawConfig   string
+		defaultHost string
+		factHost    string
 		args      []string
 		wantOut   string
 		wantErr   string
@@ -113,6 +134,27 @@ func TestNewCmdLogout(t *testing.T) {
 			wantLeft: []string{},
 		},
 		{
+			name:        "stored default host",
+			defaultHost: "c.example.com",
+			hosts: map[string]*config.HostConfig{
+				"a.example.com": {Token: "a", User: "u1"},
+				"b.example.com": {Token: "b", User: "u2"},
+				"c.example.com": {Token: "c", User: "u3"},
+			},
+			wantOut:  "Logged out of c.example.com\n",
+			wantLeft: []string{"a.example.com", "b.example.com"},
+		},
+		{
+			name: "unset default host",
+			hosts: map[string]*config.HostConfig{
+				"c.example.com": {Token: "c", User: "u3"},
+				"b.example.com": {Token: "b", User: "u2"},
+				"a.example.com": {Token: "a", User: "u1"},
+			},
+			wantOut:  "Logged out of a.example.com\n",
+			wantLeft: []string{"b.example.com", "c.example.com"},
+		},
+		{
 			name:    "no config file",
 			wantErr: "no host specified and no default configured",
 		},
@@ -136,7 +178,7 @@ func TestNewCmdLogout(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			configPath := setTempConfigHome(t)
 			if tt.hosts != nil {
-				require.NoError(t, config.Save(configPath, &config.Config{Hosts: tt.hosts}))
+				require.NoError(t, config.Save(configPath, &config.Config{DefaultHostName: tt.defaultHost, Hosts: tt.hosts}))
 			}
 			if tt.rawConfig != "" {
 				require.NoError(t, os.MkdirAll(filepath.Dir(configPath), 0700))

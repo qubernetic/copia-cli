@@ -4,6 +4,7 @@ package config
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -25,11 +26,14 @@ type HostConfig struct {
 // Config is the top-level configuration: the hosts and the settings that
 // `copia-cli config` reads and writes.
 type Config struct {
-	Hosts   map[string]*HostConfig `yaml:"hosts"`
-	Output  string                 `yaml:"output,omitempty"`
-	Browser string                 `yaml:"browser,omitempty"`
-	Pager   string                 `yaml:"pager,omitempty"`
-	Editor  string                 `yaml:"editor,omitempty"`
+	// DefaultHostName is the host `auth login` logged in to last; read it
+	// through DefaultHost, which also handles an unset or stale value.
+	DefaultHostName string                 `yaml:"default_host,omitempty"`
+	Hosts           map[string]*HostConfig `yaml:"hosts"`
+	Output          string                 `yaml:"output,omitempty"`
+	Browser         string                 `yaml:"browser,omitempty"`
+	Pager           string                 `yaml:"pager,omitempty"`
+	Editor          string                 `yaml:"editor,omitempty"`
 	// Aliases maps an alias name to its expansion, as `copia-cli alias`
 	// manages them.
 	Aliases map[string]string `yaml:"aliases,omitempty"`
@@ -225,10 +229,36 @@ func writeAndClose(f *os.File, data []byte) error {
 	return f.Close()
 }
 
-// DefaultHost returns the first host entry. Returns empty string and nil if no hosts configured.
+// DefaultHost returns the host named by default_host. When default_host is
+// unset or names a host that is no longer configured, it returns the
+// alphabetically first host. Returns empty string and nil if no hosts
+// configured.
 func (c *Config) DefaultHost() (string, *HostConfig) {
-	for host, hc := range c.Hosts {
-		return host, hc
+	if hc, ok := c.Hosts[c.DefaultHostName]; ok {
+		return c.DefaultHostName, hc
 	}
-	return "", nil
+	hosts := c.HostNames()
+	if len(hosts) == 0 {
+		return "", nil
+	}
+	return hosts[0], c.Hosts[hosts[0]]
+}
+
+// HostNames returns the configured hosts in alphabetical order.
+func (c *Config) HostNames() []string {
+	return slices.Sorted(maps.Keys(c.Hosts))
+}
+
+// RemoveHost deletes a host. When it was the default host, default_host
+// moves to the alphabetically first remaining host, or is cleared when none
+// remains.
+func (c *Config) RemoveHost(host string) {
+	delete(c.Hosts, host)
+	if c.DefaultHostName != host {
+		return
+	}
+	c.DefaultHostName = ""
+	if hosts := c.HostNames(); len(hosts) > 0 {
+		c.DefaultHostName = hosts[0]
+	}
 }

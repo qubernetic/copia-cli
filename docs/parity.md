@@ -20,6 +20,8 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 | `gh auth token` | Full | `copia-cli auth token` | [ ] |
 | `gh auth setup-git` | None | n/a | — |
 
+The default host is the top-level config key `default_host`, which `auth login` sets to the host it logs in to; gh has no such key and defaults to `github.com` (or its only host) unless `GH_HOST` is set. The host order is `--host`, `COPIA_HOST`, `default_host`, then the alphabetically first host; `auth logout` of the default host moves `default_host` to the alphabetically first remaining host. `auth status` lists the hosts in alphabetical order and marks the default one with `(default)`, where gh marks the active account of each host.
+
 ## repo
 
 | gh command | Parity | Copia CLI | Status |

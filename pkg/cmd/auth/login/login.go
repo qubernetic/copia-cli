@@ -35,6 +35,9 @@ func NewCmdLogin(f *cmdutil.Factory) *cobra.Command {
 The default authentication mode is interactive, prompting for a token.
 Use --host and --token for non-interactive login in CI environments.
 
+The host becomes the default host (the config key default_host), which the
+other commands use when neither --host nor COPIA_HOST is given.
+
 Token precedence: --token flag > COPIA_TOKEN env var > config file.`,
 		Example: `  # Interactive login
   $ copia-cli auth login
@@ -123,6 +126,7 @@ func LoginRun(opts *LoginOptions) error {
 		Token: opts.Token,
 		User:  user.Login,
 	}
+	cfg.DefaultHostName = opts.Host
 
 	if err := config.Save(opts.ConfigPath, cfg); err != nil {
 		return err

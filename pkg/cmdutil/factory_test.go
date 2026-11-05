@@ -358,3 +358,41 @@ func TestFactory_Pager(t *testing.T) {
 }
 
 func ptr(s string) *string { return &s }
+
+func TestFactory_DefaultHostOfThreeHosts(t *testing.T) {
+	tests := []struct {
+		name        string
+		defaultHost string
+		wantHost    string
+	}{
+		{name: "stored default host", defaultHost: "b.example.com", wantHost: "b.example.com"},
+		{name: "unset default host", wantHost: "a.example.com"},
+		{name: "stale default host", defaultHost: "gone.example.com", wantHost: "a.example.com"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("COPIA_HOST", "")
+			t.Setenv("COPIA_TOKEN", "")
+			ios, _, _, _ := iostreams.Test()
+			f := &Factory{IOStreams: ios, Config: func() (*config.Config, error) {
+				return &config.Config{DefaultHostName: tt.defaultHost, Hosts: map[string]*config.HostConfig{
+					"c.example.com": {Token: "token-c"},
+					"a.example.com": {Token: "token-a"},
+					"b.example.com": {Token: "token-b"},
+				}}, nil
+			}}
+
+			for range 50 {
+				host, err := f.ResolveHost()
+				require.NoError(t, err)
+				require.Equal(t, tt.wantHost, host)
+
+				host, token, err := f.ResolveAuth()
+				require.NoError(t, err)
+				require.Equal(t, tt.wantHost, host)
+				require.Equal(t, "token-"+tt.wantHost[:1], token)
+			}
+		})
+	}
+}

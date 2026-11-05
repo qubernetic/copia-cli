@@ -74,6 +74,80 @@ func TestConfig_DefaultHost(t *testing.T) {
 	assert.Equal(t, "t1", hc.Token)
 }
 
+func TestConfig_DefaultHost_ThreeHosts(t *testing.T) {
+	tests := []struct {
+		name        string
+		defaultHost string
+		want        string
+	}{
+		{name: "stored default host", defaultHost: "b.example.com", want: "b.example.com"},
+		{name: "unset default host", want: "a.example.com"},
+		{name: "stale default host", defaultHost: "gone.example.com", want: "a.example.com"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// A map's order changes between iterations, so ask often.
+			for range 50 {
+				cfg := &Config{
+					DefaultHostName: tt.defaultHost,
+					Hosts: map[string]*HostConfig{
+						"c.example.com": {User: "u3"},
+						"a.example.com": {User: "u1"},
+						"b.example.com": {User: "u2"},
+					},
+				}
+				host, hc := cfg.DefaultHost()
+				require.Equal(t, tt.want, host)
+				require.Same(t, cfg.Hosts[tt.want], hc)
+			}
+		})
+	}
+}
+
+func TestConfig_RemoveHost(t *testing.T) {
+	tests := []struct {
+		name        string
+		hosts       []string
+		defaultHost string
+		remove      string
+		wantDefault string
+	}{
+		{name: "default host moves to the first remaining", hosts: []string{"c.example.com", "a.example.com", "b.example.com"}, defaultHost: "a.example.com", remove: "a.example.com", wantDefault: "b.example.com"},
+		{name: "other host keeps the default", hosts: []string{"c.example.com", "a.example.com", "b.example.com"}, defaultHost: "c.example.com", remove: "a.example.com", wantDefault: "c.example.com"},
+		{name: "last host clears the default", hosts: []string{"a.example.com"}, defaultHost: "a.example.com", remove: "a.example.com"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{DefaultHostName: tt.defaultHost, Hosts: map[string]*HostConfig{}}
+			for _, h := range tt.hosts {
+				cfg.Hosts[h] = &HostConfig{}
+			}
+			cfg.RemoveHost(tt.remove)
+			assert.NotContains(t, cfg.Hosts, tt.remove)
+			assert.Equal(t, tt.wantDefault, cfg.DefaultHostName)
+		})
+	}
+}
+
+func TestDefaultHost_RoundTripKeepsUnknownKeys(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yml")
+	require.NoError(t, os.WriteFile(path, []byte("default_host: b.example.com\nfuture_key: kept\nhosts:\n  a.example.com:\n    user: u1\n  b.example.com:\n    user: u2\n"), 0600))
+
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	host, _ := cfg.DefaultHost()
+	assert.Equal(t, "b.example.com", host)
+
+	cfg.DefaultHostName = "a.example.com"
+	require.NoError(t, Save(path, cfg))
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "default_host: a.example.com\n")
+	assert.Contains(t, string(data), "future_key: kept\n")
+}
+
 func TestConfig_DefaultHost_Empty(t *testing.T) {
 	cfg := &Config{Hosts: map[string]*HostConfig{}}
 	host, hc := cfg.DefaultHost()
