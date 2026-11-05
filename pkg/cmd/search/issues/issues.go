@@ -26,6 +26,7 @@ type SearchOptions struct {
 	Labels     []string
 	Limit      int
 	JSON       cmdutil.JSONFlags
+	Web        bool
 }
 
 type issueEntry struct {
@@ -43,14 +44,22 @@ func NewCmdSearchIssues(f *cmdutil.Factory) *cobra.Command {
 		Short: "Search issues in a repository",
 		Long: `Search issues within a repository by keyword. By default, searches across
 all states (open and closed). Use --state and --label to filter. Results
-come newest first. Requires repo context via -R flag or git remote.`,
+come newest first. Requires repo context via -R flag or git remote.
+
+Use --web to open the issue list of the repository in the browser with the
+query and --state instead; no API call is made, so no token is needed. The
+web list takes labels only by ID, so --label is not applied there.`,
 		Example: `  $ copia-cli search issues "sensor timeout"
   $ copia-cli search issues bug --state closed
-  $ copia-cli search issues timeout --label bug --label plc`,
+  $ copia-cli search issues timeout --label bug --label plc
+  $ copia-cli search issues timeout --state open --web`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.Query = args[0]
 			opts.IO = f.IOStreams
+			if opts.Web {
+				return openSearch(f, opts)
+			}
 
 			host, token, err := f.ResolveAuth()
 			if err != nil {
@@ -73,9 +82,39 @@ come newest first. Requires repo context via -R flag or git remote.`,
 	cmd.Flags().StringVarP(&opts.State, "state", "s", "", "Filter by state: {open|closed}")
 	cmd.Flags().StringSliceVarP(&opts.Labels, "label", "l", nil, "Filter by label")
 	cmd.Flags().IntVarP(&opts.Limit, "limit", "L", 30, "Maximum number of results")
+	cmd.Flags().BoolVarP(&opts.Web, "web", "w", false, "Open the search query in the web browser")
 	cmdutil.AddJSONFlags(cmd, &opts.JSON, []string{"number", "title", "state"})
 
 	return cmd
+}
+
+// openSearch opens the issue list of the repository with the query and the
+// state in the browser. It makes no API call, so no token is needed.
+func openSearch(f *cmdutil.Factory, opts *SearchOptions) error {
+	host, err := f.ResolveHost()
+	if err != nil {
+		return err
+	}
+	owner, repo, err := f.ResolveRepo()
+	if err != nil {
+		return err
+	}
+
+	q := url.Values{}
+	q.Set("q", opts.Query)
+	q.Set("state", searchState(opts.State))
+	if len(opts.Labels) > 0 {
+		cmdutil.WarnWebIgnored(opts.IO, "label")
+	}
+	return cmdutil.OpenInBrowser(opts.IO, f.Browser, cmdutil.RepoWebURL(host, owner, repo, "issues")+"?"+q.Encode())
+}
+
+// searchState returns state, or "all" when it is empty.
+func searchState(state string) string {
+	if state == "" {
+		return "all"
+	}
+	return state
 }
 
 func decodeIssues(body []byte) ([]issueEntry, error) {
@@ -89,10 +128,7 @@ func SearchRun(opts *SearchOptions) error {
 		return err
 	}
 
-	state := opts.State
-	if state == "" {
-		state = "all"
-	}
+	state := searchState(opts.State)
 
 	u := fmt.Sprintf("https://%s/api/v1/repos/%s/%s/issues?q=%s&type=issues&state=%s",
 		opts.Host, opts.Owner, opts.Repo, url.QueryEscape(opts.Query), url.QueryEscape(state))

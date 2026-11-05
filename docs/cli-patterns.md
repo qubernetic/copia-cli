@@ -825,6 +825,7 @@ if opts.Web {
 ```
 
 - Paths and query parameters are those of the Gitea 1.26 web router and handlers. A filter the web page takes only by ID (labels, milestones, assignees) would need an API call, so the command passes `cmdutil.WarnWebIgnored` the names of those flags that are set, which prints `warning: --<flag> is not applied in the browser`, and opens the page without them.
+- A command whose page needs no repository (`search repos`, `search prs` without `-R`) builds the URL from `f.ResolveHost()` alone, for example `https://<host>/explore/repos`.
 - Pull request pages go through `pr/shared.OpenPR(f, ref, tab)`, which also takes a pull request URL argument and refuses one on another host, as the API commands do.
 - `cmdutil.OpenInBrowser` prints `Opening <url> in your browser.` to standard error when standard output is a terminal, as gh does for `--web`.
 - Tests set `Browser: &browsertest.Browser{}` on the Factory, check its `URLs`, the standard error text with and without `ios.SetStdoutTTY(true)`, and that the `httpmock` registry saw no request.
