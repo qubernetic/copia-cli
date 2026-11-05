@@ -200,3 +200,14 @@ func TestOptions(t *testing.T) {
 	}
 	assert.Equal(t, []string{"output", "browser", "pager", "editor"}, keys)
 }
+
+func TestSave_RestoresMode0600(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yml")
+	require.NoError(t, os.WriteFile(path, []byte("hosts: {}\n"), 0644))
+
+	require.NoError(t, Save(path, &Config{Hosts: map[string]*HostConfig{}, Output: "json"}))
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0600), info.Mode().Perm())
+}

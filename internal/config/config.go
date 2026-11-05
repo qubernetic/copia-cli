@@ -145,6 +145,13 @@ func Save(path string, cfg *Config) error {
 		return fmt.Errorf("creating config directory: %w", err)
 	}
 
+	// WriteFile keeps the mode of an existing file, so drop every bit beyond
+	// 0600 before the token is written; a read-only file stays read-only.
+	if info, err := os.Stat(path); err == nil && info.Mode().Perm()&^0600 != 0 {
+		if err := os.Chmod(path, info.Mode().Perm()&0600); err != nil {
+			return fmt.Errorf("securing config: %w", err)
+		}
+	}
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		return fmt.Errorf("writing config: %w", err)
 	}
