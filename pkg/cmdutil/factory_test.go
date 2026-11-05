@@ -176,8 +176,10 @@ func TestFactory_ResolveAuth_StoredToken(t *testing.T) {
 // config picks, and that its value appears in no output or error.
 func TestFactory_ResolveAuth_EnvTokenOnlyForNamedHost(t *testing.T) {
 	const envToken = "env-secret-token"
-	const warning = "warning: COPIA_TOKEN is ignored because no host is named; set COPIA_HOST (or --host) to the host the token belongs to\n"
 	const hint = "COPIA_TOKEN is ignored because no host is named; set COPIA_HOST (or --host) to the host the token belongs to"
+	const warning = "warning: " + hint + "\n"
+	const otherHostHint = "COPIA_TOKEN is ignored because --host names another host than COPIA_HOST; the token is sent only to the host COPIA_HOST names"
+	const otherHostWarning = "warning: " + otherHostHint + "\n"
 	twoHosts := map[string]*config.HostConfig{
 		"a.example.com": {Token: "token-a"},
 		"b.example.com": {Token: "token-b"},
@@ -191,7 +193,7 @@ func TestFactory_ResolveAuth_EnvTokenOnlyForNamedHost(t *testing.T) {
 		hosts       map[string]*config.HostConfig
 		wantHost    string
 		wantToken   string
-		wantWarning bool
+		wantWarning string
 		wantErr     string
 	}{
 		{
@@ -221,14 +223,14 @@ func TestFactory_ResolveAuth_EnvTokenOnlyForNamedHost(t *testing.T) {
 			hosts:       twoHosts,
 			wantHost:    "b.example.com",
 			wantToken:   "token-b",
-			wantWarning: true,
+			wantWarning: warning,
 		},
 		{
 			name:        "host from the alphabetical fallback",
 			hosts:       twoHosts,
 			wantHost:    "a.example.com",
 			wantToken:   "token-a",
-			wantWarning: true,
+			wantWarning: warning,
 		},
 		{
 			name:        "config host without a stored token",
@@ -240,6 +242,82 @@ func TestFactory_ResolveAuth_EnvTokenOnlyForNamedHost(t *testing.T) {
 			name:    "no host anywhere",
 			hosts:   map[string]*config.HostConfig{},
 			wantErr: "no host configured. Run 'copia auth login' first. " + hint,
+		},
+		{
+			name:        "--host names another host than COPIA_HOST",
+			flagHost:    "b.example.com",
+			envHost:     "a.example.com",
+			hosts:       twoHosts,
+			wantHost:    "b.example.com",
+			wantToken:   "token-b",
+			wantWarning: otherHostWarning,
+		},
+		{
+			name:     "--host names another host than COPIA_HOST without a stored token",
+			flagHost: "b.example.com",
+			envHost:  "a.example.com",
+			hosts:    map[string]*config.HostConfig{"a.example.com": {Token: "token-a"}},
+			wantErr:  "no token configured for b.example.com. Run 'copia auth login' first. " + otherHostHint,
+		},
+		{
+			name:      "--host names COPIA_HOST in another case",
+			flagHost:  "a.example.com",
+			envHost:   "A.example.com",
+			hosts:     twoHosts,
+			wantHost:  "a.example.com",
+			wantToken: envToken,
+		},
+		{
+			name:      "--host names COPIA_HOST with the default port",
+			flagHost:  "a.example.com:443",
+			envHost:   "a.example.com",
+			hosts:     twoHosts,
+			wantHost:  "a.example.com:443",
+			wantToken: envToken,
+		},
+		{
+			name:      "COPIA_HOST names --host with the default port",
+			flagHost:  "a.example.com",
+			envHost:   "a.example.com:443",
+			hosts:     twoHosts,
+			wantHost:  "a.example.com",
+			wantToken: envToken,
+		},
+		{
+			name:        "--host names COPIA_HOST with another port",
+			flagHost:    "a.example.com:8443",
+			envHost:     "a.example.com",
+			hosts:       map[string]*config.HostConfig{"a.example.com:8443": {Token: "token-8443"}},
+			wantHost:    "a.example.com:8443",
+			wantToken:   "token-8443",
+			wantWarning: otherHostWarning,
+		},
+		{
+			name:        "COPIA_HOST does not parse",
+			flagHost:    "a.example.com",
+			envHost:     "a.example.com/path",
+			hosts:       twoHosts,
+			wantHost:    "a.example.com",
+			wantToken:   "token-a",
+			wantWarning: otherHostWarning,
+		},
+		{
+			name:        "--host does not parse",
+			flagHost:    "user@a.example.com",
+			envHost:     "a.example.com",
+			hosts:       map[string]*config.HostConfig{"user@a.example.com": {Token: "token-user"}},
+			wantHost:    "user@a.example.com",
+			wantToken:   "token-user",
+			wantWarning: otherHostWarning,
+		},
+		{
+			name:      "--token beats COPIA_TOKEN with another host than COPIA_HOST",
+			flagToken: "flag-token",
+			flagHost:  "b.example.com",
+			envHost:   "a.example.com",
+			hosts:     twoHosts,
+			wantHost:  "b.example.com",
+			wantToken: "flag-token",
 		},
 		{
 			name:      "--token beats COPIA_TOKEN with COPIA_HOST",
@@ -294,11 +372,7 @@ func TestFactory_ResolveAuth_EnvTokenOnlyForNamedHost(t *testing.T) {
 				assert.Equal(t, tt.wantToken, token)
 			}
 
-			if tt.wantWarning {
-				assert.Equal(t, warning, stderr.String())
-			} else {
-				assert.Empty(t, stderr.String())
-			}
+			assert.Equal(t, tt.wantWarning, stderr.String())
 			assert.Empty(t, stdout.String())
 			assert.NotContains(t, stderr.String(), envToken)
 		})

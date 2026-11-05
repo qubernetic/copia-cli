@@ -36,29 +36,41 @@ type Factory struct {
 // the host --host or COPIA_HOST names.
 const envTokenIgnored = "COPIA_TOKEN is ignored because no host is named; set COPIA_HOST (or --host) to the host the token belongs to"
 
+// envTokenOtherHost explains why COPIA_TOKEN was not used: --host names
+// another host than COPIA_HOST, the host the token belongs to.
+const envTokenOtherHost = "COPIA_TOKEN is ignored because --host names another host than COPIA_HOST; the token is sent only to the host COPIA_HOST names"
+
 // ResolveAuth returns the host and token. The host comes from --host, then
 // COPIA_HOST, then the config's default host. The token comes from:
 // 1. --token (highest priority)
-// 2. COPIA_TOKEN, only when the host came from --host or COPIA_HOST, so the
-// token never goes to a host the config picks
+// 2. COPIA_TOKEN, only when the host came from COPIA_HOST, or from --host
+// with COPIA_HOST unset or naming the same host, so the token never goes to
+// a host the config picks or to another host than COPIA_HOST names
 // 3. The stored token of the host's active account: the config file, then
 // the OS keyring (lowest priority)
 //
-// When COPIA_TOKEN is set but the host came from the config, the stored
-// token is used and a warning goes to ErrOut once; the token value itself
-// is never printed.
+// When COPIA_TOKEN is set but passed over, the stored token is used and a
+// warning goes to ErrOut once; the token value itself is never printed.
 func (f *Factory) ResolveAuth() (host, token string, err error) {
 	host = f.Host
 	token = f.Token
+	envHost := os.Getenv("COPIA_HOST")
 	if host == "" {
-		host = os.Getenv("COPIA_HOST")
+		host = envHost
 	}
-	hostNamed := host != ""
+	// reason says why COPIA_TOKEN does not apply to host, empty when it does.
+	reason := ""
+	switch {
+	case host == "":
+		reason = envTokenIgnored
+	case envHost != "" && !sameHost(host, envHost):
+		reason = envTokenOtherHost
+	}
 	envToken := os.Getenv("COPIA_TOKEN")
-	if token == "" && hostNamed {
+	if token == "" && reason == "" {
 		token = envToken
 	}
-	// COPIA_TOKEN was passed over for the token of a host the config picks.
+	// COPIA_TOKEN was passed over for the stored token of the host.
 	envTokenSkipped := token == "" && envToken != ""
 
 	if host == "" || token == "" {
@@ -79,7 +91,7 @@ func (f *Factory) ResolveAuth() (host, token string, err error) {
 
 	hint := ""
 	if envTokenSkipped {
-		hint = ". " + envTokenIgnored
+		hint = ". " + reason
 	}
 	if host == "" {
 		return "", "", fmt.Errorf("no host configured. Run 'copia auth login' first%s", hint)
@@ -90,10 +102,24 @@ func (f *Factory) ResolveAuth() (host, token string, err error) {
 	if envTokenSkipped && !f.envTokenWarned {
 		f.envTokenWarned = true
 		if f.IOStreams != nil {
-			_, _ = fmt.Fprintln(f.IOStreams.ErrOut, "warning: "+envTokenIgnored)
+			_, _ = fmt.Fprintln(f.IOStreams.ErrOut, "warning: "+reason)
 		}
 	}
 	return host, token, nil
+}
+
+// sameHost reports whether a and b name the same host: the host name
+// compared case-insensitively and the same port, a missing port being 443.
+// A host that does not parse is never the same host.
+func sameHost(a, b string) bool {
+	u, err := ParseHost(a)
+	if err != nil {
+		return false
+	}
+	if _, err := ParseHost(b); err != nil {
+		return false
+	}
+	return MatchesHost(u, "https://"+b)
 }
 
 // ResolveHost returns the host in the order of ResolveAuth (--host flag,
