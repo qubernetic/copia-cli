@@ -8,6 +8,7 @@ import (
 
 	"github.com/qubernetic/copia-cli/internal/config"
 	"github.com/qubernetic/copia-cli/pkg/cmdutil"
+	"github.com/qubernetic/copia-cli/pkg/cmdutil/browsertest"
 	"github.com/qubernetic/copia-cli/pkg/httpmock"
 	"github.com/qubernetic/copia-cli/pkg/iostreams"
 	"github.com/stretchr/testify/assert"
@@ -205,4 +206,66 @@ func TestNewCmdView_JSONFieldsAndJQ(t *testing.T) {
 	f := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Token: "test-token", Repo: "my-org/my-repo"}
 	require.NoError(t, runViewCmd(f, "--json", "stars_count,forks_count,html_url", "--jq", "[.stars_count, .forks_count, .html_url]"))
 	assert.Equal(t, "[1,2,\"https://app.copia.io/my-org/my-repo\"]\n", stdout.String())
+}
+
+func TestNewCmdView_Web(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		repo    string
+		tty     bool
+		wantURL string
+		wantErr string
+	}{
+		{name: "current repo", args: []string{"--web"}, repo: "my-org/my-repo", wantURL: "https://app.copia.io/my-org/my-repo"},
+		{name: "short flag", args: []string{"-w"}, repo: "my-org/my-repo", wantURL: "https://app.copia.io/my-org/my-repo"},
+		{name: "positional repo", args: []string{"other-org/other-repo", "-w"}, wantURL: "https://app.copia.io/other-org/other-repo"},
+		{
+			name: "tty", args: []string{"-w"}, repo: "my-org/my-repo", tty: true,
+			wantURL: "https://app.copia.io/my-org/my-repo",
+			wantErr: "Opening app.copia.io/my-org/my-repo in your browser.\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			httpmock.ReplaceDefaultTransport(t, reg)
+			ios, _, stdout, stderr := iostreams.Test()
+			ios.SetStdoutTTY(tt.tty)
+			b := &browsertest.Browser{}
+			f := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Repo: tt.repo, Browser: b}
+
+			require.NoError(t, runViewCmd(f, tt.args...))
+			assert.Equal(t, []string{tt.wantURL}, b.URLs)
+			assert.Empty(t, stdout.String())
+			assert.Equal(t, tt.wantErr, stderr.String())
+			assert.Empty(t, reg.Requests)
+		})
+	}
+}
+
+func TestNewCmdView_WebErrors(t *testing.T) {
+	t.Setenv("COPIA_HOST", "")
+	reg := &httpmock.Registry{}
+	httpmock.ReplaceDefaultTransport(t, reg)
+	ios, _, _, _ := iostreams.Test()
+	b := &browsertest.Browser{}
+
+	noConfig := &cmdutil.Factory{IOStreams: ios, Repo: "my-org/my-repo", Browser: b,
+		Config: func() (*config.Config, error) { return nil, errors.New("no config") }}
+	require.EqualError(t, runViewCmd(noConfig, "-w"), "no config")
+
+	f := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Browser: b}
+	require.Error(t, runViewCmd(f, "not-a-repo", "-w"))
+
+	noRepo := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Browser: b}
+	err := runViewCmd(noRepo, "-w")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "could not determine repository")
+	assert.Empty(t, b.URLs)
+
+	failing := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Repo: "my-org/my-repo",
+		Browser: &browsertest.Browser{Err: errors.New("no browser")}}
+	require.EqualError(t, runViewCmd(failing, "-w"), "no browser")
+	assert.Empty(t, reg.Requests)
 }
