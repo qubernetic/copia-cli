@@ -125,6 +125,19 @@ copia-cli auth status --host app.copia.io --show-token
 
 **The output then contains the secret.** Do not run it where the terminal is recorded or shared, or in a CI log. The flag changes the output only; neither the config file nor the keyring is touched. When standard output is not a terminal (a pipe, a redirect or a CI log), `auth status --show-token` still prints the token and writes one warning line to standard error.
 
+### Use the Token with git
+
+`copia-cli auth git-credential` is a hidden command that git runs as a [credential helper](https://git-scm.com/docs/gitcredentials), as `gh auth git-credential` does. Configure it for each Copia host; the empty first entry drops the other helpers for that host, so git stores the token nowhere else:
+
+```bash
+git config --global credential.https://app.copia.io.helper ''
+git config --global --add credential.https://app.copia.io.helper '!copia-cli auth git-credential'
+```
+
+For `get` it reads git's `key=value` lines from standard input. When `protocol` is `https` and `host` is a configured host, it prints `username=<login>` and `password=<token>` of the host's active account, the token read from the config file or the OS keyring as for the other commands. The host matches regardless of case, and its port must match: a missing port is 443, so `copia.example.com:8443` matches only a request for port 8443. A path in the request is ignored. A `username` in the request (from a URL such as `https://jane@app.copia.io/...`) must be the active account's login. Anything else (`http`, an unknown host, another port, another user name, a host without a stored token) prints nothing and exits 0, so git falls back to its next helper or prompt. `store` and `erase` do nothing, since the token stays where `auth login` stored it.
+
+`--token`, `COPIA_TOKEN` and `COPIA_HOST` do not apply: git asks for each host separately, and the answer is always the stored token of that host. A stored token or login with a character outside printable ASCII, such as a line break, is refused with an error that names the host, never the token.
+
 ## Auth Precedence
 
 The host comes from `--host`, then `COPIA_HOST`, then the config's default host (`default_host`, or the alphabetically first host). The token comes from:
@@ -140,6 +153,8 @@ warning: COPIA_TOKEN is ignored because no host is named; set COPIA_HOST (or --h
 ```
 
 When that host has no stored token, the `no token configured` error carries the same hint. The token value appears in no output or error.
+
+`auth git-credential` (see [Use the Token with git](#use-the-token-with-git)) follows none of this: it answers git for the host git asks about, with that host's stored token.
 
 In CI, set both variables:
 
