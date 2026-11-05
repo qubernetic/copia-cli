@@ -22,6 +22,9 @@ type CommentOptions struct {
 	Repo       string
 	Number     int64
 	Body       string
+
+	EditorMode    bool
+	EditorCommand string
 }
 
 // NewCmdComment creates the `copia issue comment` command.
@@ -29,11 +32,16 @@ func NewCmdComment(f *cmdutil.Factory) *cobra.Command {
 	opts := &CommentOptions{}
 
 	cmd := &cobra.Command{
-		Use:     "comment <number>",
-		Short:   "Add a comment to an issue",
-		Long:    "Add a comment to a Copia issue. The comment body is supplied via the --body flag.",
-		Example: `  $ copia-cli issue comment 12 --body "Investigating this now."`,
-		Args:    cobra.ExactArgs(1),
+		Use:   "comment <number>",
+		Short: "Add a comment to an issue",
+		Long: "Add a comment to a Copia issue. The comment body comes from --body, or from the editor with --editor.\n\n" +
+			"--editor opens the editor set in COPIA_EDITOR, the config key editor, VISUAL or EDITOR on an empty file " +
+			"and posts the saved text; empty text aborts without a comment.",
+		Example: `  $ copia-cli issue comment 12 --body "Investigating this now."
+
+  # Write the comment in the editor
+  $ copia-cli issue comment 12 --editor`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			num, err := strconv.ParseInt(args[0], 10, 64)
 			if err != nil {
@@ -55,17 +63,29 @@ func NewCmdComment(f *cmdutil.Factory) *cobra.Command {
 			}
 			opts.Owner = owner
 			opts.Repo = repo
+			if opts.EditorMode {
+				opts.EditorCommand = f.Editor()
+			}
 			opts.HTTPClient = cmdutil.NewHTTPClient()
 			return CommentRun(opts)
 		},
 	}
 
-	cmd.Flags().StringVarP(&opts.Body, "body", "b", "", "Comment body (required)")
+	cmd.Flags().StringVarP(&opts.Body, "body", "b", "", "Comment body (required unless --editor is set)")
+	cmd.Flags().BoolVarP(&opts.EditorMode, "editor", "e", false, "Write the comment body in the text editor")
+	cmd.MarkFlagsMutuallyExclusive("body", "editor")
 
 	return cmd
 }
 
 func CommentRun(opts *CommentOptions) error {
+	if opts.EditorMode {
+		body, err := cmdutil.EditBody(opts.IO, opts.EditorCommand)
+		if err != nil {
+			return err
+		}
+		opts.Body = body
+	}
 	if opts.Body == "" {
 		return fmt.Errorf("body required")
 	}
