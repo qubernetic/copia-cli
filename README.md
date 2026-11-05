@@ -100,6 +100,10 @@ $ copia-cli config list
 $ copia-cli config set browser "firefox --new-tab"
 $ copia-cli config get browser
 
+# Print JSON with every field by default; COPIA_OUTPUT=table overrides it for one call
+$ copia-cli config set output json
+$ copia-cli issue list --jq '.[].title'
+
 # Call any API endpoint: fetch every page and keep only the titles
 $ copia-cli api --paginate /repos/my-org/my-repo/issues --jq '.[].title'
 ```

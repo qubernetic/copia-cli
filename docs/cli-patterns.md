@@ -760,4 +760,5 @@ if opts.JSON.IsJSON() {
   - `timeago <RFC 3339 time>` prints `just now`, `5 minutes ago`, `2 days ago` and so on;
   - `tablerow <field>...` adds a row to a table whose columns are aligned with two spaces, printed by `tablerender` or, without it, at the end.
 - `--template` without `--json`, `--template` with `--jq`, and a template that does not parse (an unknown helper included) fail before any request. `cmdutil.ExecuteTemplate(w, data, tpl)` is the `--template` part on its own.
+- The default output format comes from `Factory.OutputFormat` (`COPIA_OUTPUT`, then the config key `output`, then `table`). `copiacmd.Execute` puts it into the command context with `cmdutil.WithOutputFormat`; when `--json` is not given and the format is `json`, the `PreRunE` of `AddJSONFlags` selects all valid fields before it checks `--jq` and `--template`, so `IsJSON` is true and no command needs code of its own. A command built without that context (a unit test) behaves as `table`. A flag that has no JSON form calls `opts.JSON.DropDefault()` to go back to the text output when the JSON comes only from the default (`issue view --comments`).
 
