@@ -44,7 +44,9 @@ aliases:
   bugs: issue list --label $1
 ```
 
-The top-level keys beside `hosts` are the settings of `copia-cli config` (`output`, `browser`, `pager`, `editor`); `config set` changes one of them and keeps `hosts` and the tokens as they are. Every save keeps the keys copia-cli does not know, at the top level and under a host (such as `default_org` above), and writes them back unchanged.
+`default_host` names the host the commands use when neither `--host` nor `COPIA_HOST` is given. `auth login` sets it to the host it logs in to, and `auth logout` of that host moves it to the alphabetically first remaining host, or removes it when none remains. When it is unset (a config of an older version) or names a host that is no longer in `hosts`, the alphabetically first host is the default.
+
+The other top-level keys beside `hosts` are the settings of `copia-cli config` (`output`, `browser`, `pager`, `editor`); `config set` changes one of them and keeps `hosts` and the tokens as they are. Every save keeps the keys copia-cli does not know, at the top level and under a host (such as `default_org` above), and writes them back unchanged.
 
 `output: json` makes every command that takes `--json` print all its fields as JSON when `--json` is not given, so `--jq` and `--template` work alone. `COPIA_OUTPUT` (`table` or `json`) overrides the key for one call, and an explicit `--json` field list overrides both.
 
@@ -62,13 +64,13 @@ The top-level keys beside `hosts` are the settings of `copia-cli config` (`outpu
 
 ### Check the Auth Status
 
-`copia-cli auth status` lists every host in the config file with its user, its token and whether Copia accepts the token. `--host` limits the output to one host.
+`copia-cli auth status` lists every host in the config file in alphabetical order, the default host marked with `(default)`, with its user, its token and whether Copia accepts the token. `--host` limits the output to one host.
 
 `auth status` reads only the config file and the `--host` flag. It does not read `COPIA_HOST` or `COPIA_TOKEN`, so when either is set, the other commands may use a different host or token than the one `auth status` reports on.
 
 ```console
 $ copia-cli auth status
-app.copia.io
+app.copia.io (default)
   User: john
   Token: ****************************************
   Token valid
@@ -87,7 +89,7 @@ copia-cli auth status --host app.copia.io --show-token
 
 1. `--token` flag (per-command)
 2. `COPIA_TOKEN` environment variable
-3. Config file (`~/.config/copia/config.yml`)
+3. The stored token of the active host in the config file (`~/.config/copia/config.yml`)
 
 ## Alternative Auth Methods
 
@@ -126,9 +128,10 @@ Response:
 
 ## Multi-Instance Support
 
-The CLI should support multiple Copia instances (e.g., on-prem vs cloud):
+The config file holds several Copia instances (e.g., on-prem vs cloud):
 
 ```yaml
+default_host: app.copia.io
 hosts:
   app.copia.io:
     token: abc123
@@ -143,8 +146,8 @@ hosts:
 The active instance is determined by:
 1. `--host` flag
 2. `COPIA_HOST` environment variable
-3. Git remote URL of the current repo (auto-detect)
-4. First entry in config file
+3. The config key `default_host`, when it names a host in `hosts`
+4. The alphabetically first host in the config file
 
 The repository a command works on is determined by:
 1. `-R/--repo` flag
