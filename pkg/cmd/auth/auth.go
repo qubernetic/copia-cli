@@ -5,6 +5,7 @@ import (
 	gitCredentialCmd "github.com/qubernetic/copia-cli/pkg/cmd/auth/gitcredential"
 	loginCmd "github.com/qubernetic/copia-cli/pkg/cmd/auth/login"
 	logoutCmd "github.com/qubernetic/copia-cli/pkg/cmd/auth/logout"
+	setupGitCmd "github.com/qubernetic/copia-cli/pkg/cmd/auth/setupgit"
 	statusCmd "github.com/qubernetic/copia-cli/pkg/cmd/auth/status"
 	switchCmd "github.com/qubernetic/copia-cli/pkg/cmd/auth/switch"
 	"github.com/qubernetic/copia-cli/pkg/cmdutil"
@@ -23,6 +24,7 @@ func NewCmdAuth(f *cmdutil.Factory) *cobra.Command {
 	cmd.AddCommand(statusCmd.NewCmdStatus(f))
 	cmd.AddCommand(switchCmd.NewCmdSwitch(f))
 	cmd.AddCommand(gitCredentialCmd.NewCmdCredential(f))
+	cmd.AddCommand(setupGitCmd.NewCmdSetupGit(f))
 
 	return cmd
 }
