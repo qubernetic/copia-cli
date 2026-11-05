@@ -776,7 +776,11 @@ defer opts.IO.StopPager()
 - `copiacmd.Execute` sets the command with `IOStreams.SetPager(f.Pager())`; `Factory.Pager` resolves `COPIA_PAGER` (set but empty turns the pager off), then the config key `pager`, then `PAGER`.
 - `StartPager` does nothing when standard output is not a TTY, when no pager is set or when it is `cat`. Otherwise it splits the command into words at whitespace, runs it without a shell (`exec.Command`, which refuses a match relative to the current directory) with `LESS=FRX` and `LV=-c` unless they are set, and replaces `Out` with the pager's input until `StopPager`.
 - When the user quits the pager before the end, the rest of the output is discarded instead of failing with a broken pipe, so no command handles that case.
-- The commands that page: `repo list`, `repo view`, `issue list`, `issue view`, `pr list`, `pr view`, `pr diff`, `label list`, `release list`, `org list`, `org view` and `notification list`. Their unit tests set `ios.SetStdoutTTY(true)` and a pager that cannot be started, which shows that the command calls `StartPager`; `pkg/iostreams/pager_test.go` runs the test binary as a fake pager.
+- The commands that page: `repo list`, `repo view`, `issue list`, `issue view`, `pr list`, `pr view`, `pr diff`, `label list`, `release list`, `org list`, `org view`, `notification list`, `issue status`, `pr status` and `status`. Their unit tests set `ios.SetStdoutTTY(true)` and a pager that cannot be started, which shows that the command calls `StartPager`; `pkg/iostreams/pager_test.go` runs the test binary as a fake pager.
+
+### Terminal width
+
+`opts.IO.TerminalWidth()` is the width of the terminal on standard output (`golang.org/x/term`), or 80 when standard output is not a terminal or its size cannot be read, as gh's. `status` lays its columns out at this width. Read it before `StartPager`; unit tests set it with `ios.SetStdoutTTY(true)` and `ios.SetTerminalWidth(n)`.
 
 ### Editor
 

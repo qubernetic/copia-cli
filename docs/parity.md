@@ -170,6 +170,7 @@ Client side, no API call. Aliases are stored under the top-level key `aliases` o
 | `copia-cli notification list` | [x] |
 | `copia-cli notification read` | [x] |
 | `copia-cli browse` (`gh browse`: repository, issue or PR number, commit SHA (`/commit/{sha}`), `<path>`, `<path>:<line>` and `<path>:<start>-<end>` (`/src/branch/{branch}/{path}`, with a line `?display=source#L{n}` or `#L{n}-L{m}`, Gitea's counterpart of gh's `?plain=1`), `--branch/-b`, `--commit/-c` (`/src/commit/{sha}/{path}`; without a SHA the last commit of the current branch, of the default branch with `-R`, from `GET /repos/{owner}/{repo}/branches/{branch}`), `--blame` (`/blame/branch/...` or `/blame/commit/...`), `--settings/-s`, `--wiki/-w`, `--releases/-r`, `--actions/-a`, `--projects/-p`, `--no-browser/-n`; a path without `--branch` or `--commit` reads the default branch with `GET /repos/{owner}/{repo}`, everything else makes no API call. Conflicting flags fail with gh's messages before anything opens. Unlike gh, `--no-browser` does not check that the repository exists) | [x] |
+| `copia-cli status` (`gh status`, Partial: the sections Assigned Issues, Assigned Pull Requests, Review Requests and Mentions come from `GET /repos/issues/search?state=open` with `assigned=true` (split on `pull_request`), `review_requested=true&type=pulls` and `mentioned=true`, the first 25 results of each sorted by `updated_at` and five shown, as gh reads 25 search results and shows five. gh takes its mentions from the notifications with the reason `mention`; Gitea's notifications carry no reason, so the search filter is used. Repository Activity is the ten newest of `GET /notifications?all=true` with the subject type (`issue`, `PR`, `commit`, `repository`) instead of gh's `new issue`, `new PR` and `comment on` from `/users/{user}/received_events`, which Gitea 1.26 does not have. `--org/-o` is sent as the search's `owner` and checked on every result and notification, `--exclude/-e` is applied on the client, both regardless of case; an `--exclude` value that is not `owner/repo` fails. The layout is gh's: two half-width columns separated by `│` at the terminal width (80 when not a terminal), without colour) | [x] |
 | `copia-cli completion` | [x] |
 
 ## Other gh commands (not yet implemented)
@@ -178,7 +179,6 @@ Client side, no API call. Aliases are stored under the top-level key `aliases` o
 |-----------------|--------|-------|
 | `gh ssh-key` | Full | `GET/POST /user/keys` |
 | `gh gpg-key` | Full | `GET/POST /user/gpg_keys` |
-| `gh status` | Partial | Compose from multiple endpoints |
 | `gh gist` | None | No Gitea equivalent |
 | `gh workflow` | Full | `/repos/{owner}/{repo}/actions/workflows`: list, view, `run` (`/{workflow_id}/dispatches`), `enable`, `disable`. Whether Copia enables Actions is unknown |
 | `gh run` | Partial | `/repos/{owner}/{repo}/actions/runs`: list, view, delete, `rerun` (`/rerun`, `/rerun-failed-jobs`, `/jobs/{job_id}/rerun`), job logs (`/actions/jobs/{job_id}/logs`), `download` (`/actions/artifacts`), `watch` by polling. No `cancel`: Gitea 1.26 has no endpoint for it. Whether Copia enables Actions is unknown |
@@ -198,9 +198,9 @@ Client side, no API call. Aliases are stored under the top-level key `aliases` o
 
 | Status | Count |
 |--------|-------|
-| Implemented | 60 |
+| Implemented | 61 |
 | Not yet implemented (Full parity) | 12 |
-| Not yet implemented (Partial) | 7 |
+| Not yet implemented (Partial) | 6 |
 | No equivalent | 13 |
 | **Total implementable** | **79** |
 

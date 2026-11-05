@@ -36,6 +36,7 @@ graph TB
         org[org: list/view]
         notification[notification: list/read]
         browse[browse: open repo/issue/PR URL]
+        status[status: dashboard across repositories]
         configcmd[config: get/set/list]
         aliascmd[alias: set/list/delete/import]
         completion[completion: bash/zsh/fish/powershell]
@@ -54,8 +55,8 @@ graph TB
     copiacmd --> build
     copiacmd --> config
     factory --> iostreams
-    copiacmd --> auth & repo & issue & pr & label & release & apicmd & search & org & notification & browse & configcmd & aliascmd & completion
-    auth & repo & issue & pr & label & release & apicmd & search & org & notification --> factory
+    copiacmd --> auth & repo & issue & pr & label & release & apicmd & search & org & notification & browse & status & configcmd & aliascmd & completion
+    auth & repo & issue & pr & label & release & apicmd & search & org & notification & status --> factory
     browse --> factory
     configcmd --> factory
     aliascmd --> factory
@@ -90,6 +91,7 @@ copia-cli/
 │   │   ├── org/                   # list, view
 │   │   ├── notification/          # list, read
 │   │   ├── browse/                # single command: browse [<number> | <path> | <commit-sha>]
+│   │   ├── status/                # single command: status (gh's dashboard)
 │   │   ├── config/                # get, set, list
 │   │   ├── alias/                 # set, list, delete, import; expand/ (alias expansion), shared/ (name and expansion checks)
 │   │   └── completion/            # single command: completion <shell> (bash, zsh, fish, powershell)
@@ -103,7 +105,7 @@ copia-cli/
 │   │   ├── json.go                # --json field filter, --jq (gojq), --template, PrintJSON
 │   │   └── template.go            # --template execution and its gh helpers
 │   ├── iostreams/
-│   │   ├── iostreams.go           # TTY-aware I/O, Test() helper
+│   │   ├── iostreams.go           # TTY-aware I/O, TerminalWidth, Test() helper
 │   │   └── pager.go               # Pager (COPIA_PAGER, config pager, PAGER), run without a shell
 │   └── httpmock/registry.go       # HTTP transport mock for testing
 ├── test/integration/              # Live API integration tests
@@ -195,6 +197,7 @@ func xxxRun(opts *XxxOptions) error { ... }  // unexported, testable
 | `org` | list, view | Raw HTTP |
 | `notification` | list, read | Raw HTTP (read: PATCH one thread, PUT with `--all`) |
 | `browse` | none (single command `browse [<number> \| <path> \| <commit-sha>]`) | URL built client-side, opened with `cmdutil.Browser`; raw HTTP only for the default branch of a path and the last commit of `--commit` |
+| `status` | none (single command `status`) | Raw HTTP: the issue search and the notifications |
 | `config` | get, set, list | No API call; reads and writes the settings of `config.yml`, `set` validates before it saves |
 | `alias` | set, list, delete, import | No API call; reads and writes `aliases` of `config.yml`, `set` and `import` refuse a name of a built-in command |
 | `completion` | none (single command `completion <shell>`: bash, zsh, fish, powershell) | No API call; Cobra script generation |
