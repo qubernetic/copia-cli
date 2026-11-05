@@ -18,6 +18,7 @@ func TestNewCmdAlias_Subcommands(t *testing.T) {
 	}
 	assert.Equal(t, map[string]string{
 		"delete": "General commands",
+		"import": "General commands",
 		"list":   "General commands",
 		"set":    "General commands",
 	}, groups)
