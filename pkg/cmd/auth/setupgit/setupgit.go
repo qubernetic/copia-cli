@@ -66,8 +66,9 @@ With --host it configures that host only, which must be logged in unless --force
 }
 
 // executable returns the path git runs as the helper: the copia-cli found in
-// PATH when it is the running binary, so a symlink such as Homebrew's keeps
-// working after an upgrade, as in gh; otherwise the running binary.
+// PATH when it is a symlink to the running binary, so a symlink such as
+// Homebrew's keeps working after an upgrade, as in gh; otherwise the running
+// binary. A hard link is another file name, so it does not count.
 func executable() (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
@@ -81,9 +82,13 @@ func executable() (string, error) {
 	if err != nil {
 		return exe, nil
 	}
-	a, errA := os.Stat(inPath)
-	b, errB := os.Stat(exe)
-	if errA == nil && errB == nil && os.SameFile(a, b) {
+	info, err := os.Lstat(inPath)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		return exe, nil
+	}
+	target, errA := filepath.EvalSymlinks(inPath)
+	realExe, errB := filepath.EvalSymlinks(exe)
+	if errA == nil && errB == nil && target == realExe {
 		return inPath, nil
 	}
 	return exe, nil

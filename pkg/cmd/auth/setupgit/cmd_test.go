@@ -98,3 +98,21 @@ func TestExecutable_IgnoresAnotherBinaryInPath(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, exe, got)
 }
+
+// TestExecutable_IgnoresAHardLinkInPath checks that a hard link to the
+// running binary in PATH, another file name of the same file, does not
+// replace the running binary: only a symlink does, as in gh.
+func TestExecutable_IgnoresAHardLinkInPath(t *testing.T) {
+	exe, err := os.Executable()
+	require.NoError(t, err)
+	dir := filepath.Join(filepath.Dir(exe), "hardlink")
+	require.NoError(t, os.Mkdir(dir, 0o700))
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	require.NoError(t, os.Link(exe, filepath.Join(dir, "copia-cli")))
+	t.Setenv("PATH", dir)
+
+	got, err := executable()
+
+	require.NoError(t, err)
+	assert.Equal(t, exe, got)
+}
