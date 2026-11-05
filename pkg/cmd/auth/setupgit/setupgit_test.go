@@ -135,6 +135,20 @@ func TestSetupGitRun_Hosts(t *testing.T) {
 			force:   true,
 			wantErr: `invalid host "c.example.com/x": want a host name with an optional port`,
 		},
+		{
+			name:    "wildcard host with force",
+			config:  twoHosts,
+			host:    "*.example.com",
+			force:   true,
+			wantErr: `invalid host "*.example.com": want a host name with an optional port`,
+		},
+		{
+			name:    "host with a user name with force",
+			config:  twoHosts,
+			host:    "joe@a.example.com",
+			force:   true,
+			wantErr: `invalid host "joe@a.example.com": want a host name with an optional port`,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -274,26 +288,49 @@ func TestSetupGitRun_QuotesTheExecutable(t *testing.T) {
 }
 
 // TestSetupGitRun_HelperRunsTheExecutable checks the quoting the way git
-// reads it: git runs the configured helper through the shell, and the
-// fake executable with a space and a quote in its path writes its arguments.
+// reads it: git runs the configured helper through the shell, and the fake
+// executable in a directory whose name holds shell syntax writes its
+// arguments.
 func TestSetupGitRun_HelperRunsTheExecutable(t *testing.T) {
-	gitHome(t)
-	dir := filepath.Join(t.TempDir(), "it's a dir")
-	require.NoError(t, os.MkdirAll(dir, 0o700))
-	exe := filepath.Join(dir, "copia-cli")
-	args := filepath.Join(dir, "args")
-	require.NoError(t, os.WriteFile(exe, []byte("#!/bin/sh\necho \"$@\" > '"+strings.ReplaceAll(args, "'", `'\''`)+"'\n"), 0o700))
-	ios, _, _, _ := iostreams.Test()
-	require.NoError(t, setupGitRun(&SetupGitOptions{IO: ios, Config: loadConfig(t, twoHosts), Host: "a.example.com", Executable: exe}))
+	tests := []struct {
+		name string
+		dir  string
+	}{
+		{name: "space and single quote", dir: "it's a dir"},
+		{name: "command substitution", dir: "$(touch pwned)"},
+		{name: "backtick", dir: "a`touch pwned`b"},
+		{name: "backslash", dir: `a\b\`},
+		{name: "double quote", dir: `a"b`},
+		{name: "newline", dir: "a\nb"},
+		{name: "control operators", dir: "a;b|c&d"},
+		{name: "globs", dir: "*?[]"},
+		{name: "comment", dir: "a #b"},
+		{name: "tilde", dir: "~"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gitHome(t)
+			base := t.TempDir()
+			dir := filepath.Join(base, tt.dir)
+			require.NoError(t, os.MkdirAll(dir, 0o700))
+			exe := filepath.Join(dir, "copia-cli")
+			args := filepath.Join(base, "args")
+			require.NoError(t, os.WriteFile(exe, []byte("#!/bin/sh\necho \"$@\" > '"+strings.ReplaceAll(args, "'", `'\''`)+"'\n"), 0o700))
+			ios, _, _, _ := iostreams.Test()
+			require.NoError(t, setupGitRun(&SetupGitOptions{IO: ios, Config: loadConfig(t, twoHosts), Host: "a.example.com", Executable: exe}))
 
-	fill := exec.Command("git", "credential", "fill")
-	fill.Stdin = strings.NewReader("protocol=https\nhost=a.example.com\n\n")
-	fill.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
-	_, _ = fill.Output()
+			fill := exec.Command("git", "credential", "fill")
+			fill.Dir = base
+			fill.Stdin = strings.NewReader("protocol=https\nhost=a.example.com\n\n")
+			fill.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+			_, _ = fill.Output()
 
-	got, err := os.ReadFile(args)
-	require.NoError(t, err, "git did not run the helper")
-	assert.Equal(t, "auth git-credential get\n", string(got))
+			got, err := os.ReadFile(args)
+			require.NoError(t, err, "git did not run the helper")
+			assert.Equal(t, "auth git-credential get\n", string(got))
+			assert.NoFileExists(t, filepath.Join(base, "pwned"))
+		})
+	}
 }
 
 func TestSetupGitRun_GitFails(t *testing.T) {
