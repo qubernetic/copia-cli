@@ -9,6 +9,7 @@ import (
 
 	"github.com/qubernetic/copia-cli/internal/config"
 	"github.com/qubernetic/copia-cli/pkg/cmdutil"
+	"github.com/qubernetic/copia-cli/pkg/cmdutil/browsertest"
 	"github.com/qubernetic/copia-cli/pkg/httpmock"
 	"github.com/qubernetic/copia-cli/pkg/iostreams"
 	"github.com/stretchr/testify/assert"
@@ -127,4 +128,72 @@ func TestCommentRun_InvalidHost(t *testing.T) {
 	opts.Host = "bad\x7fhost"
 	require.Error(t, CommentRun(opts))
 	assert.Empty(t, reg.Requests)
+}
+
+func TestNewCmdComment_Web(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		repo    string
+		tty     bool
+		wantURL string
+		wantErr string
+	}{
+		{name: "long flag", args: []string{"12", "--web"}, wantURL: "https://app.copia.io/my-org/my-repo/issues/12"},
+		{name: "short flag", args: []string{"12", "-w"}, wantURL: "https://app.copia.io/my-org/my-repo/issues/12"},
+		{name: "repo flag", args: []string{"7", "-w"}, repo: "other-org/other-repo", wantURL: "https://app.copia.io/other-org/other-repo/issues/7"},
+		{
+			name: "tty", args: []string{"12", "-w"}, tty: true,
+			wantURL: "https://app.copia.io/my-org/my-repo/issues/12",
+			wantErr: "Opening app.copia.io/my-org/my-repo/issues/12 in your browser.\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("COPIA_TOKEN", "")
+			reg := &httpmock.Registry{}
+			httpmock.ReplaceDefaultTransport(t, reg)
+
+			ios, _, stdout, stderr := iostreams.Test()
+			ios.SetStdoutTTY(tt.tty)
+			b := &browsertest.Browser{}
+			repo := tt.repo
+			if repo == "" {
+				repo = "my-org/my-repo"
+			}
+			f := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Repo: repo, Browser: b}
+
+			require.NoError(t, runCmd(t, f, tt.args...))
+			assert.Equal(t, []string{tt.wantURL}, b.URLs)
+			assert.Empty(t, stdout.String())
+			assert.Equal(t, tt.wantErr, stderr.String())
+			assert.Empty(t, reg.Requests)
+		})
+	}
+}
+
+func TestNewCmdComment_WebExclusive(t *testing.T) {
+	for _, other := range [][]string{{"--body", "hi"}, {"--editor"}} {
+		t.Run(other[0], func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			httpmock.ReplaceDefaultTransport(t, reg)
+			ios, _, _, _ := iostreams.Test()
+			b := &browsertest.Browser{}
+			f := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Repo: "my-org/my-repo", Browser: b}
+
+			err := runCmd(t, f, append([]string{"12", "--web"}, other...)...)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "none of the others can be")
+			assert.Empty(t, b.URLs)
+			assert.Empty(t, reg.Requests)
+		})
+	}
+}
+
+func TestNewCmdComment_WebInvalidNumber(t *testing.T) {
+	ios, _, _, _ := iostreams.Test()
+	b := &browsertest.Browser{}
+	f := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Repo: "my-org/my-repo", Browser: b}
+	require.EqualError(t, runCmd(t, f, "abc", "--web"), "invalid issue number: abc")
+	assert.Empty(t, b.URLs)
 }

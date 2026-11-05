@@ -80,7 +80,7 @@ so no token is needed.`,
 			opts.Number = num
 
 			if opts.Web {
-				return openIssue(f, num)
+				return shared.OpenIssue(f, num)
 			}
 
 			if opts.Comments {
@@ -115,20 +115,6 @@ so no token is needed.`,
 	cmdutil.AddJSONFlags(cmd, &opts.JSON, validJSONFields)
 
 	return cmd
-}
-
-// openIssue opens the web page of issue number in the browser. It makes no
-// API call, so no token is needed.
-func openIssue(f *cmdutil.Factory, number int64) error {
-	host, err := f.ResolveHost()
-	if err != nil {
-		return err
-	}
-	owner, repo, err := f.ResolveRepo()
-	if err != nil {
-		return err
-	}
-	return cmdutil.OpenInBrowser(f.IOStreams, f.Browser, cmdutil.RepoWebURL(host, owner, repo, fmt.Sprintf("issues/%d", number)))
 }
 
 func ViewRun(opts *ViewOptions) error {
