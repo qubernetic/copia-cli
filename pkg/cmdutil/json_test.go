@@ -370,3 +370,104 @@ func TestJSONFlags_PrintUsesCommandContext(t *testing.T) {
 	err := withinDeadline(t, func() error { return cmd.ExecuteContext(ctx) })
 	require.ErrorIs(t, err, context.Canceled)
 }
+
+func runJSONCmdWithFormat(t *testing.T, resolve func() (string, error), args ...string) (string, error) {
+	t.Helper()
+	var jf JSONFlags
+	var out bytes.Buffer
+	cmd := &cobra.Command{
+		Use: "test",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if jf.IsJSON() {
+				return jf.Print(&out, testItems[:1])
+			}
+			_, err := out.WriteString("table\n")
+			return err
+		},
+	}
+	AddJSONFlags(cmd, &jf, testFields)
+	cmd.SetArgs(args)
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	err := cmd.ExecuteContext(WithOutputFormat(context.Background(), resolve))
+	return out.String(), err
+}
+
+func TestAddJSONFlags_DefaultOutputFormat(t *testing.T) {
+	format := func(s string) func() (string, error) {
+		return func() (string, error) { return s, nil }
+	}
+	allFields := "[\n  {\n    \"labels\": [\n      {\n        \"login\": \"bug\"\n      }\n    ],\n" +
+		"    \"number\": 1,\n    \"state\": \"open\",\n    \"title\": \"First\",\n" +
+		"    \"user\": {\n      \"login\": \"alice\"\n    }\n  }\n]\n"
+	tests := []struct {
+		name    string
+		resolve func() (string, error)
+		args    []string
+		want    string
+		wantErr string
+	}{
+		{name: "table prints the table", resolve: format(OutputTable), want: "table\n"},
+		{name: "json prints all fields", resolve: format(OutputJSON), want: allFields},
+		{
+			name:    "explicit field list beats json",
+			resolve: format(OutputJSON),
+			args:    []string{"--json", "number"},
+			want:    "[\n  {\n    \"number\": 1\n  }\n]\n",
+		},
+		{name: "jq without json", resolve: format(OutputJSON), args: []string{"--jq", ".[].title"}, want: "First\n"},
+		{
+			name:    "template without json",
+			resolve: format(OutputJSON),
+			args:    []string{"--template", "{{range .}}{{.user.login}}{{end}}"},
+			want:    "alice",
+		},
+		{
+			name:    "jq without json in table format",
+			resolve: format(OutputTable),
+			args:    []string{"--jq", ".[].title"},
+			wantErr: "cannot use `--jq` without specifying `--json`",
+		},
+		{
+			name:    "resolver error",
+			resolve: func() (string, error) { return "", assert.AnError },
+			wantErr: assert.AnError.Error(),
+		},
+		{
+			name:    "explicit field list skips the resolver",
+			resolve: func() (string, error) { return "", assert.AnError },
+			args:    []string{"--json", "number"},
+			want:    "[\n  {\n    \"number\": 1\n  }\n]\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, err := runJSONCmdWithFormat(t, tt.resolve, tt.args...)
+			if tt.wantErr != "" {
+				assert.EqualError(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, out)
+		})
+	}
+}
+
+func TestJSONFlags_DropDefault(t *testing.T) {
+	tests := []struct {
+		name     string
+		jf       JSONFlags
+		wantJSON bool
+	}{
+		{name: "default fields", jf: JSONFlags{Fields: testFields, defaulted: true}},
+		{name: "explicit fields", jf: JSONFlags{Fields: testFields}, wantJSON: true},
+		{name: "default fields with jq", jf: JSONFlags{Fields: testFields, JQ: ".", defaulted: true}, wantJSON: true},
+		{name: "default fields with template", jf: JSONFlags{Fields: testFields, Template: "x", defaulted: true}, wantJSON: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.jf.DropDefault()
+			assert.Equal(t, tt.wantJSON, tt.jf.IsJSON())
+		})
+	}
+}

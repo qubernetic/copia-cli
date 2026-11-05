@@ -2,6 +2,7 @@
 package copiacmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 
@@ -60,10 +61,10 @@ func NewRootCmd(f *cmdutil.Factory) *cobra.Command {
 	return cmd
 }
 
-// Main is the entrypoint called from cmd/copia-cli/main.go.
-func Main() int {
-	ios := iostreams.System()
-
+// NewFactory returns the Factory of a real run on ios: the config file at
+// config.DefaultPath, the repository of the git remote and the configured
+// browser.
+func NewFactory(ios *iostreams.IOStreams) *cmdutil.Factory {
 	f := &cmdutil.Factory{
 		IOStreams: ios,
 		Config: func() (*config.Config, error) {
@@ -72,14 +73,26 @@ func Main() int {
 		BaseRepo: cmdutil.DetectBaseRepo(),
 	}
 	f.Browser = cmdutil.NewBrowser(f.ConfigValue)
+	return f
+}
 
+// Execute runs the root command of f with args. The command context carries
+// f.OutputFormat, the default output format of the commands that take
+// --json.
+func Execute(f *cmdutil.Factory, args []string) error {
+	rootCmd := NewRootCmd(f)
+	rootCmd.SetArgs(args)
+	return rootCmd.ExecuteContext(cmdutil.WithOutputFormat(context.Background(), f.OutputFormat))
+}
+
+// Main is the entrypoint called from cmd/copia-cli/main.go.
+func Main() int {
 	// Note: env vars (COPIA_TOKEN, COPIA_HOST) are resolved in
 	// Factory.ResolveAuth() with correct precedence:
 	// flag > env var > config file
+	f := NewFactory(iostreams.System())
 
-	rootCmd := NewRootCmd(f)
-
-	if err := rootCmd.Execute(); err != nil {
+	if err := Execute(f, os.Args[1:]); err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return 1
 	}

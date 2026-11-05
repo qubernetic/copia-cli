@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/qubernetic/copia-cli/internal/build"
+	"github.com/qubernetic/copia-cli/internal/config"
 	"github.com/qubernetic/copia-cli/pkg/cmdutil"
 	"github.com/qubernetic/copia-cli/pkg/iostreams"
 	"github.com/stretchr/testify/assert"
@@ -128,4 +129,25 @@ func TestMain_LoadsConfigFromDefaultPath(t *testing.T) {
 	assert.Equal(t, 1, code)
 	assert.Empty(t, stdout)
 	assert.Contains(t, stderr, "Error: no host configured")
+}
+
+func TestMain_ResolvesOutputFormat(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("COPIA_OUTPUT", "yaml")
+
+	code, stdout, stderr := runMain(t, "issue", "list", "-R", "owner/repo")
+	assert.Equal(t, 1, code)
+	assert.Empty(t, stdout)
+	assert.Equal(t, "Error: invalid COPIA_OUTPUT \"yaml\": valid values are table, json\n", stderr)
+}
+
+func TestExecute_DefaultOutputFormat(t *testing.T) {
+	t.Setenv("COPIA_OUTPUT", "json")
+	ios, _, stdout, _ := iostreams.Test()
+	f := NewFactory(ios)
+	f.Config = func() (*config.Config, error) { return &config.Config{}, nil }
+
+	err := Execute(f, []string{"issue", "list", "-R", "owner/repo", "--jq", "."})
+	assert.EqualError(t, err, "no host configured. Run 'copia auth login' first")
+	assert.Empty(t, stdout.String())
 }

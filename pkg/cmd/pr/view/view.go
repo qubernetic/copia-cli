@@ -73,6 +73,9 @@ func NewCmdView(f *cmdutil.Factory) *cobra.Command {
   $ copia-cli pr view 7 --json number,title,mergeable`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if opts.Comments {
+				opts.JSON.DropDefault()
+			}
 			if opts.Comments && opts.JSON.IsJSON() {
 				return fmt.Errorf("specify only one of --comments or --json")
 			}
