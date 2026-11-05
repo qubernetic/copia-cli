@@ -108,3 +108,51 @@ func ValidateLimit(limit int) error {
 	}
 	return nil
 }
+
+// ConfigValue returns the value of a setting key of the config file, or its
+// default when it is unset. An unknown key or a config file that cannot be
+// read gives the empty string, so the caller falls back to the next source.
+func (f *Factory) ConfigValue(key string) string {
+	if f.Config == nil {
+		return ""
+	}
+	cfg, err := f.Config()
+	if err != nil {
+		return ""
+	}
+	value, err := cfg.Get(key)
+	if err != nil {
+		return ""
+	}
+	return value
+}
+
+// OutputFormat returns the default output format of the commands that take
+// --json, resolving in order: COPIA_OUTPUT, the config key output, then
+// table. A value other than table or json is an error.
+func (f *Factory) OutputFormat() (string, error) {
+	value, source := os.Getenv("COPIA_OUTPUT"), "COPIA_OUTPUT"
+	if value == "" {
+		value, source = f.ConfigValue("output"), "config key output"
+	}
+	switch value {
+	case "":
+		return OutputTable, nil
+	case OutputTable, OutputJSON:
+		return value, nil
+	}
+	return "", fmt.Errorf("invalid %s %q: valid values are %s, %s", source, value, OutputTable, OutputJSON)
+}
+
+// Pager returns the pager command, resolving in order: COPIA_PAGER, the
+// config key pager, then PAGER. COPIA_PAGER set to the empty string turns
+// the pager off.
+func (f *Factory) Pager() string {
+	if value, ok := os.LookupEnv("COPIA_PAGER"); ok {
+		return value
+	}
+	if value := f.ConfigValue("pager"); value != "" {
+		return value
+	}
+	return os.Getenv("PAGER")
+}

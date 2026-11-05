@@ -14,6 +14,21 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// The output formats of the commands that take --json.
+const (
+	OutputTable = "table"
+	OutputJSON  = "json"
+)
+
+type outputFormatKey struct{}
+
+// WithOutputFormat returns a copy of ctx that carries the resolver of the
+// default output format, usually Factory.OutputFormat. AddJSONFlags calls
+// it only when a command runs without --json.
+func WithOutputFormat(ctx context.Context, resolve func() (string, error)) context.Context {
+	return context.WithValue(ctx, outputFormatKey{}, resolve)
+}
+
 // JSONFlags holds --json, --jq and --template flag state.
 type JSONFlags struct {
 	Fields   []string
@@ -23,12 +38,17 @@ type JSONFlags struct {
 	// ctx is the command's context, saved before the command runs, so a
 	// --jq filter stops when the command is canceled.
 	ctx context.Context
+	// defaulted is true when Fields come from the json output format, not
+	// from --json.
+	defaulted bool
 }
 
 // AddJSONFlags adds --json, --jq and --template to a command. --json
 // accepts only validFields, which are the JSON keys of the command's
 // output; --jq and --template require --json, exclude each other and are
-// checked before the command runs.
+// checked before the command runs. Without --json, the default output
+// format of the command's context (WithOutputFormat) json selects all
+// validFields, so --jq and --template work too.
 func AddJSONFlags(cmd *cobra.Command, jf *JSONFlags, validFields []string) {
 	cmd.Flags().Var(&jsonFieldsValue{fields: &jf.Fields, valid: validFields}, "json",
 		fmt.Sprintf("Output JSON with the specified `fields`: %s", strings.Join(validFields, ", ")))
@@ -39,6 +59,9 @@ func AddJSONFlags(cmd *cobra.Command, jf *JSONFlags, validFields []string) {
 	preRunE := cmd.PreRunE
 	cmd.PreRunE = func(c *cobra.Command, args []string) error {
 		jf.ctx = c.Context()
+		if err := jf.applyDefault(validFields); err != nil {
+			return err
+		}
 		if jf.JQ != "" && jf.Template != "" {
 			return errors.New("cannot use `--jq` and `--template` together")
 		}
@@ -65,9 +88,41 @@ func AddJSONFlags(cmd *cobra.Command, jf *JSONFlags, validFields []string) {
 	}
 }
 
-// IsJSON returns true if --json was specified.
+// applyDefault selects all validFields when --json is not given and the
+// default output format is json.
+func (jf *JSONFlags) applyDefault(validFields []string) error {
+	if jf.Fields != nil || jf.ctx == nil {
+		return nil
+	}
+	resolve, ok := jf.ctx.Value(outputFormatKey{}).(func() (string, error))
+	if !ok {
+		return nil
+	}
+	format, err := resolve()
+	if err != nil {
+		return err
+	}
+	if format == OutputJSON {
+		jf.Fields = slices.Clone(validFields)
+		jf.defaulted = true
+	}
+	return nil
+}
+
+// IsJSON returns true if --json was specified or the default output format
+// is json.
 func (jf *JSONFlags) IsJSON() bool {
 	return jf.Fields != nil
+}
+
+// DropDefault goes back to the table output when the JSON output comes
+// only from the default output format, for a flag that has no JSON form
+// (view --comments). With --jq or --template the JSON output stays.
+func (jf *JSONFlags) DropDefault() {
+	if jf.defaulted && jf.JQ == "" && jf.Template == "" {
+		jf.Fields = nil
+		jf.defaulted = false
+	}
 }
 
 // Print writes v as JSON with only the --json fields: an array of objects
@@ -79,6 +134,28 @@ func (jf *JSONFlags) Print(w io.Writer, v any) error {
 	if err != nil {
 		return err
 	}
+	return jf.write(w, data)
+}
+
+// PrintSections writes one JSON object whose keys are the section names and
+// whose values are the sections, each reduced to the --json fields as Print
+// does, like the status commands of gh. --jq and --template apply to the
+// whole object.
+func (jf *JSONFlags) PrintSections(w io.Writer, sections map[string]any) error {
+	data := make(map[string]any, len(sections))
+	for name, v := range sections {
+		section, err := selectFields(v, jf.Fields)
+		if err != nil {
+			return err
+		}
+		data[name] = section
+	}
+	return jf.write(w, data)
+}
+
+// write prints data, already reduced to the --json fields, through --jq,
+// --template or as indented JSON.
+func (jf *JSONFlags) write(w io.Writer, data any) error {
 	if jf.JQ != "" {
 		ctx := jf.ctx
 		if ctx == nil {

@@ -61,6 +61,9 @@ $ copia-cli repo list --visibility private
 # Create an issue
 $ copia-cli issue create --title "Fix sensor mapping" --label bug --assignee @me --milestone v1.0
 
+# Show the open issues assigned to you, mentioning you and opened by you
+$ copia-cli issue status
+
 # List the issues assigned to you in that milestone
 $ copia-cli issue list --assignee @me --milestone v1.0 --search "sensor"
 
@@ -88,12 +91,43 @@ $ copia-cli pr create --title "docs: add manual" --base develop --body-file note
 $ copia-cli pr create --title "feat: add safety interlock" --base develop \
     --assignee @me --label plc --milestone v1.0 --reviewer jane --reviewer my-org/controls
 
+# Show the PR of the current branch, your open PRs and the ones waiting for your review
+$ copia-cli pr status
+
 # Merge it
 $ copia-cli pr merge 7 --merge --delete-branch --body "Tested on the line 3 PLC"
 
 # Open the repository, or issue or pull request 7, in the browser (--no-browser prints the URL)
 $ copia-cli browse
 $ copia-cli browse 7
+
+# Open a file at a line on a branch, its blame view, or the repository settings
+$ copia-cli browse main.st:312 --branch bug-fix
+$ copia-cli browse main.st:312 --blame
+$ copia-cli browse --settings
+
+# Your assigned issues and PRs, review requests, mentions and notifications across repositories
+$ copia-cli status --org my-org --exclude my-org/archive
+
+# Show and change the settings (output, browser, pager, editor)
+$ copia-cli config list
+$ copia-cli config set browser "firefox --new-tab"
+$ copia-cli config get browser
+
+# Page long output through less; COPIA_PAGER= turns it off for one call
+$ copia-cli config set pager "less -R"
+
+# Print JSON with every field by default; COPIA_OUTPUT=table overrides it for one call
+$ copia-cli config set output json
+$ copia-cli issue list --jq '.[].title'
+
+# Shortcuts: copia-cli bugs urgent runs issue list --label urgent
+$ copia-cli alias set bugs 'issue list --label $1'
+$ copia-cli alias list
+
+# In a fork with an upstream remote, work on the upstream repository by default
+$ copia-cli repo set-default my-org/my-repo
+$ copia-cli repo set-default --view
 
 # Call any API endpoint: fetch every page and keep only the titles
 $ copia-cli api --paginate /repos/my-org/my-repo/issues --jq '.[].title'
@@ -108,7 +142,7 @@ Shell completion is available for Bash, Zsh, Fish, and PowerShell. See `copia-cl
 - **Phase 1 (MVP):** auth, repo list/view/clone, issue CRUD, pr CRUD, label list/create — **Done**
 - **Phase 2 (Workflow):** release CRUD, repo create/delete/fork, pr review/diff/checkout, issue edit, Homebrew tap — **Done**
 - **Phase 3 (Power Features):** `api` escape hatch, search, orgs, notifications, `-R`/`--repo` flag, completion, Jekyll manual, AGPL license — **Done**
-- **Phase 4 (Nice to Have):** ~~winget~~, ~~COPR~~, ~~AUR~~, ~~Snap~~, OS keyring, aliases, ~~browse~~, status dashboard, ssh-key, pr checks, scheduled integration tests
+- **Phase 4 (Nice to Have):** ~~winget~~, ~~COPR~~, ~~AUR~~, ~~Snap~~, OS keyring, ~~aliases~~, ~~browse~~, ~~status dashboard~~, ssh-key, pr checks, scheduled integration tests
 
 ## License
 

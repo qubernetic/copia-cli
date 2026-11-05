@@ -33,9 +33,13 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 | `gh repo archive` | Partial | `copia-cli repo archive` | [ ] |
 | `gh repo rename` | Full | `copia-cli repo rename` | [ ] |
 | `gh repo edit` | Full | `copia-cli repo edit` | [ ] |
-| `gh repo set-default` | n/a | `copia-cli repo set-default` | [ ] |
+| `gh repo set-default` | n/a | `copia-cli repo set-default` | [x] |
 | `gh repo sync` | Partial | `copia-cli repo sync` | [ ] |
 | `gh repo deploy-key` | Full | `copia-cli repo deploy-key` | [ ] |
+
+`gh repo view --web/-w`: client side, no API call and no token, opened as for the issue commands: `/{owner}/{repo}` of the argument, `-R` or the git remote. gh's `--branch` does not exist in `repo view`.
+
+`gh repo set-default`: client side, no API call and no token. The default is the git config key `remote.<name>.copia-resolved` (gh uses `gh-resolved`) with the value `base`, and the commands that work on the current repository read the marked remote first, then `origin`; `-R` wins over both. The argument is `owner/repo` (any case) or a remote name, `--view/-v` prints the default and `--unset/-u` removes it. Differences from gh: there is no prompt, so without an argument the only remote is used and several remotes fail with their list; gh also offers the parent of a fork found through the API, which copia-cli does not, so the repository must be one of the git remotes; the argument fails with `--view` or `--unset`, and the messages print whether or not standard output is a terminal.
 
 `gh repo sync`: `POST /repos/{owner}/{repo}/merge-upstream` (`branch`, `ff_only`) brings a branch of a fork up to date with its upstream on the server. There is no `--force` (hard reset) and no sync of a local clone, which `gh` does with git.
 
@@ -57,7 +61,10 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 | `gh issue unpin` | Partial | `copia-cli issue unpin` | [x] |
 | `gh issue lock` | Partial | `copia-cli issue lock` | [x] |
 | `gh issue unlock` | Partial | `copia-cli issue unlock` | [x] |
+| `gh issue status` | Full | `copia-cli issue status` | [x] |
 | `gh issue transfer` | None | n/a | — |
+
+`--web/-w` on `gh issue view`, `gh issue comment`, `gh issue list` and `gh issue create`: client side, no API call and no token. The URL is built from the Gitea 1.26 web router and opened with the `browser` setting; on a terminal `Opening <url> in your browser.` goes to standard error, as in gh. `view` and `comment` open `/{owner}/{repo}/issues/{index}`. `list` opens `/{owner}/{repo}/issues` with the query parameters the web list reads: `state`, `q` (`--search`), `poster` (`--author <login>`) and `type=assigned` or `type=created_by` (`--assignee @me`, `--author @me`; the list has one `type`, so `--assignee @me` wins). The web list takes labels, milestones and other assignees only by ID and has no mention filter for another user, so `--label`, `--milestone`, `--mention` and `--assignee <login>` print a warning and are not applied. `create` opens `/{owner}/{repo}/issues/new` with `title` and `body` as query parameters, which the new-issue handler reads; it takes no labels, assignees or milestone by name, so those flags print a warning, and `--web` with `--editor` fails.
 
 `gh issue close`: Gitea records no close reason (`completed` / `not planned`), so there is no `--reason`. Write the reason with `--comment`.
 
@@ -66,6 +73,8 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 `gh issue pin`, `gh issue unpin`: `POST` and `DELETE /repos/{owner}/{repo}/issues/{index}/pin`. Both read the issue first and leave it alone when its `pin_order` already shows the wanted state, as `gh` does; a server that sends no `pin_order` gets the request anyway. Gitea needs write access to the repository's issues for both. app.copia.io answers both `POST` and `DELETE` on the route with HTTP 404 for an issue it serves, and its issues carry no `pin_order` (found by the `integration` job of #369), so on Copia both commands report that the host does not support pinning and the issue stays as it is.
 
 `gh issue lock`, `gh issue unlock`: `PUT /repos/{owner}/{repo}/issues/{index}/lock` with `lock_reason`, `DELETE` on the same path. `--reason/-r` takes gh's values `off_topic`, `resolved`, `spam` and `too_heated`, sent as Gitea's default lock reasons `Off-topic`, `Resolved`, `Spam` and `Too heated`; Gitea's API does not check the reason. Both read the issue's `is_locked` first. Gitea ignores a lock request for a locked issue, so `lock` fails on one, as `gh` does without a prompt; `unlock` leaves an unlocked issue alone. Gitea needs write access to the repository's issues for both. app.copia.io answers both `PUT` and `DELETE` on the route with HTTP 404 for an issue it serves (found by the `integration` job of #370), so on Copia `lock` reports that the host does not support locking and the issue stays unlocked; `unlock` finds nothing locked and sends nothing.
+
+`gh issue status`: three listings of `GET /repos/{owner}/{repo}/issues?state=open&type=issues` for the user of `GET /user`, with `assigned_by`, `mentioned_by` and `created_by`. app.copia.io ignores `created_by` (found by the `integration` job of #376), so the author of each issue is checked on the client, and the assignees the same way; every page is read, since the share of kept issues is not known. The Gitea list has no sort parameter, so each section is sorted by `updated_at` on the client and, as in gh, shows the ten most recently updated issues and `And N more`. `--json` prints one object with gh's keys `assigned`, `mentioned` and `createdBy`; the fields are the Gitea names (`number`, `title`, `state`, `labels`, `updated_at`, `html_url`, `user`, `assignees`).
 
 `gh issue transfer`: Gitea 1.26 has no endpoint that moves an issue to another repository.
 
@@ -87,8 +96,11 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 | `gh pr edit` | Full | `copia-cli pr edit` | [x] |
 | `gh pr ready` | Full | `copia-cli pr ready` | [x] |
 | `gh pr update-branch` | Full | `copia-cli pr update-branch` | [x] |
+| `gh pr status` | Partial | `copia-cli pr status` | [x] |
 
-`gh pr comment`: `POST /repos/{owner}/{repo}/issues/{index}/comments`, since Gitea keeps pull request comments on the issue of the same index. `--body/-b` or `--body-file/-F` (`-` reads stdin) is required; there is no editor and no `--web`. The argument is a number, `#<n>` or a pull request URL.
+`--web/-w` on `gh pr view`, `gh pr comment`, `gh pr diff`, `gh pr list` and `gh pr create`: client side, no API call and no token, opened as for the issue commands. `view` and `comment` open `/{owner}/{repo}/pulls/{index}` and `diff` opens `/{owner}/{repo}/pulls/{index}/files` (gh opens the files tab too). `list` opens `/{owner}/{repo}/pulls` with `state`; the Gitea 1.26 web list knows `open`, `closed` and `all` only, so `--state merged` opens `state=closed` with a warning. `create` opens `/{owner}/{repo}/compare/{base}...{head}` (each branch name escaped per path segment, the head defaults to the current branch, `--fill` runs first) with `expand=1`, `title` and `body`, which the compare handler reads to open and fill the new pull request form. That form takes no labels, assignees or milestone by name, so those flags print a warning; `--draft` and `--reviewer` fail with `--web` as in gh, and `--web` with `--editor` fails.
+
+`gh pr comment`: `POST /repos/{owner}/{repo}/issues/{index}/comments`, since Gitea keeps pull request comments on the issue of the same index. `--body/-b`, `--body-file/-F` (`-` reads stdin), `--editor/-e` or `--web/-w` is required. The argument is a number, `#<n>` or a pull request URL.
 
 `gh pr edit`: `PATCH /repos/{owner}/{repo}/pulls/{index}` for `--title/-t`, `--body/-b`, `--body-file/-F`, `--base/-B`, `--milestone/-m` and the label and assignee flags; that PATCH replaces the whole label and assignee lists, so the pull request is read first and the changed lists are sent. Gitea's pull request PATCH ignores milestone 0, so `--remove-milestone` sends `PATCH /repos/{owner}/{repo}/issues/{index}` with `milestone: 0`. `--add-reviewer` and `--remove-reviewer` use `POST` and `DELETE /repos/{owner}/{repo}/pulls/{index}/requested_reviewers` (`org/team` goes into `team_reviewers`). There is no editor, no `--add-project` and no `--remove-project`. The argument is a number, `#<n>` or a pull request URL.
 
@@ -97,6 +109,8 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 `gh pr reopen`: `PATCH /repos/{owner}/{repo}/pulls/{index}` with `state: open`. The pull request is read first: an open one is left alone and a merged one fails, as in `gh`. `--comment/-c` posts to `/repos/{owner}/{repo}/issues/{index}/comments` before the reopen. The argument is a number, `#<n>` or a pull request URL.
 
 `gh pr update-branch`: `POST /repos/{owner}/{repo}/pulls/{index}/update` with `style=merge`, or `style=rebase` for `--rebase`. The pull request is read first: a closed or merged one fails, since Gitea answers it with HTTP 422 without a message. Gitea answers an up-to-date branch with HTTP 500, so the command leaves the branch alone when the pull request's `merge_base` equals `base.sha` (the tip of the base branch), as `gh` does with its compare; without a `merge_base` the update is sent and the server decides. Gitea recomputes `merge_base` in the background after a push, so right after an update it can lag for a moment and the next update gets the HTTP 500. `GET /repos/{owner}/{repo}/compare/{basehead}`, which `gh` uses for this check, answers HTTP 404 on app.copia.io (found by the `integration` job of #375). HTTP 409 (merge or rebase conflict) and 422 show the server message. The argument is a number, `#<n>` or a pull request URL; `gh`'s default to the pull request of the current branch is not implemented.
+
+`gh pr status`: one listing of `GET /repos/{owner}/{repo}/pulls?state=open&sort=recentupdate` (every page, also sorted by `updated_at` on the client) gives the pull request of the current branch (matched on `head.ref`) and the ones whose author is the user of `GET /user`. When the branch has no open pull request, the first page of `state=closed` (the 50 most recently updated) is searched, as gh also shows a closed or merged one; the list has no head filter, so older closed pull requests are not searched, which would read every page; a closed one of the default branch (`base.repo.default_branch`) is left out, as in gh. The review requests come from `GET /repos/issues/search?type=pulls&state=open&review_requested=true&owner={owner}`, kept when `repository.full_name` is this repository and shown from the open listing. Each section shows ten pull requests and `And N more`. `-R` leaves out the current branch, as in gh. `--conflict-status/-c` prints `✓ No merge conflicts` or `× Merge conflicts` from Gitea's `mergeable`, which is also false while Gitea still checks. Partial: no check or review summary line (`pr checks` is not implemented and Gitea has no review decision), and the branch is matched by name only, not through gh's push remote and `merge` ref. `--json` prints one object with gh's keys `currentBranch` (a pull request or `null`), `createdBy` and `needsReview`; the fields are the Gitea names (`number`, `title`, `state`, `html_url`, `user`, `head`, `base`, `updated_at`, `mergeable`, `draft`), and a merged pull request has the state `merged`.
 
 ## release
 
@@ -119,19 +133,44 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 | `gh label edit` | Full | `copia-cli label edit` | [ ] |
 | `gh label delete` | Full | `copia-cli label delete` | [ ] |
 
+`gh label list --web/-w`: client side, no API call and no token; opens `/{owner}/{repo}/labels`.
+
+## config
+
+| gh command | Parity | Copia CLI | Status |
+|-----------|--------|-----------|--------|
+| `gh config get` | Full | `copia-cli config get` | [x] |
+| `gh config set` | Full | `copia-cli config set` | [x] |
+| `gh config list` | Full | `copia-cli config list` | [x] |
+| `gh config clear-cache` | None | n/a, copia-cli keeps no API cache | — |
+
+Client side, no API call. The keys are `output` (`table` or `json`, default `table`), `browser`, `pager` and `editor`, stored as top-level keys of `config.yml` beside `hosts`; gh's other keys (`git_protocol`, `prompt`, `http_unix_socket` and the rest) have no copia-cli behaviour and are not accepted. gh's `--host` flag of the three commands is left out, since no setting is per host. `browse` reads `browser` between `COPIA_BROWSER` and `BROWSER`. `output` has no gh counterpart (gh's `--json` always names its fields): `COPIA_OUTPUT`, then `output`, then `table` choose it, and with `json` every command that takes `--json` prints all its fields without `--json`, where `--jq` and `--template` work too; an explicit `--json` field list wins. `pager` works as in gh: `COPIA_PAGER` (gh: `GH_PAGER`), then `pager`, then `PAGER` choose it, and the list and view commands and `pr diff` use it when standard output is a terminal; the command is split at whitespace without quoting, where gh splits it like a shell. `editor` is used by `--editor/-e` of `issue create`, `pr create`, `issue comment` and `pr comment`: `COPIA_EDITOR` (gh: `GH_EDITOR`), then `editor`, then `VISUAL`, then `EDITOR` choose it, and the command is split like a shell and run without one, as in gh. Unlike gh there is no default editor (gh falls back to `nano` or `notepad`): with none set `--editor` fails, and the editor opens only on `--editor`, since copia-cli has no interactive prompts.
+
+## alias
+
+| gh command | Parity | Copia CLI | Status |
+|-----------|--------|-----------|--------|
+| `gh alias set` | Full | `copia-cli alias set` | [x] |
+| `gh alias list` | Full | `copia-cli alias list` | [x] |
+| `gh alias delete` | Full | `copia-cli alias delete` | [x] |
+| `gh alias import` | Full | `copia-cli alias import` | [x] |
+
+Client side, no API call. Aliases are stored under the top-level key `aliases` of `config.yml` and expanded before the command runs when the alias is the first argument, as in gh: `$1`, `$2` and so on take the arguments after the alias, otherwise they are appended, and an expansion that starts with `!` (or was set with `--shell/-s`) runs through `sh -c` with the arguments as `$1`, `$2`. Differences from gh: an argument fills a placeholder after the expansion is split into words, so it is never split again (gh replaces the placeholders in the text and splits afterwards); an alias name may not be empty, start with `-` or contain blanks, and the expansion of an alias that is no shell alias must start with a copia-cli command (gh also accepts an extension or another alias, which copia-cli does not have or expand); a built-in command also wins over an alias of the same name that was written into the config file by hand; `alias list` and `alias set`, `delete` and `import` print their messages whether or not the output is a terminal, and `alias import` exits with an error when it refused an alias, after it imported the others (gh exits 0).
+
 ## Other implemented commands
 
 | Command | Status |
 |---------|--------|
 | `copia-cli api` | [x] |
-| `copia-cli search repos` | [x] |
-| `copia-cli search issues` | [x] |
-| `copia-cli search prs` (`gh search prs`: query, `--state`, `--label`, `--author`, `--assignee`, `--owner`, `-R`, `--limit`; `GET /repos/issues/search?type=pulls`, `--assignee` only for the authenticated user, `-R` filters on the client side, labels match any name; app.copia.io ignores `created_by`, found by the `integration` job of #376, so `--author` is also checked on each result) | [x] |
+| `copia-cli search repos` (`--web/-w` opens `/explore/repos` with `q`, and `--sort`/`--order` as the explore sort names of Gitea 1.26, for example `moststars`) | [x] |
+| `copia-cli search issues` (`--web/-w` opens `/{owner}/{repo}/issues` with `q` and `state`, default `all`; `--label` is not applied there) | [x] |
+| `copia-cli search prs` (`gh search prs`: query, `--state`, `--label`, `--author`, `--assignee`, `--owner`, `-R`, `--limit`; `GET /repos/issues/search?type=pulls`, `--assignee` only for the authenticated user, `-R` filters on the client side, labels match any name; app.copia.io ignores `created_by`, found by the `integration` job of #376, so `--author` is also checked on each result. `--web/-w`: Copia has no web search across repositories, so it opens the pull request dashboard `/pulls`, or `/org/{owner}/pulls` with `--owner` (organization members only), with `q`, `state` (the dashboard knows open and closed, open by default), `poster` and `assignee` as logins and `type=created_by` or `type=assigned` for `@me`; with `-R` it opens `/{owner}/{repo}/pulls`, which takes the assignee only by ID. `--label` is not applied in the browser) | [x] |
 | `copia-cli org list` | [x] |
 | `copia-cli org view` | [x] |
 | `copia-cli notification list` | [x] |
 | `copia-cli notification read` | [x] |
-| `copia-cli browse` (`gh browse`: repository, issue or PR number, `--no-browser`; no file paths, `--branch`, `--commit`, `--settings`, `--wiki`) | [x] |
+| `copia-cli browse` (`gh browse`: repository, issue or PR number, commit SHA (`/commit/{sha}`), `<path>`, `<path>:<line>` and `<path>:<start>-<end>` (`/src/branch/{branch}/{path}`, with a line `?display=source#L{n}` or `#L{n}-L{m}`, Gitea's counterpart of gh's `?plain=1`), `--branch/-b`, `--commit/-c` (`/src/commit/{sha}/{path}`; without a SHA the last commit of the current branch, of the default branch with `-R`, from `GET /repos/{owner}/{repo}/branches/{branch}`), `--blame` (`/blame/branch/...` or `/blame/commit/...`), `--settings/-s`, `--wiki/-w`, `--releases/-r`, `--actions/-a`, `--projects/-p`, `--no-browser/-n`; a path without `--branch` or `--commit` reads the default branch with `GET /repos/{owner}/{repo}`, everything else makes no API call. Conflicting flags fail with gh's messages before anything opens. Unlike gh, `--no-browser` does not check that the repository exists) | [x] |
+| `copia-cli status` (`gh status`, Partial: the sections Assigned Issues, Assigned Pull Requests, Review Requests and Mentions come from `GET /repos/issues/search?state=open` with `assigned=true` (split on `pull_request`), `review_requested=true&type=pulls` and `mentioned=true`, the first 25 results of each sorted by `updated_at` and five shown, as gh reads 25 search results and shows five. gh takes its mentions from the notifications with the reason `mention`; Gitea's notifications carry no reason, so the search filter is used. Repository Activity is the ten newest of `GET /notifications?all=true` with the subject type (`issue`, `PR`, `commit`, `repository`) instead of gh's `new issue`, `new PR` and `comment on` from `/users/{user}/received_events`, which Gitea 1.26 does not have. `--org/-o` is sent as the search's `owner` and checked on every result and notification, `--exclude/-e` is applied on the client, both regardless of case; an `--exclude` value that is not `owner/repo` fails. The layout is gh's: two half-width columns separated by `│` at the terminal width (80 when not a terminal), without colour) | [x] |
 | `copia-cli completion` | [x] |
 
 ## Other gh commands (not yet implemented)
@@ -140,7 +179,6 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 |-----------------|--------|-------|
 | `gh ssh-key` | Full | `GET/POST /user/keys` |
 | `gh gpg-key` | Full | `GET/POST /user/gpg_keys` |
-| `gh status` | Partial | Compose from multiple endpoints |
 | `gh gist` | None | No Gitea equivalent |
 | `gh workflow` | Full | `/repos/{owner}/{repo}/actions/workflows`: list, view, `run` (`/{workflow_id}/dispatches`), `enable`, `disable`. Whether Copia enables Actions is unknown |
 | `gh run` | Partial | `/repos/{owner}/{repo}/actions/runs`: list, view, delete, `rerun` (`/rerun`, `/rerun-failed-jobs`, `/jobs/{job_id}/rerun`), job logs (`/actions/jobs/{job_id}/logs`), `download` (`/actions/artifacts`), `watch` by polling. No `cancel`: Gitea 1.26 has no endpoint for it. Whether Copia enables Actions is unknown |
@@ -160,11 +198,10 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 
 | Status | Count |
 |--------|-------|
-| Implemented | 50 |
+| Implemented | 61 |
 | Not yet implemented (Full parity) | 12 |
-| Not yet implemented (Partial) | 7 |
-| Not yet implemented (client side, `repo set-default`) | 1 |
-| No equivalent | 12 |
-| **Total implementable** | **70** |
+| Not yet implemented (Partial) | 6 |
+| No equivalent | 13 |
+| **Total implementable** | **79** |
 
 Counted from the rows above: every `[x]` row, and every other row by its Parity value. The Parity values follow the Gitea 1.26 API (`release/v1.26` swagger); `TestAPI_Version` in `test/integration/api_test.go` logs what Copia's `GET /version` reports in the PR `integration` job. On 2026-11-04 that was `0.59.0`, Copia's own version number, not a Gitea release, so the API does not show which Gitea version Copia is built on; a command's integration test shows whether Copia serves its endpoint.

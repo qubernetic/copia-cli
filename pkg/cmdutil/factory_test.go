@@ -2,11 +2,13 @@ package cmdutil
 
 import (
 	"errors"
+	"os"
 	"testing"
 
 	"github.com/qubernetic/copia-cli/internal/config"
 	"github.com/qubernetic/copia-cli/pkg/iostreams"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestFactory_ResolveAuth_FlagOverride(t *testing.T) {
@@ -253,3 +255,106 @@ func TestFactory_ResolveHost_ConfigError(t *testing.T) {
 	_, err := f.ResolveHost()
 	assert.EqualError(t, err, "broken config")
 }
+
+func TestFactory_ConfigValue(t *testing.T) {
+	tests := []struct {
+		name   string
+		config func() (*config.Config, error)
+		key    string
+		want   string
+	}{
+		{
+			name:   "set key",
+			config: func() (*config.Config, error) { return &config.Config{Browser: "firefox"}, nil },
+			key:    "browser",
+			want:   "firefox",
+		},
+		{
+			name:   "default of an unset key",
+			config: func() (*config.Config, error) { return &config.Config{}, nil },
+			key:    "output",
+			want:   "table",
+		},
+		{
+			name:   "unknown key",
+			config: func() (*config.Config, error) { return &config.Config{}, nil },
+			key:    "hosts",
+		},
+		{
+			name:   "unreadable config",
+			config: func() (*config.Config, error) { return nil, errors.New("parsing config: bad yaml") },
+			key:    "browser",
+		},
+		{
+			name: "no config loader",
+			key:  "browser",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := &Factory{Config: tt.config}
+			assert.Equal(t, tt.want, f.ConfigValue(tt.key))
+		})
+	}
+}
+
+func TestFactory_OutputFormat(t *testing.T) {
+	tests := []struct {
+		name    string
+		env     string
+		config  string
+		want    string
+		wantErr string
+	}{
+		{name: "default", want: "table"},
+		{name: "config", config: "json", want: "json"},
+		{name: "env beats config", env: "table", config: "json", want: "table"},
+		{name: "env without config", env: "json", want: "json"},
+		{name: "invalid env", env: "yaml", wantErr: `invalid COPIA_OUTPUT "yaml": valid values are table, json`},
+		{name: "invalid config", config: "yaml", wantErr: `invalid config key output "yaml": valid values are table, json`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("COPIA_OUTPUT", tt.env)
+			f := &Factory{Config: func() (*config.Config, error) { return &config.Config{Output: tt.config}, nil }}
+			got, err := f.OutputFormat()
+			if tt.wantErr != "" {
+				assert.EqualError(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestFactory_Pager(t *testing.T) {
+	tests := []struct {
+		name   string
+		env    *string
+		config string
+		pager  string
+		want   string
+	}{
+		{name: "none"},
+		{name: "PAGER", pager: "more", want: "more"},
+		{name: "config beats PAGER", config: "less -R", pager: "more", want: "less -R"},
+		{name: "env beats config", env: ptr("most"), config: "less -R", pager: "more", want: "most"},
+		{name: "empty env turns the pager off", env: ptr(""), config: "less -R", pager: "more", want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("COPIA_PAGER", "")
+			if tt.env == nil {
+				require.NoError(t, os.Unsetenv("COPIA_PAGER"))
+			} else {
+				t.Setenv("COPIA_PAGER", *tt.env)
+			}
+			t.Setenv("PAGER", tt.pager)
+			f := &Factory{Config: func() (*config.Config, error) { return &config.Config{Pager: tt.config}, nil }}
+			assert.Equal(t, tt.want, f.Pager())
+		})
+	}
+}
+
+func ptr(s string) *string { return &s }

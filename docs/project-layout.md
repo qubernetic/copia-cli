@@ -26,9 +26,9 @@ graph TB
     end
     subgraph Commands
         auth[auth: login/logout/status]
-        repo[repo: list/view/clone/create/delete/fork]
-        issue[issue: list/create/view/close/comment/edit]
-        pr[pr: list/create/view/merge/close/review/diff/checkout]
+        repo[repo: list/view/clone/create/delete/fork/set-default]
+        issue[issue: list/create/view/close/comment/edit/status]
+        pr[pr: list/create/status/view/merge/close/review/diff/checkout]
         label[label: list/create]
         release[release: list/create/delete/upload]
         apicmd[api: raw REST request]
@@ -36,6 +36,9 @@ graph TB
         org[org: list/view]
         notification[notification: list/read]
         browse[browse: open repo/issue/PR URL]
+        status[status: dashboard across repositories]
+        configcmd[config: get/set/list]
+        aliascmd[alias: set/list/delete/import]
         completion[completion: bash/zsh/fish/powershell]
     end
     subgraph API
@@ -52,9 +55,11 @@ graph TB
     copiacmd --> build
     copiacmd --> config
     factory --> iostreams
-    copiacmd --> auth & repo & issue & pr & label & release & apicmd & search & org & notification & browse & completion
-    auth & repo & issue & pr & label & release & apicmd & search & org & notification --> factory
+    copiacmd --> auth & repo & issue & pr & label & release & apicmd & search & org & notification & browse & status & configcmd & aliascmd & completion
+    auth & repo & issue & pr & label & release & apicmd & search & org & notification & status --> factory
     browse --> factory
+    configcmd --> factory
+    aliascmd --> factory
     completion --> iostreams
     auth & repo & issue & pr & label & release & apicmd & search & org & notification -.-> client
     client --> gitea
@@ -76,23 +81,32 @@ copia-cli/
 │   ├── api/client.go              # Gitea SDK wrapper
 │   ├── cmd/
 │   │   ├── auth/                  # login, logout, status
-│   │   ├── repo/                  # list, view, clone, create, delete, fork
-│   │   ├── issue/                 # list, create, view, close, comment, edit
-│   │   ├── pr/                    # list, create, view, merge, close, review, diff, checkout
+│   │   ├── repo/                  # list, view, clone, create, delete, fork, setdefault
+│   │   ├── issue/                 # list, create, view, close, comment, edit, status
+│   │   ├── pr/                    # list, create, status, view, merge, close, review, diff, checkout
 │   │   ├── label/                 # list, create
 │   │   ├── release/               # list, create, delete, upload
 │   │   ├── api/                   # single command: api <path>
 │   │   ├── search/                # issues, repos
 │   │   ├── org/                   # list, view
 │   │   ├── notification/          # list, read
-│   │   ├── browse/                # single command: browse [<number>]
+│   │   ├── browse/                # single command: browse [<number> | <path> | <commit-sha>]
+│   │   ├── status/                # single command: status (gh's dashboard)
+│   │   ├── config/                # get, set, list
+│   │   ├── alias/                 # set, list, delete, import; expand/ (alias expansion), shared/ (name and expansion checks)
 │   │   └── completion/            # single command: completion <shell> (bash, zsh, fish, powershell)
 │   ├── cmdutil/
 │   │   ├── factory.go             # Factory dependency injection
-│   │   ├── browser.go             # Browser opener (COPIA_BROWSER, BROWSER, OS default)
+│   │   ├── browser.go             # Browser opener (COPIA_BROWSER, config browser, BROWSER, OS default)
+│   │   ├── browsertest/           # Fake browser for --web tests
+│   │   ├── web.go                 # --web: RepoWebURL, OpenInBrowser, WarnWebIgnored
+│   │   ├── editor.go              # --editor (COPIA_EDITOR, config editor, VISUAL, EDITOR), run without a shell
+│   │   ├── editortest/            # Fake editor command for tests
 │   │   ├── json.go                # --json field filter, --jq (gojq), --template, PrintJSON
 │   │   └── template.go            # --template execution and its gh helpers
-│   ├── iostreams/iostreams.go     # TTY-aware I/O, Test() helper
+│   ├── iostreams/
+│   │   ├── iostreams.go           # TTY-aware I/O, TerminalWidth, Test() helper
+│   │   └── pager.go               # Pager (COPIA_PAGER, config pager, PAGER), run without a shell
 │   └── httpmock/registry.go       # HTTP transport mock for testing
 ├── test/integration/              # Live API integration tests
 ├── .github/workflows/             # CI, CodeQL, release, govulncheck, bump-go
@@ -119,9 +133,9 @@ copia-cli/
 **Pattern:** `init()` falls back to `debug.ReadBuildInfo()` when `Version == "DEV"`
 
 ### `internal/config/`
-**Purpose:** YAML config management for multi-host credentials
+**Purpose:** YAML config management for multi-host credentials and the settings `output`, `browser`, `pager`, `editor` and `aliases` (top-level keys beside `hosts`)
 **Entry point:** `config.go`
-**Exports:** `Config`, `HostConfig`, `Load()`, `Save()`, `DefaultPath()`, `DefaultHost()`
+**Exports:** `Config`, `HostConfig`, `Option`, `Options`, `Load()`, `Save()`, `DefaultPath()`, `DefaultHost()`, `Get()`, `Set()`
 **Pattern:** XDG Base Dir, 0600 permissions, graceful empty-config on missing file
 
 ### `internal/docs/`
@@ -133,8 +147,8 @@ copia-cli/
 ### `internal/copiacmd/`
 **Purpose:** Root command construction and `Main()` entrypoint
 **Entry point:** `root.go`
-**Exports:** `NewRootCmd(f)`, `Main() int`
-**Pattern:** Constructs Factory, reads env vars, registers all command groups
+**Exports:** `NewRootCmd(f)`, `NewFactory(ios)`, `Execute(f, args)`, `ShellAliasError`, `Main() int`
+**Pattern:** Constructs Factory, reads env vars, registers all command groups; `Execute` expands an alias of the config file before the cobra dispatch when the arguments name no built-in command, and runs a shell alias (`!` prefix) through `sh -c` with the arguments as positional parameters, its exit status becoming the one of `Main`
 
 ### `pkg/api/`
 **Purpose:** Thin factory for Gitea SDK clients
@@ -173,16 +187,19 @@ func xxxRun(opts *XxxOptions) error { ... }  // unexported, testable
 | Group | Subcommands | API Pattern |
 |-------|-------------|-------------|
 | `auth` | login, logout, status | Raw HTTP (no SDK) |
-| `repo` | list, view, clone, create, delete, fork | Raw HTTP + git exec |
-| `issue` | list, create, view, close, comment, edit | Raw HTTP |
-| `pr` | list, create, view, merge, close, review, diff, checkout | Raw HTTP + git exec |
+| `repo` | list, view, clone, create, delete, fork, set-default | Raw HTTP + git exec; `set-default` makes no API call |
+| `issue` | list, create, view, close, comment, edit, status | Raw HTTP |
+| `pr` | list, create, status, view, merge, close, review, diff, checkout | Raw HTTP + git exec |
 | `label` | list, create | Raw HTTP |
 | `release` | list, create, delete, upload | Raw HTTP + multipart |
 | `api` | none (single command `api <path>`) | Raw HTTP, any method (`-X`; GET default, POST when `-f` is set), path prefixed with `/api/v1` |
 | `search` | issues, repos | Raw HTTP |
 | `org` | list, view | Raw HTTP |
 | `notification` | list, read | Raw HTTP (read: PATCH one thread, PUT with `--all`) |
-| `browse` | none (single command `browse [<number>]`) | No API call; URL built client-side, opened with `cmdutil.Browser` |
+| `browse` | none (single command `browse [<number> \| <path> \| <commit-sha>]`) | URL built client-side, opened with `cmdutil.Browser`; raw HTTP only for the default branch of a path and the last commit of `--commit` |
+| `status` | none (single command `status`) | Raw HTTP: the issue search and the notifications |
+| `config` | get, set, list | No API call; reads and writes the settings of `config.yml`, `set` validates before it saves |
+| `alias` | set, list, delete, import | No API call; reads and writes `aliases` of `config.yml`, `set` and `import` refuse a name of a built-in command |
 | `completion` | none (single command `completion <shell>`: bash, zsh, fish, powershell) | No API call; Cobra script generation |
 
 ### `test/integration/`

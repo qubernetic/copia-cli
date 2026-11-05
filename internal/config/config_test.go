@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -102,4 +103,233 @@ func TestDefaultPath_RespectsXDG(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "/custom/config")
 	path := DefaultPath()
 	assert.Equal(t, "/custom/config/copia/config.yml", path)
+}
+
+func TestConfig_Get(t *testing.T) {
+	cfg := &Config{Hosts: map[string]*HostConfig{}, Browser: "firefox"}
+
+	tests := []struct {
+		key     string
+		want    string
+		wantErr string
+	}{
+		{key: "output", want: "table"},
+		{key: "browser", want: "firefox"},
+		{key: "pager", want: ""},
+		{key: "editor", want: ""},
+		{key: "hosts", wantErr: `unknown config key "hosts"; known keys: output, browser, pager, editor`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.key, func(t *testing.T) {
+			got, err := cfg.Get(tt.key)
+			if tt.wantErr != "" {
+				assert.EqualError(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestConfig_Set(t *testing.T) {
+	tests := []struct {
+		key     string
+		value   string
+		wantErr string
+	}{
+		{key: "output", value: "json"},
+		{key: "output", value: "table"},
+		{key: "output", value: "yaml", wantErr: `failed to set "output" to "yaml": valid values are table, json`},
+		{key: "browser", value: "firefox --new-tab"},
+		{key: "pager", value: "less -R"},
+		{key: "editor", value: "vim"},
+		{key: "editor", value: ""},
+		{key: "token", value: "x", wantErr: `unknown config key "token"; known keys: output, browser, pager, editor`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.key+"="+tt.value, func(t *testing.T) {
+			cfg := &Config{Hosts: map[string]*HostConfig{}}
+			err := cfg.Set(tt.key, tt.value)
+			if tt.wantErr != "" {
+				assert.EqualError(t, err, tt.wantErr)
+				assert.Equal(t, &Config{Hosts: map[string]*HostConfig{}}, cfg)
+				return
+			}
+			require.NoError(t, err)
+			got, err := cfg.Get(tt.key)
+			require.NoError(t, err)
+			assert.Equal(t, tt.value, got)
+		})
+	}
+}
+
+func TestSaveAndLoad_Settings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yml")
+	cfg := &Config{
+		Hosts:   map[string]*HostConfig{"app.copia.io": {Token: "t1", User: "u1"}},
+		Output:  "json",
+		Browser: "firefox",
+		Pager:   "less",
+		Editor:  "vim",
+	}
+	require.NoError(t, Save(path, cfg))
+
+	loaded, err := Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, cfg, loaded)
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "output: json\n")
+}
+
+func TestSaveAndLoad_Aliases(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yml")
+	cfg := &Config{
+		Hosts:   map[string]*HostConfig{"app.copia.io": {Token: "t1", User: "u1"}},
+		Aliases: map[string]string{"il": "issue list -L 1", "x": "!echo hi"},
+	}
+	require.NoError(t, Save(path, cfg))
+
+	loaded, err := Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, cfg, loaded)
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "aliases:\n    il: issue list -L 1\n    x: '!echo hi'\n")
+}
+
+func TestSave_OmitsUnsetSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yml")
+	require.NoError(t, Save(path, &Config{Hosts: map[string]*HostConfig{"app.copia.io": {Token: "t1", User: "u1"}}}))
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, "hosts:\n    app.copia.io:\n        token: t1\n        user: u1\n", string(data))
+}
+
+func TestOptions(t *testing.T) {
+	var keys []string
+	for _, o := range Options {
+		keys = append(keys, o.Key)
+		assert.NotEmpty(t, o.Description, o.Key)
+	}
+	assert.Equal(t, []string{"output", "browser", "pager", "editor"}, keys)
+}
+
+func TestSave_RestoresMode0600(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yml")
+	require.NoError(t, os.WriteFile(path, []byte("hosts: {}\n"), 0644))
+
+	require.NoError(t, Save(path, &Config{Hosts: map[string]*HostConfig{}, Output: "json"}))
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0600), info.Mode().Perm())
+}
+
+func TestSave_RefusesSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks need extra privileges on Windows")
+	}
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.yml")
+	require.NoError(t, os.WriteFile(target, []byte("keep: me\n"), 0644))
+	path := filepath.Join(dir, "config.yml")
+	require.NoError(t, os.Symlink(target, path))
+
+	err := Save(path, &Config{Hosts: map[string]*HostConfig{"app.copia.io": {Token: "secret"}}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), path)
+	assert.Contains(t, err.Error(), "not a regular file")
+
+	data, err := os.ReadFile(target)
+	require.NoError(t, err)
+	assert.Equal(t, "keep: me\n", string(data))
+	info, err := os.Stat(target)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0644), info.Mode().Perm())
+}
+
+func TestSave_TightensWritableDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no Unix permission bits")
+	}
+	dir := filepath.Join(t.TempDir(), "copia")
+	require.NoError(t, os.Mkdir(dir, 0700))
+	require.NoError(t, os.Chmod(dir, 0777))
+
+	require.NoError(t, Save(filepath.Join(dir, "config.yml"), &Config{Hosts: map[string]*HostConfig{}}))
+
+	info, err := os.Stat(dir)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0700), info.Mode().Perm())
+}
+
+func TestSave_ReplacesWithNew0600File(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yml")
+	require.NoError(t, os.WriteFile(path, []byte("hosts: {}\n"), 0600))
+	if runtime.GOOS != "windows" {
+		require.NoError(t, os.Chmod(path, 0666))
+	}
+
+	require.NoError(t, Save(path, &Config{Hosts: map[string]*HostConfig{"app.copia.io": {Token: "t1", User: "u1"}}}))
+
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(path)
+		require.NoError(t, err)
+		assert.Equal(t, os.FileMode(0600), info.Mode().Perm())
+	}
+	loaded, err := Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, "t1", loaded.Hosts["app.copia.io"].Token)
+	leftovers, err := filepath.Glob(filepath.Join(dir, ".config-*"))
+	require.NoError(t, err)
+	assert.Empty(t, leftovers)
+}
+
+func TestSave_KeepsOldFileOnError(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs Unix permissions that bind the user")
+	}
+	dir := filepath.Join(t.TempDir(), "copia")
+	require.NoError(t, os.Mkdir(dir, 0700))
+	path := filepath.Join(dir, "config.yml")
+	require.NoError(t, Save(path, &Config{Hosts: map[string]*HostConfig{"app.copia.io": {Token: "old", User: "u1"}}}))
+	require.NoError(t, os.Chmod(dir, 0500))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0700) })
+
+	err := Save(path, &Config{Hosts: map[string]*HostConfig{"app.copia.io": {Token: "new", User: "u1"}}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "writing config")
+
+	loaded, err := Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, "old", loaded.Hosts["app.copia.io"].Token)
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	assert.Len(t, entries, 1)
+}
+
+func TestSave_RefusesReadOnlyFile(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs Unix permissions that bind the user")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yml")
+	require.NoError(t, os.WriteFile(path, []byte("hosts: {}\n"), 0400))
+
+	err := Save(path, &Config{Hosts: map[string]*HostConfig{"app.copia.io": {Token: "t1"}}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "writing config")
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, "hosts: {}\n", string(data))
+	leftovers, err := filepath.Glob(filepath.Join(dir, ".config-*"))
+	require.NoError(t, err)
+	assert.Empty(t, leftovers)
 }

@@ -760,4 +760,77 @@ if opts.JSON.IsJSON() {
   - `timeago <RFC 3339 time>` prints `just now`, `5 minutes ago`, `2 days ago` and so on;
   - `tablerow <field>...` adds a row to a table whose columns are aligned with two spaces, printed by `tablerender` or, without it, at the end.
 - `--template` without `--json`, `--template` with `--jq`, and a template that does not parse (an unknown helper included) fail before any request. `cmdutil.ExecuteTemplate(w, data, tpl)` is the `--template` part on its own.
+- The default output format comes from `Factory.OutputFormat` (`COPIA_OUTPUT`, then the config key `output`, then `table`). `copiacmd.Execute` puts it into the command context with `cmdutil.WithOutputFormat`; when `--json` is not given and the format is `json`, the `PreRunE` of `AddJSONFlags` selects all valid fields before it checks `--jq` and `--template`, so `IsJSON` is true and no command needs code of its own. A command built without that context (a unit test) behaves as `table`. A flag that has no JSON form calls `opts.JSON.DropDefault()` to go back to the text output when the JSON comes only from the default (`issue view --comments`).
+
+### Pager
+
+A command whose output can be long starts the pager after its requests and before its first write to `opts.IO.Out`, as gh does:
+
+```go
+if err := opts.IO.StartPager(); err != nil {
+	_, _ = fmt.Fprintf(opts.IO.ErrOut, "failed to start pager: %v\n", err)
+}
+defer opts.IO.StopPager()
+```
+
+- `copiacmd.Execute` sets the command with `IOStreams.SetPager(f.Pager())`; `Factory.Pager` resolves `COPIA_PAGER` (set but empty turns the pager off), then the config key `pager`, then `PAGER`.
+- `StartPager` does nothing when standard output is not a TTY, when no pager is set or when it is `cat`. Otherwise it splits the command into words at whitespace, runs it without a shell (`exec.Command`, which refuses a match relative to the current directory) with `LESS=FRX` and `LV=-c` unless they are set, and replaces `Out` with the pager's input until `StopPager`.
+- When the user quits the pager before the end, the rest of the output is discarded instead of failing with a broken pipe, so no command handles that case.
+- The commands that page: `repo list`, `repo view`, `issue list`, `issue view`, `pr list`, `pr view`, `pr diff`, `label list`, `release list`, `org list`, `org view`, `notification list`, `issue status`, `pr status` and `status`. Their unit tests set `ios.SetStdoutTTY(true)` and a pager that cannot be started, which shows that the command calls `StartPager`; `pkg/iostreams/pager_test.go` runs the test binary as a fake pager.
+
+### Terminal width
+
+`opts.IO.TerminalWidth()` is the width of the terminal on standard output (`golang.org/x/term`), or 80 when standard output is not a terminal or its size cannot be read, as gh's. `status` lays its columns out at this width. Read it before `StartPager`; unit tests set it with `ios.SetStdoutTTY(true)` and `ios.SetTerminalWidth(n)`.
+
+### Editor
+
+`--editor/-e` (gh's flag) lets the user write text in the editor; there are no interactive prompts, so the editor opens only on that flag. The command reads the editor in `RunE` and edits in its `Run` function, before any request, so empty text sends nothing:
+
+```go
+cmd.Flags().BoolVarP(&opts.EditorMode, "editor", "e", false, "Write the comment body in the text editor")
+cmd.MarkFlagsMutuallyExclusive("body", "editor")
+
+// RunE
+if opts.EditorMode {
+	opts.EditorCommand = f.Editor()
+}
+
+// Run
+if opts.EditorMode {
+	body, err := cmdutil.EditBody(opts.IO, opts.EditorCommand)
+	if err != nil {
+		return err // cmdutil.ErrEmptyEdit for blank text
+	}
+	opts.Body = body
+}
+```
+
+- `Factory.Editor` resolves `COPIA_EDITOR`, then the config key `editor`, then `VISUAL`, then `EDITOR`.
+- `cmdutil.EditText` writes the initial text to a new `copia-*.md` file in the temporary directory (`os.CreateTemp`, mode `600`), runs the editor on it with the command's standard streams and removes the file afterwards, also when the editor fails. `cmdutil.SplitCommand` splits the command like a shell (quotes, backslashes, no expansion), as gh does, and it runs without a shell. No editor set fails with a hint naming the settings.
+- `cmdutil.EditTitleBody` (create commands) opens the title, a blank line and the body, and returns the first non-blank line as the title; `cmdutil.EditBody` (comment commands) opens an empty file. Both return `cmdutil.ErrEmptyEdit` for blank text.
+- `--editor` conflicts with `--body` and `--body-file` through `MarkFlagsMutuallyExclusive`, so the conflict fails before `RunE`.
+- Tests use `pkg/cmdutil/editortest`: `editortest.New(t, text)` writes a shell script that records its arguments and the initial text and saves `text`; set its `Command` in `COPIA_EDITOR`.
+
+### Web
+
+`--web/-w` (gh's flag) opens the page in the browser instead of calling the API. The command handles it first in `RunE`, with `f.ResolveHost` instead of `f.ResolveAuth`, so it needs no token and sends no request:
+
+```go
+cmd.Flags().BoolVarP(&opts.Web, "web", "w", false, "Open the issue in the browser")
+
+// RunE
+if opts.Web {
+	host, err := f.ResolveHost()
+	...
+	owner, repo, err := f.ResolveRepo()
+	...
+	return cmdutil.OpenInBrowser(f.IOStreams, f.Browser, cmdutil.RepoWebURL(host, owner, repo, "issues/12"))
+}
+```
+
+- Paths and query parameters are those of the Gitea 1.26 web router and handlers. A filter the web page takes only by ID (labels, milestones, assignees) would need an API call, so the command passes `cmdutil.WarnWebIgnored` the names of those flags that are set, which prints `warning: --<flag> is not applied in the browser`, and opens the page without them.
+- A command whose page needs no repository (`search repos`, `search prs` without `-R`) builds the URL from `f.ResolveHost()` alone, for example `https://<host>/explore/repos`.
+- Pull request pages go through `pr/shared.OpenPR(f, ref, tab)`, which also takes a pull request URL argument and refuses one on another host, as the API commands do.
+- `cmdutil.OpenInBrowser` prints `Opening <url> in your browser.` to standard error when standard output is a terminal, as gh does for `--web`.
+- Tests set `Browser: &browsertest.Browser{}` on the Factory, check its `URLs`, the standard error text with and without `ios.SetStdoutTTY(true)`, and that the `httpmock` registry saw no request.
 

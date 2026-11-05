@@ -17,12 +17,13 @@ func TestNewCmdRepo_Subcommands(t *testing.T) {
 		groups[c.Name()] = c.GroupID
 	}
 	assert.Equal(t, map[string]string{
-		"list":   "General commands",
-		"clone":  "General commands",
-		"create": "General commands",
-		"view":   "Targeted commands",
-		"delete": "Targeted commands",
-		"fork":   "Targeted commands",
+		"list":        "General commands",
+		"clone":       "General commands",
+		"create":      "General commands",
+		"view":        "Targeted commands",
+		"delete":      "Targeted commands",
+		"fork":        "Targeted commands",
+		"set-default": "Targeted commands",
 	}, groups)
 
 	var titles []string

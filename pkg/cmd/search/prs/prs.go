@@ -32,6 +32,7 @@ type SearchOptions struct {
 	Owner      string
 	Repo       string // owner/repo from -R, matched on each result
 	JSON       cmdutil.JSONFlags
+	Web        bool
 }
 
 type nameRef struct {
@@ -77,11 +78,21 @@ checked on each result, since app.copia.io ignores the created_by filter. The se
 filters assignees only on the authenticated user, so --assignee takes "@me"
 or your own login. --owner limits the search to the repositories of a user
 or organization; -R owner/repo to one repository. Labels match any of the
-given names.`,
+given names.
+
+Use --web to open the search in the browser instead; no API call is made, so
+no token is needed. Copia has no web search across repositories, so --web
+opens the pull request dashboard (/pulls, or /org/<owner>/pulls with --owner,
+which needs membership of that organization) with the query, --state,
+--author and --assignee; the dashboard shows open pull requests unless
+--state closed is given. With -R it opens the pull request list of that
+repository, which applies --author and --assignee @me only. --label is not
+applied in the browser, since the web pages take labels only by ID.`,
 		Example: `  $ copia-cli search prs timeout
   $ copia-cli search prs --author @me --state open
   $ copia-cli search prs sensor --owner my-org --label bug
-  $ copia-cli search prs fix -R my-org/plc --json number,title,state`,
+  $ copia-cli search prs fix -R my-org/plc --json number,title,state
+  $ copia-cli search prs --author @me --web`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 && cmd.Flags().NFlag() == 0 && f.Repo == "" {
@@ -92,6 +103,9 @@ given names.`,
 			}
 			opts.IO = f.IOStreams
 			opts.Repo = f.Repo
+			if opts.Web {
+				return openSearch(f, opts)
+			}
 
 			host, token, err := f.ResolveAuth()
 			if err != nil {
@@ -110,9 +124,108 @@ given names.`,
 	cmd.Flags().StringVar(&opts.Author, "author", "", "Filter by author")
 	cmd.Flags().StringVar(&opts.Assignee, "assignee", "", "Filter by assignee (@me)")
 	cmd.Flags().StringVar(&opts.Owner, "owner", "", "Filter on repository owner")
+	cmd.Flags().BoolVarP(&opts.Web, "web", "w", false, "Open the search query in the web browser")
 	cmdutil.AddJSONFlags(cmd, &opts.JSON, validJSONFields)
 
 	return cmd
+}
+
+// openSearch opens the search in the browser: the pull request list of the
+// -R repository, or else the pull request dashboard of the user or of the
+// --owner organization. It makes no API call, so no token is needed.
+func openSearch(f *cmdutil.Factory, opts *SearchOptions) error {
+	state, err := searchState(opts.State)
+	if err != nil {
+		return err
+	}
+	owner, err := searchOwner(opts)
+	if err != nil {
+		return err
+	}
+	host, err := f.ResolveHost()
+	if err != nil {
+		return err
+	}
+
+	q := url.Values{}
+	if opts.Query != "" {
+		q.Set("q", opts.Query)
+	}
+	var ignored []string
+	if len(opts.Labels) > 0 {
+		ignored = append(ignored, "label")
+	}
+
+	// Both web pages read type=created_by and type=assigned for the
+	// authenticated user, and poster as a login. The dashboard also reads
+	// assignee as a login; the repository list takes it only by ID.
+	if opts.Author == "@me" {
+		q.Set("type", "created_by")
+	} else if opts.Author != "" {
+		q.Set("poster", opts.Author)
+	}
+	switch {
+	case opts.Assignee == "":
+	case opts.Assignee == "@me" && !q.Has("type"):
+		q.Set("type", "assigned")
+	case opts.Assignee != "@me" && opts.Repo == "":
+		q.Set("assignee", opts.Assignee)
+	default:
+		ignored = append(ignored, "assignee")
+	}
+	cmdutil.WarnWebIgnored(opts.IO, ignored...)
+
+	var u string
+	switch {
+	case opts.Repo != "":
+		repoOwner, repo, err := cmdutil.SplitOwnerRepo(opts.Repo)
+		if err != nil {
+			return err
+		}
+		q.Set("state", state)
+		u = cmdutil.RepoWebURL(host, repoOwner, repo, "pulls")
+	case owner != "":
+		u = fmt.Sprintf("https://%s/org/%s/pulls", host, url.PathEscape(owner))
+	default:
+		u = fmt.Sprintf("https://%s/pulls", host)
+	}
+	// The dashboard knows open and closed only, open when state is not set.
+	if opts.Repo == "" && opts.State != "" {
+		q.Set("state", opts.State)
+	}
+	if len(q) > 0 {
+		u += "?" + q.Encode()
+	}
+	return cmdutil.OpenInBrowser(opts.IO, f.Browser, u)
+}
+
+// searchState checks --state and returns it, or "all" when it is empty.
+func searchState(state string) (string, error) {
+	switch state {
+	case "":
+		return "all", nil
+	case "open", "closed":
+		return state, nil
+	default:
+		return "", fmt.Errorf("invalid state %q: use open or closed", state)
+	}
+}
+
+// searchOwner returns the owner to search in: --owner, or the owner of the
+// -R repository, which --owner must then match.
+func searchOwner(opts *SearchOptions) (string, error) {
+	owner := opts.Owner
+	if opts.Repo != "" {
+		repoOwner, _, err := cmdutil.SplitOwnerRepo(opts.Repo)
+		if err != nil {
+			return "", err
+		}
+		if owner != "" && !strings.EqualFold(owner, repoOwner) {
+			return "", fmt.Errorf("--owner %q does not match the owner of --repo %q", owner, opts.Repo)
+		}
+		owner = repoOwner
+	}
+	return owner, nil
 }
 
 func decodePRs(body []byte) ([]prEntry, error) {
@@ -126,25 +239,13 @@ func SearchRun(opts *SearchOptions) error {
 	if err := cmdutil.ValidateLimit(opts.Limit); err != nil {
 		return err
 	}
-	state := opts.State
-	switch state {
-	case "":
-		state = "all"
-	case "open", "closed":
-	default:
-		return fmt.Errorf("invalid state %q: use open or closed", opts.State)
+	state, err := searchState(opts.State)
+	if err != nil {
+		return err
 	}
-
-	owner := opts.Owner
-	if opts.Repo != "" {
-		repoOwner, _, err := cmdutil.SplitOwnerRepo(opts.Repo)
-		if err != nil {
-			return err
-		}
-		if owner != "" && !strings.EqualFold(owner, repoOwner) {
-			return fmt.Errorf("--owner %q does not match the owner of --repo %q", owner, opts.Repo)
-		}
-		owner = repoOwner
+	owner, err := searchOwner(opts)
+	if err != nil {
+		return err
 	}
 
 	q := url.Values{}
@@ -196,7 +297,6 @@ func SearchRun(opts *SearchOptions) error {
 
 	u := fmt.Sprintf("https://%s/api/v1/repos/issues/search?%s", opts.Host, q.Encode())
 	var prs []prEntry
-	var err error
 	// app.copia.io ignores created_by, and the endpoint has no repository
 	// filter, so both are also checked on each result.
 	if opts.Repo != "" || author != "" {

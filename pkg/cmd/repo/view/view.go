@@ -22,6 +22,7 @@ type ViewOptions struct {
 	Owner      string
 	Repo       string
 	JSON       cmdutil.JSONFlags
+	Web        bool
 }
 
 type repoDetail struct {
@@ -42,7 +43,10 @@ func NewCmdView(f *cmdutil.Factory) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "view [<owner/repo>]",
 		Short: "View a repository",
-		Long:  "Display the description and other information about a repository. With no argument, the repository for the current directory is displayed.",
+		Long: `Display the description and other information about a repository. With no argument, the repository for the current directory is displayed.
+
+With --web, open the repository page in the browser instead. No API call is
+made, so no token is needed.`,
 		Example: `  # View the current repository
   $ copia-cli repo view
 
@@ -50,10 +54,16 @@ func NewCmdView(f *cmdutil.Factory) *cobra.Command {
   $ copia-cli repo view my-org/my-repo
 
   # View as JSON
-  $ copia-cli repo view --json fullName,description`,
+  $ copia-cli repo view --json fullName,description
+
+  # Open the repository in the browser
+  $ copia-cli repo view my-org/my-repo --web`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.IO = f.IOStreams
+			if opts.Web {
+				return openRepo(f, args)
+			}
 			host, token, err := f.ResolveAuth()
 			if err != nil {
 				return err
@@ -80,9 +90,32 @@ func NewCmdView(f *cmdutil.Factory) *cobra.Command {
 		},
 	}
 
+	cmd.Flags().BoolVarP(&opts.Web, "web", "w", false, "Open the repository in the browser")
 	cmdutil.AddJSONFlags(cmd, &opts.JSON, validJSONFields)
 
 	return cmd
+}
+
+// openRepo opens the web page of the repository in args, or of the current
+// one, in the browser. It makes no API call, so no token is needed.
+func openRepo(f *cmdutil.Factory, args []string) error {
+	host, err := f.ResolveHost()
+	if err != nil {
+		return err
+	}
+	var owner, repo string
+	if len(args) > 0 {
+		owner, repo, err = cmdutil.SplitOwnerRepo(args[0])
+	} else {
+		owner, repo, err = f.ResolveRepo()
+		if err != nil {
+			err = fmt.Errorf("could not determine repository: %w", err)
+		}
+	}
+	if err != nil {
+		return err
+	}
+	return cmdutil.OpenInBrowser(f.IOStreams, f.Browser, cmdutil.RepoWebURL(host, owner, repo, ""))
 }
 
 func ViewRun(opts *ViewOptions) error {
@@ -115,6 +148,11 @@ func ViewRun(opts *ViewOptions) error {
 	if err := json.Unmarshal(body, &repo); err != nil {
 		return fmt.Errorf("parsing response: %w", err)
 	}
+
+	if err := opts.IO.StartPager(); err != nil {
+		_, _ = fmt.Fprintf(opts.IO.ErrOut, "failed to start pager: %v\n", err)
+	}
+	defer opts.IO.StopPager()
 
 	if opts.JSON.IsJSON() {
 		return opts.JSON.Print(opts.IO.Out, repo)

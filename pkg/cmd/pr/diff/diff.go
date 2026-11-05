@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/spf13/cobra"
+	"github.com/qubernetic/copia-cli/pkg/cmd/pr/shared"
 	"github.com/qubernetic/copia-cli/pkg/cmdutil"
 	"github.com/qubernetic/copia-cli/pkg/iostreams"
 )
@@ -19,23 +20,33 @@ type DiffOptions struct {
 	Owner      string
 	Repo       string
 	Number     int64
+	Web        bool
 }
 
 func NewCmdDiff(f *cmdutil.Factory) *cobra.Command {
 	opts := &DiffOptions{}
 
 	cmd := &cobra.Command{
-		Use:     "diff <number>",
-		Short:   "View diff for a pull request",
-		Long:    "View changes in a pull request as a unified diff.",
-		Example: "  $ copia-cli pr diff 7",
-		Args:    cobra.ExactArgs(1),
+		Use:   "diff <number>",
+		Short: "View diff for a pull request",
+		Long: `View changes in a pull request as a unified diff.
+
+With --web, open the files tab of the pull request in the browser instead. No
+API call is made, so no token is needed.`,
+		Example: `  $ copia-cli pr diff 7
+
+  # Open the changed files in the browser
+  $ copia-cli pr diff 7 --web`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			num, err := strconv.ParseInt(args[0], 10, 64)
 			if err != nil {
 				return fmt.Errorf("invalid PR number: %s", args[0])
 			}
 			opts.Number = num
+			if opts.Web {
+				return shared.OpenPR(f, shared.PRRef{Number: num}, "files")
+			}
 			opts.IO = f.IOStreams
 
 			host, token, err := f.ResolveAuth()
@@ -55,6 +66,8 @@ func NewCmdDiff(f *cmdutil.Factory) *cobra.Command {
 			return DiffRun(opts)
 		},
 	}
+
+	cmd.Flags().BoolVarP(&opts.Web, "web", "w", false, "Open the pull request diff in the browser")
 
 	return cmd
 }
@@ -81,6 +94,11 @@ func DiffRun(opts *DiffOptions) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("API error (HTTP %d)", resp.StatusCode)
 	}
+
+	if err := opts.IO.StartPager(); err != nil {
+		_, _ = fmt.Fprintf(opts.IO.ErrOut, "failed to start pager: %v\n", err)
+	}
+	defer opts.IO.StopPager()
 
 	_, err = io.Copy(opts.IO.Out, resp.Body)
 	return err

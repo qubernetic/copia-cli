@@ -23,6 +23,7 @@ type ListOptions struct {
 	Repo       string
 	Limit      int
 	JSON       cmdutil.JSONFlags
+	Web        bool
 }
 
 type labelEntry struct {
@@ -41,13 +42,20 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 		Short:   "List labels in a repository",
 		Long: `List labels in a Copia repository. Labels are displayed with their name, color, and description.
 
-Use --limit to control how many labels are returned (default 30).`,
+Use --limit to control how many labels are returned (default 30).
+
+Use --web to open the labels page in the browser instead; no API call is
+made, so no token is needed.`,
 		Aliases: []string{"ls"},
 		Example: `  $ copia-cli label list
   $ copia-cli label list --limit 100
-  $ copia-cli label list --json name,color`,
+  $ copia-cli label list --json name,color
+  $ copia-cli label list --web`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.IO = f.IOStreams
+			if opts.Web {
+				return openLabels(f)
+			}
 			host, token, err := f.ResolveAuth()
 			if err != nil {
 				return err
@@ -67,9 +75,24 @@ Use --limit to control how many labels are returned (default 30).`,
 	}
 
 	cmd.Flags().IntVarP(&opts.Limit, "limit", "L", 30, "Maximum number of labels")
+	cmd.Flags().BoolVarP(&opts.Web, "web", "w", false, "List labels in the web browser")
 	cmdutil.AddJSONFlags(cmd, &opts.JSON, validJSONFields)
 
 	return cmd
+}
+
+// openLabels opens the labels page of the repository in the browser. It
+// makes no API call, so no token is needed.
+func openLabels(f *cmdutil.Factory) error {
+	host, err := f.ResolveHost()
+	if err != nil {
+		return err
+	}
+	owner, repo, err := f.ResolveRepo()
+	if err != nil {
+		return err
+	}
+	return cmdutil.OpenInBrowser(f.IOStreams, f.Browser, cmdutil.RepoWebURL(host, owner, repo, "labels"))
 }
 
 func decodeLabels(body []byte) ([]labelEntry, error) {
@@ -88,6 +111,11 @@ func ListRun(opts *ListOptions) error {
 	if err != nil {
 		return err
 	}
+
+	if err := opts.IO.StartPager(); err != nil {
+		_, _ = fmt.Fprintf(opts.IO.ErrOut, "failed to start pager: %v\n", err)
+	}
+	defer opts.IO.StopPager()
 
 	if opts.JSON.IsJSON() {
 		return opts.JSON.Print(opts.IO.Out, labels)
