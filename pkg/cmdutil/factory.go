@@ -33,7 +33,7 @@ type Factory struct {
 }
 
 // envTokenIgnored explains why COPIA_TOKEN was not used: it is sent only to
-// the host --host or COPIA_HOST names.
+// a host --host or COPIA_HOST names, never to one the config picks.
 const envTokenIgnored = "COPIA_TOKEN is ignored because no host is named; set COPIA_HOST (or --host) to the host the token belongs to"
 
 // envTokenOtherHost explains why COPIA_TOKEN was not used: --host names
