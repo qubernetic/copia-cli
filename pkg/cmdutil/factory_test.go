@@ -191,6 +191,7 @@ func TestFactory_ResolveAuth_EnvTokenOnlyForNamedHost(t *testing.T) {
 		envHost     string
 		defaultHost string
 		hosts       map[string]*config.HostConfig
+		keyringErr  error
 		wantHost    string
 		wantToken   string
 		wantWarning string
@@ -331,6 +332,14 @@ func TestFactory_ResolveAuth_EnvTokenOnlyForNamedHost(t *testing.T) {
 			wantWarning: otherHostWarning,
 		},
 		{
+			name:       "--host names another host than COPIA_HOST with the keyring unavailable",
+			flagHost:   "b.example.com",
+			envHost:    "a.example.com",
+			hosts:      map[string]*config.HostConfig{"b.example.com": {User: "john"}},
+			keyringErr: errors.New("no secret service"),
+			wantErr:    "reading the token for b.example.com: OS keyring: no secret service. " + otherHostHint,
+		},
+		{
 			name:      "--token beats COPIA_TOKEN with another host than COPIA_HOST",
 			flagToken: "flag-token",
 			flagHost:  "b.example.com",
@@ -367,6 +376,10 @@ func TestFactory_ResolveAuth_EnvTokenOnlyForNamedHost(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			keyring.MockInit()
+			if tt.keyringErr != nil {
+				keyring.MockInitWithError(tt.keyringErr)
+				t.Cleanup(keyring.MockInit)
+			}
 			t.Setenv("COPIA_TOKEN", envToken)
 			t.Setenv("COPIA_HOST", tt.envHost)
 			ios, _, stdout, stderr := iostreams.Test()

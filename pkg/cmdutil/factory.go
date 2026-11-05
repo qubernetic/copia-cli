@@ -72,6 +72,10 @@ func (f *Factory) ResolveAuth() (host, token string, err error) {
 	}
 	// COPIA_TOKEN was passed over for the stored token of the host.
 	envTokenSkipped := token == "" && envToken != ""
+	hint := ""
+	if envTokenSkipped {
+		hint = ". " + reason
+	}
 
 	if host == "" || token == "" {
 		cfg, err := f.Config()
@@ -84,15 +88,11 @@ func (f *Factory) ResolveAuth() (host, token string, err error) {
 		if token == "" && host != "" {
 			token, _, err = config.LookupToken(cfg, host, f.Keyring)
 			if err != nil && !errors.Is(err, config.ErrTokenNotFound) {
-				return "", "", fmt.Errorf("reading the token for %s: %w", host, err)
+				return "", "", fmt.Errorf("reading the token for %s: %w%s", host, err, hint)
 			}
 		}
 	}
 
-	hint := ""
-	if envTokenSkipped {
-		hint = ". " + reason
-	}
 	if host == "" {
 		return "", "", fmt.Errorf("no host configured. Run 'copia auth login' first%s", hint)
 	}
