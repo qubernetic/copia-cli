@@ -19,6 +19,7 @@ func TestNewCmdConfig_Subcommands(t *testing.T) {
 	assert.Equal(t, map[string]string{
 		"get":  "General commands",
 		"list": "General commands",
+		"set":  "General commands",
 	}, groups)
 }
 

@@ -9,6 +9,7 @@ import (
 	"github.com/qubernetic/copia-cli/internal/config"
 	getCmd "github.com/qubernetic/copia-cli/pkg/cmd/config/get"
 	listCmd "github.com/qubernetic/copia-cli/pkg/cmd/config/list"
+	setCmd "github.com/qubernetic/copia-cli/pkg/cmd/config/set"
 	"github.com/qubernetic/copia-cli/pkg/cmdutil"
 )
 
@@ -36,6 +37,7 @@ func NewCmdConfig(f *cmdutil.Factory) *cobra.Command {
 	cmdutil.AddGroup(cmd, "General commands",
 		getCmd.NewCmdGet(f),
 		listCmd.NewCmdList(f),
+		setCmd.NewCmdSet(f),
 	)
 
 	return cmd
