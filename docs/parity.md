@@ -22,6 +22,8 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 
 The default host is the top-level config key `default_host`, which `auth login` sets to the host it logs in to; gh has no such key and defaults to `github.com` (or its only host) unless `GH_HOST` is set. The host order is `--host`, `COPIA_HOST`, `default_host`, then the alphabetically first host; `auth logout` of the default host moves `default_host` to the alphabetically first remaining host. `auth status` lists the hosts in alphabetical order and marks the default one with `(default)`, where gh marks the active account of each host.
 
+Token storage follows gh: `auth login` stores the token in the OS keyring (go-keyring, service `copia-cli:<host>` where gh uses `gh:<host>`, account = the login, every call bounded by a three-second timeout as in gh's `internal/keyring`) and falls back to the config file with a warning on standard error when the keyring fails; `--insecure-storage` writes the config file on request. The stored token is read from the config file first, then from the keyring, as gh does; `auth logout` deletes it from both. `auth status` adds the source to the token line (`Token: **** (keyring)` or `(config file)`), where gh prints it after the account (`(keyring)` or `(<path to hosts.yml>)`). The snap has no `password-manager-service` plug, so it always falls back to the config file.
+
 ## repo
 
 | gh command | Parity | Copia CLI | Status |

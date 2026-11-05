@@ -73,7 +73,8 @@ copia-cli/
 - **Auth-first:** Every API call requires authentication. `copia-cli auth login` is mandatory before any operation.
 - **Same-origin redirects:** every command builds its HTTP client with `cmdutil.NewHTTPClient()`, which refuses a redirect that changes scheme, host or port; a guard test parses non-test code under `pkg/`, `internal/` and `cmd/` and fails on an `http.Client` literal or `new(http.Client)` outside `pkg/cmdutil/httpclient.go`, and on `http.DefaultClient`, `http.Get`, `Head`, `Post` or `PostForm`, also under an aliased `net/http` import.
 - **Integration tests print no account data:** the tests under `test/integration/` log nothing but the Copia version line of `TestAPI_Version` and check output only through the byte-count helpers of `test/integration/helpers_test.go`; a guard in `test/workflows` parses them with `go/parser` (no `integration` tag needed) and fails on any other `t.Log`/`t.Logf`, on `t.Error`/`t.Fatal` calls and on testify calls other than `NoError`, `Error`, `ErrorContains`, `Greater`, `True` and `False` with literal messages, with `helpers_test.go` as its single exemption.
-- **Auth precedence:** `--token` flag > `COPIA_TOKEN` env var > the stored token of the active host in the config file
+- **Auth precedence:** `--token` flag > `COPIA_TOKEN` env var > the stored token of the active host, read from the config file first, then from the OS keyring (`config.LookupToken`)
+- **Token storage:** `auth login` writes the token to the OS keyring (`config.KeyringStore` on go-keyring, service `copia-cli:<host>`, account = the login, every call bounded by a 3 s timeout) and leaves no `token` key in the config file; when the keyring fails, or with `--insecure-storage`, the token goes to the config file, the fallback with a warning on stderr that never holds the token. `auth logout` deletes both. The real keyring is wired only in `copiacmd.NewFactory` (`Factory.Keyring`); a nil `Keyring` reads and writes the config file only, and every test package that can reach the keyring puts go-keyring on its mock in `TestMain`, so no test touches the developer's keyring
 - **Repository resolution:** `-R/--repo` flag > the git remote marked by `repo set-default` (git config key `remote.<name>.copia-resolved`, gh uses `gh-resolved`) > the remote `origin`
 - **Multi-instance support:** Config supports multiple hosts; active instance resolved by `--host` flag > `COPIA_HOST` env > the top-level config key `default_host` (set by `auth login`, moved to the alphabetically first remaining host by `auth logout` of the default host) > the alphabetically first host; `Config.DefaultHost` resolves the last two steps, never a map's iteration order
 - **Config location:** `~/.config/copia/config.yml` (Windows: `%USERPROFILE%\.config\copia\config.yml`), file permissions `600`
@@ -83,7 +84,7 @@ copia-cli/
 Phase 1 (MVP): auth, repo list/view/clone, issue CRUD, pr CRUD, label list/create — **DONE**
 Phase 2: release CRUD, repo create/delete/fork, pr review/diff/checkout, issue edit, Homebrew tap — **DONE**
 Phase 3: `copia-cli api` escape hatch, search, orgs, notifications, `-R` flag, completion, Jekyll manual, AGPL license — **DONE**
-Phase 4: ~~winget~~, ~~COPR~~, ~~AUR~~, ~~Snap~~, OS keyring, ~~aliases~~, ~~browse~~, ~~status dashboard~~, ssh-key, pr checks, changelog, collaborators
+Phase 4: ~~winget~~, ~~COPR~~, ~~AUR~~, ~~Snap~~, ~~OS keyring~~, ~~aliases~~, ~~browse~~, ~~status dashboard~~, ssh-key, pr checks, changelog, collaborators
 
 **Out of scope:** workflow/run, codespace, copilot, project, cache, GUI
 
