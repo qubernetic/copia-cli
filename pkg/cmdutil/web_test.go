@@ -58,3 +58,10 @@ func TestOpenInBrowser_Error(t *testing.T) {
 	b := &browsertest.Browser{Err: errors.New("no browser")}
 	require.EqualError(t, cmdutil.OpenInBrowser(ios, b, "https://app.copia.io/x/y"), "no browser")
 }
+
+func TestWarnWebIgnored(t *testing.T) {
+	ios, _, stdout, stderr := iostreams.Test()
+	cmdutil.WarnWebIgnored(ios, "label", "milestone")
+	assert.Empty(t, stdout.String())
+	assert.Equal(t, "warning: --label is not applied in the browser\nwarning: --milestone is not applied in the browser\n", stderr.String())
+}

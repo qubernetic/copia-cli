@@ -26,3 +26,11 @@ func OpenInBrowser(ios *iostreams.IOStreams, b Browser, u string) error {
 	}
 	return b.Browse(u)
 }
+
+// WarnWebIgnored prints a warning to stderr for each flag in flags (names
+// without dashes) that is set but that the web page cannot take.
+func WarnWebIgnored(ios *iostreams.IOStreams, flags ...string) {
+	for _, name := range flags {
+		_, _ = fmt.Fprintf(ios.ErrOut, "warning: --%s is not applied in the browser\n", name)
+	}
+}
