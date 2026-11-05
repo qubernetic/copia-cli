@@ -229,6 +229,35 @@ func TestJSONFlags_PrintNonObjects(t *testing.T) {
 	require.EqualError(t, err, "json: unsupported type: chan int")
 }
 
+func TestJSONFlags_PrintSections(t *testing.T) {
+	jf := JSONFlags{Fields: []string{"title"}}
+	var out bytes.Buffer
+	require.NoError(t, jf.PrintSections(&out, map[string]any{
+		"first": testItems,
+		"empty": testItems[:0],
+	}))
+	assert.Equal(t, `{
+  "empty": [],
+  "first": [
+    {
+      "title": "First"
+    },
+    {
+      "title": "Second"
+    }
+  ]
+}
+`, out.String())
+
+	jf.JQ = ".first | length"
+	out.Reset()
+	require.NoError(t, jf.PrintSections(&out, map[string]any{"first": testItems}))
+	assert.Equal(t, "2\n", out.String())
+
+	err := jf.PrintSections(&out, map[string]any{"bad": make(chan int)})
+	require.EqualError(t, err, "json: unsupported type: chan int")
+}
+
 type failWriter struct{}
 
 func (failWriter) Write([]byte) (int, error) { return 0, assert.AnError }

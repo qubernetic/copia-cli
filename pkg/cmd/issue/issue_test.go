@@ -20,6 +20,7 @@ func TestNewCmdIssue_RegistersSubcommands(t *testing.T) {
 	assert.Equal(t, map[string]string{
 		"list":    "General commands",
 		"create":  "General commands",
+		"status":  "General commands",
 		"view":    "Targeted commands",
 		"close":   "Targeted commands",
 		"reopen":  "Targeted commands",

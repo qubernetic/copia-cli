@@ -61,6 +61,7 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 | `gh issue unpin` | Partial | `copia-cli issue unpin` | [x] |
 | `gh issue lock` | Partial | `copia-cli issue lock` | [x] |
 | `gh issue unlock` | Partial | `copia-cli issue unlock` | [x] |
+| `gh issue status` | Full | `copia-cli issue status` | [x] |
 | `gh issue transfer` | None | n/a | — |
 
 `--web/-w` on `gh issue view`, `gh issue comment`, `gh issue list` and `gh issue create`: client side, no API call and no token. The URL is built from the Gitea 1.26 web router and opened with the `browser` setting; on a terminal `Opening <url> in your browser.` goes to standard error, as in gh. `view` and `comment` open `/{owner}/{repo}/issues/{index}`. `list` opens `/{owner}/{repo}/issues` with the query parameters the web list reads: `state`, `q` (`--search`), `poster` (`--author <login>`) and `type=assigned` or `type=created_by` (`--assignee @me`, `--author @me`; the list has one `type`, so `--assignee @me` wins). The web list takes labels, milestones and other assignees only by ID and has no mention filter for another user, so `--label`, `--milestone`, `--mention` and `--assignee <login>` print a warning and are not applied. `create` opens `/{owner}/{repo}/issues/new` with `title` and `body` as query parameters, which the new-issue handler reads; it takes no labels, assignees or milestone by name, so those flags print a warning, and `--web` with `--editor` fails.
@@ -72,6 +73,8 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 `gh issue pin`, `gh issue unpin`: `POST` and `DELETE /repos/{owner}/{repo}/issues/{index}/pin`. Both read the issue first and leave it alone when its `pin_order` already shows the wanted state, as `gh` does; a server that sends no `pin_order` gets the request anyway. Gitea needs write access to the repository's issues for both. app.copia.io answers both `POST` and `DELETE` on the route with HTTP 404 for an issue it serves, and its issues carry no `pin_order` (found by the `integration` job of #369), so on Copia both commands report that the host does not support pinning and the issue stays as it is.
 
 `gh issue lock`, `gh issue unlock`: `PUT /repos/{owner}/{repo}/issues/{index}/lock` with `lock_reason`, `DELETE` on the same path. `--reason/-r` takes gh's values `off_topic`, `resolved`, `spam` and `too_heated`, sent as Gitea's default lock reasons `Off-topic`, `Resolved`, `Spam` and `Too heated`; Gitea's API does not check the reason. Both read the issue's `is_locked` first. Gitea ignores a lock request for a locked issue, so `lock` fails on one, as `gh` does without a prompt; `unlock` leaves an unlocked issue alone. Gitea needs write access to the repository's issues for both. app.copia.io answers both `PUT` and `DELETE` on the route with HTTP 404 for an issue it serves (found by the `integration` job of #370), so on Copia `lock` reports that the host does not support locking and the issue stays unlocked; `unlock` finds nothing locked and sends nothing.
+
+`gh issue status`: three listings of `GET /repos/{owner}/{repo}/issues?state=open&type=issues` for the user of `GET /user`, with `assigned_by`, `mentioned_by` and `created_by`. app.copia.io ignores `created_by` (found by the `integration` job of #376), so the author of each issue is checked on the client, and the assignees the same way; every page is read, since the share of kept issues is not known. The Gitea list has no sort parameter, so each section is sorted by `updated_at` on the client and, as in gh, shows the ten most recently updated issues and `And N more`. `--json` prints one object with gh's keys `assigned`, `mentioned` and `createdBy`; the fields are the Gitea names (`number`, `title`, `state`, `labels`, `updated_at`, `html_url`, `user`, `assignees`).
 
 `gh issue transfer`: Gitea 1.26 has no endpoint that moves an issue to another repository.
 
@@ -192,10 +195,10 @@ Client side, no API call. Aliases are stored under the top-level key `aliases` o
 
 | Status | Count |
 |--------|-------|
-| Implemented | 58 |
+| Implemented | 59 |
 | Not yet implemented (Full parity) | 12 |
 | Not yet implemented (Partial) | 7 |
 | No equivalent | 13 |
-| **Total implementable** | **77** |
+| **Total implementable** | **78** |
 
 Counted from the rows above: every `[x]` row, and every other row by its Parity value. The Parity values follow the Gitea 1.26 API (`release/v1.26` swagger); `TestAPI_Version` in `test/integration/api_test.go` logs what Copia's `GET /version` reports in the PR `integration` job. On 2026-11-04 that was `0.59.0`, Copia's own version number, not a Gitea release, so the API does not show which Gitea version Copia is built on; a command's integration test shows whether Copia serves its endpoint.

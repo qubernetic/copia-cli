@@ -134,6 +134,28 @@ func (jf *JSONFlags) Print(w io.Writer, v any) error {
 	if err != nil {
 		return err
 	}
+	return jf.write(w, data)
+}
+
+// PrintSections writes one JSON object whose keys are the section names and
+// whose values are the sections, each reduced to the --json fields as Print
+// does, like the status commands of gh. --jq and --template apply to the
+// whole object.
+func (jf *JSONFlags) PrintSections(w io.Writer, sections map[string]any) error {
+	data := make(map[string]any, len(sections))
+	for name, v := range sections {
+		section, err := selectFields(v, jf.Fields)
+		if err != nil {
+			return err
+		}
+		data[name] = section
+	}
+	return jf.write(w, data)
+}
+
+// write prints data, already reduced to the --json fields, through --jq,
+// --template or as indented JSON.
+func (jf *JSONFlags) write(w io.Writer, data any) error {
 	if jf.JQ != "" {
 		ctx := jf.ctx
 		if ctx == nil {

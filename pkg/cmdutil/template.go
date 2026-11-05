@@ -143,20 +143,26 @@ func templateTimeago(input string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	ago := timeNow().Sub(t)
+	return TimeAgo(timeNow(), t), nil
+}
+
+// TimeAgo describes how long before now t was, as "3 hours ago", in the
+// words of the timeago template helper.
+func TimeAgo(now, t time.Time) string {
+	ago := now.Sub(t)
 	switch {
 	case ago < time.Minute:
-		return "just now", nil
+		return "just now"
 	case ago < time.Hour:
-		return pluralize(int(ago.Minutes()), "minute") + " ago", nil
+		return pluralize(int(ago.Minutes()), "minute") + " ago"
 	case ago < 24*time.Hour:
-		return pluralize(int(ago.Hours()), "hour") + " ago", nil
+		return pluralize(int(ago.Hours()), "hour") + " ago"
 	case ago < 30*24*time.Hour:
-		return pluralize(int(ago.Hours())/24, "day") + " ago", nil
+		return pluralize(int(ago.Hours())/24, "day") + " ago"
 	case ago < 365*24*time.Hour:
-		return pluralize(int(ago.Hours())/24/30, "month") + " ago", nil
+		return pluralize(int(ago.Hours())/24/30, "month") + " ago"
 	default:
-		return pluralize(int(ago.Hours()/24/365), "year") + " ago", nil
+		return pluralize(int(ago.Hours()/24/365), "year") + " ago"
 	}
 }
 
