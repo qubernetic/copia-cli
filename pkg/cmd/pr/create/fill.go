@@ -16,9 +16,9 @@ type commit struct {
 // way `gh pr create --fill` does. Values the user gave are kept.
 func fill(opts *CreateOptions) error {
 	if opts.Head == "" {
-		head, err := gitOutput("symbolic-ref", "--quiet", "--short", "HEAD")
+		head, err := currentBranch()
 		if err != nil {
-			return fmt.Errorf("could not determine the current branch: %w", err)
+			return err
 		}
 		opts.Head = head
 	}
@@ -50,6 +50,15 @@ func fill(opts *CreateOptions) error {
 		opts.Body = body
 	}
 	return nil
+}
+
+// currentBranch returns the name of the checked-out branch.
+func currentBranch() (string, error) {
+	head, err := gitOutput("symbolic-ref", "--quiet", "--short", "HEAD")
+	if err != nil {
+		return "", fmt.Errorf("could not determine the current branch: %w", err)
+	}
+	return head, nil
 }
 
 // baseRef prefers the remote-tracking branch of base, which is what the pull
