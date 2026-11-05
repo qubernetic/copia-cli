@@ -26,6 +26,7 @@ type ViewOptions struct {
 	Number     int64
 	JSON       cmdutil.JSONFlags
 	Comments   bool
+	Web        bool
 }
 
 type userRef struct {
@@ -55,7 +56,10 @@ func NewCmdView(f *cmdutil.Factory) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "view <number>",
 		Short: "View an issue",
-		Long:  "Display the title, body, and other information about an issue.",
+		Long: `Display the title, body, and other information about an issue.
+
+With --web, open the issue page in the browser instead. No API call is made,
+so no token is needed.`,
 		Example: `  # View an issue
   $ copia-cli issue view 12
 
@@ -63,9 +67,22 @@ func NewCmdView(f *cmdutil.Factory) *cobra.Command {
   $ copia-cli issue view 12 --comments
 
   # View as JSON
-  $ copia-cli issue view 12 --json number,title,state`,
+  $ copia-cli issue view 12 --json number,title,state
+
+  # Open the issue in the browser
+  $ copia-cli issue view 12 --web`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			num, err := strconv.ParseInt(args[0], 10, 64)
+			if err != nil {
+				return fmt.Errorf("invalid issue number: %s", args[0])
+			}
+			opts.Number = num
+
+			if opts.Web {
+				return shared.OpenIssue(f, num)
+			}
+
 			if opts.Comments {
 				opts.JSON.DropDefault()
 			}
@@ -73,11 +90,6 @@ func NewCmdView(f *cmdutil.Factory) *cobra.Command {
 				return fmt.Errorf("specify only one of --comments or --json")
 			}
 
-			num, err := strconv.ParseInt(args[0], 10, 64)
-			if err != nil {
-				return fmt.Errorf("invalid issue number: %s", args[0])
-			}
-			opts.Number = num
 			opts.IO = f.IOStreams
 
 			host, token, err := f.ResolveAuth()
@@ -99,6 +111,7 @@ func NewCmdView(f *cmdutil.Factory) *cobra.Command {
 	}
 
 	cmd.Flags().BoolVarP(&opts.Comments, "comments", "c", false, "View comments")
+	cmd.Flags().BoolVarP(&opts.Web, "web", "w", false, "Open the issue in the browser")
 	cmdutil.AddJSONFlags(cmd, &opts.JSON, validJSONFields)
 
 	return cmd

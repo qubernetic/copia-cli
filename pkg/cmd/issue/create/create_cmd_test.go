@@ -9,6 +9,7 @@ import (
 
 	"github.com/qubernetic/copia-cli/internal/config"
 	"github.com/qubernetic/copia-cli/pkg/cmdutil"
+	"github.com/qubernetic/copia-cli/pkg/cmdutil/browsertest"
 	"github.com/qubernetic/copia-cli/pkg/httpmock"
 	"github.com/qubernetic/copia-cli/pkg/iostreams"
 	"github.com/stretchr/testify/assert"
@@ -167,5 +168,87 @@ func TestCreateRun_InvalidHost(t *testing.T) {
 	opts, _ := runOpts(reg)
 	opts.Host = "bad\x7fhost"
 	require.Error(t, CreateRun(opts))
+	assert.Empty(t, reg.Requests)
+}
+
+func TestNewCmdCreate_Web(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		repo    string
+		tty     bool
+		wantURL string
+		wantErr string
+	}{
+		{name: "plain form", args: []string{"--web"}, wantURL: "https://app.copia.io/my-org/my-repo/issues/new"},
+		{name: "short flag", args: []string{"-w"}, wantURL: "https://app.copia.io/my-org/my-repo/issues/new"},
+		{name: "repo flag", args: []string{"-w"}, repo: "other-org/other-repo", wantURL: "https://app.copia.io/other-org/other-repo/issues/new"},
+		{name: "title", args: []string{"-w", "-t", "Fix sensor mapping"}, wantURL: "https://app.copia.io/my-org/my-repo/issues/new?title=Fix+sensor+mapping"},
+		{
+			name: "title and body", args: []string{"-w", "--title", "A&B", "--body", "line 1\nline 2"},
+			wantURL: "https://app.copia.io/my-org/my-repo/issues/new?body=line+1%0Aline+2&title=A%26B",
+		},
+		{
+			name: "tty", args: []string{"-w"}, tty: true,
+			wantURL: "https://app.copia.io/my-org/my-repo/issues/new",
+			wantErr: "Opening app.copia.io/my-org/my-repo/issues/new in your browser.\n",
+		},
+		{
+			name: "metadata is not applied", args: []string{"-w", "-l", "bug", "-a", "@me", "-m", "v1.0"},
+			wantURL: "https://app.copia.io/my-org/my-repo/issues/new",
+			wantErr: "warning: --label is not applied in the browser\n" +
+				"warning: --assignee is not applied in the browser\n" +
+				"warning: --milestone is not applied in the browser\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("COPIA_TOKEN", "")
+			reg := &httpmock.Registry{}
+			httpmock.ReplaceDefaultTransport(t, reg)
+
+			ios, _, stdout, stderr := iostreams.Test()
+			ios.SetStdoutTTY(tt.tty)
+			b := &browsertest.Browser{}
+			repo := tt.repo
+			if repo == "" {
+				repo = "my-org/my-repo"
+			}
+			f := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Repo: repo, Browser: b}
+
+			require.NoError(t, runCmd(t, f, tt.args...))
+			assert.Equal(t, []string{tt.wantURL}, b.URLs)
+			assert.Empty(t, stdout.String())
+			assert.Equal(t, tt.wantErr, stderr.String())
+			assert.Empty(t, reg.Requests)
+		})
+	}
+}
+
+func TestNewCmdCreate_WebErrors(t *testing.T) {
+	t.Setenv("COPIA_HOST", "")
+	reg := &httpmock.Registry{}
+	httpmock.ReplaceDefaultTransport(t, reg)
+	ios, _, _, _ := iostreams.Test()
+
+	b := &browsertest.Browser{}
+	f := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Repo: "my-org/my-repo", Browser: b}
+	err := runCmd(t, f, "--web", "--editor")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "none of the others can be")
+	assert.Empty(t, b.URLs)
+
+	noConfig := &cmdutil.Factory{IOStreams: ios, Repo: "my-org/my-repo", Browser: b,
+		Config: func() (*config.Config, error) { return nil, errors.New("no config") }}
+	require.EqualError(t, runCmd(t, noConfig, "-w"), "no config")
+
+	noRepo := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Browser: b}
+	err = runCmd(t, noRepo, "-w")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "could not determine repository")
+
+	failing := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Repo: "my-org/my-repo",
+		Browser: &browsertest.Browser{Err: errors.New("no browser")}}
+	require.EqualError(t, runCmd(t, failing, "-w"), "no browser")
 	assert.Empty(t, reg.Requests)
 }
