@@ -26,7 +26,7 @@ graph TB
     end
     subgraph Commands
         auth[auth: login/logout/status]
-        repo[repo: list/view/clone/create/delete/fork]
+        repo[repo: list/view/clone/create/delete/fork/set-default]
         issue[issue: list/create/view/close/comment/edit]
         pr[pr: list/create/view/merge/close/review/diff/checkout]
         label[label: list/create]
@@ -80,7 +80,7 @@ copia-cli/
 │   ├── api/client.go              # Gitea SDK wrapper
 │   ├── cmd/
 │   │   ├── auth/                  # login, logout, status
-│   │   ├── repo/                  # list, view, clone, create, delete, fork
+│   │   ├── repo/                  # list, view, clone, create, delete, fork, setdefault
 │   │   ├── issue/                 # list, create, view, close, comment, edit
 │   │   ├── pr/                    # list, create, view, merge, close, review, diff, checkout
 │   │   ├── label/                 # list, create
@@ -185,7 +185,7 @@ func xxxRun(opts *XxxOptions) error { ... }  // unexported, testable
 | Group | Subcommands | API Pattern |
 |-------|-------------|-------------|
 | `auth` | login, logout, status | Raw HTTP (no SDK) |
-| `repo` | list, view, clone, create, delete, fork | Raw HTTP + git exec |
+| `repo` | list, view, clone, create, delete, fork, set-default | Raw HTTP + git exec; `set-default` makes no API call |
 | `issue` | list, create, view, close, comment, edit | Raw HTTP |
 | `pr` | list, create, view, merge, close, review, diff, checkout | Raw HTTP + git exec |
 | `label` | list, create | Raw HTTP |
