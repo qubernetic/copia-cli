@@ -94,7 +94,7 @@ The other top-level keys beside `hosts` are the settings of `copia-cli config` (
 **Security considerations:**
 - File permissions are `600` (owner read/write only): every save writes a new `600` file to a temporary file beside it and renames it over the old one, so a failed save leaves the old file as it was. A save refuses a config path that is not a regular file (a symlink, for example) and a file the user cannot write; a config directory that group or others can write is set to `700`, and the save fails if that is not possible
 - On Windows, stored in `%USERPROFILE%\.config\copia\config.yml`
-- Token can also be set via `COPIA_TOKEN` environment variable, together with `COPIA_HOST` (or `--host`) naming the host it belongs to; without them it is ignored with a warning (see [Auth Precedence](#auth-precedence))
+- Token can also be set via `COPIA_TOKEN` environment variable, together with `COPIA_HOST` (or `--host`) naming the host it belongs to; without them, or with `--host` naming another host than `COPIA_HOST`, it is ignored with a warning (see [Auth Precedence](#auth-precedence))
 - Token can also be passed per-command via `--token` flag (takes highest precedence)
 
 ### Check the Auth Status
@@ -152,7 +152,7 @@ For `get` it reads git's `key=value` lines from standard input. When `protocol` 
 The host comes from `--host`, then `COPIA_HOST`, then the config's default host (`default_host`, or the alphabetically first host). The token comes from:
 
 1. `--token` flag (per-command)
-2. `COPIA_TOKEN` environment variable, only when the host came from `--host` or `COPIA_HOST`
+2. `COPIA_TOKEN` environment variable, only when the host came from `COPIA_HOST`, or from `--host` with `COPIA_HOST` unset or naming the same host
 3. The stored token of the active account of the active host: the config file (`~/.config/copia/config.yml`) first, then the OS keyring
 
 `COPIA_TOKEN` is bound to the host you name, so it never goes to a host the config picks: `auth logout`, `auth switch`, `auth login` and the alphabetical fallback all move the default host. When `COPIA_TOKEN` is set but the host comes from the config, the commands use the stored token and print once on standard error:
@@ -161,7 +161,15 @@ The host comes from `--host`, then `COPIA_HOST`, then the config's default host 
 warning: COPIA_TOKEN is ignored because no host is named; set COPIA_HOST (or --host) to the host the token belongs to
 ```
 
-When that host has no stored token, the `no token configured` error carries the same hint. The token value appears in no output or error.
+When that host has no stored token, the `no token configured` error carries the same hint.
+
+`COPIA_HOST` names the host `COPIA_TOKEN` belongs to, so `--host` naming another host does not take the token along. The same host means the host name regardless of case and the same port, a missing port counting as 443: `a.example.com` and `A.example.com:443` are the same host, `a.example.com:8443` is another one. A host that does not parse as a host name with an optional port is never the same host. In that case the commands use the stored token of the `--host` host and print once on standard error:
+
+```text
+warning: COPIA_TOKEN is ignored because --host names another host than COPIA_HOST; the token is sent only to the host COPIA_HOST names
+```
+
+When the `--host` host has no stored token, the `no token configured` error carries the same hint. The token value appears in no output or error.
 
 `auth git-credential` (see [Use the Token with git](#use-the-token-with-git)) follows none of this: it answers git for the host git asks about, with that host's stored token.
 

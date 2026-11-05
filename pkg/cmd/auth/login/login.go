@@ -54,7 +54,10 @@ Use --insecure-storage to store it in the config file on purpose.
 Token precedence: --token flag > COPIA_TOKEN env var, only when --host or
 COPIA_HOST names the host > the stored token of the host's active account
 (config file, then OS keyring). With the host taken from the config,
-COPIA_TOKEN is ignored with a warning.`,
+COPIA_TOKEN is ignored with a warning. It is also ignored with a warning
+when --host names another host than COPIA_HOST (host name regardless of
+case, a missing port counting as 443), since the token belongs to the host
+COPIA_HOST names.`,
 		Example: `  # Interactive login
   $ copia-cli auth login
 
