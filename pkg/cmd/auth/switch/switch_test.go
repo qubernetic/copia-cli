@@ -382,6 +382,9 @@ func TestSwitchRun_FileError(t *testing.T) {
 	}
 }
 
+// envTokenWarning is what auth switch prints while COPIA_TOKEN is set.
+const envTokenWarning = "warning: COPIA_TOKEN applies only with COPIA_HOST (or --host); without it commands use the token of the active account\n"
+
 func TestSwitchRun_TokenFromEnvironment(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yml")
 	require.NoError(t, os.WriteFile(path, []byte(twoAccountsOneHost), 0600))
@@ -391,13 +394,13 @@ func TestSwitchRun_TokenFromEnvironment(t *testing.T) {
 	ios, _, stdout, stderr := iostreams.Test()
 	require.NoError(t, switchRun(&SwitchOptions{IO: ios, ConfigPath: path}))
 	assert.Equal(t, "Switched active account for a.example.com to jane\n", stdout.String())
-	assert.Equal(t, "warning: COPIA_TOKEN is set and is used instead of the token of the active account\n", stderr.String())
+	assert.Equal(t, envTokenWarning, stderr.String())
 	assert.NotContains(t, stderr.String(), "env-token")
 }
 
 func TestSwitchRun_TokenFromEnvironmentOtherHost(t *testing.T) {
-	// COPIA_TOKEN goes to the default host, so moving default_host would send
-	// it to a host it was not issued for.
+	// COPIA_TOKEN applies only to the host COPIA_HOST names, so moving
+	// default_host to another host does not send it there.
 	tests := []struct {
 		name   string
 		config string
@@ -415,14 +418,14 @@ func TestSwitchRun_TokenFromEnvironmentOtherHost(t *testing.T) {
 			t.Setenv("COPIA_TOKEN", "env-token")
 
 			ios, _, stdout, stderr := iostreams.Test()
-			err := switchRun(&SwitchOptions{IO: ios, Host: tt.host, ConfigPath: path})
-			require.EqualError(t, err, "COPIA_TOKEN is set and is sent to the default host a.example.com; unset it before switching to an account on b.example.com")
-			assert.NotContains(t, err.Error(), "env-token")
-			assert.Empty(t, stdout.String())
-			assert.Empty(t, stderr.String())
-			data, err := os.ReadFile(path)
+			require.NoError(t, switchRun(&SwitchOptions{IO: ios, Host: tt.host, ConfigPath: path}))
+			assert.Contains(t, stdout.String(), "Switched active account for b.example.com to ")
+			assert.Equal(t, envTokenWarning, stderr.String())
+			assert.NotContains(t, stdout.String(), "env-token")
+			cfg, err := config.Load(path)
 			require.NoError(t, err)
-			assert.Equal(t, tt.config, string(data))
+			defaultHost, _ := cfg.DefaultHost()
+			assert.Equal(t, "b.example.com", defaultHost)
 		})
 	}
 }
@@ -437,5 +440,5 @@ func TestSwitchRun_TokenAndHostFromEnvironment(t *testing.T) {
 	ios, _, stdout, stderr := iostreams.Test()
 	require.NoError(t, switchRun(&SwitchOptions{IO: ios, ConfigPath: path}))
 	assert.Equal(t, "Switched active account for b.example.com to u2\n", stdout.String())
-	assert.Equal(t, "warning: COPIA_TOKEN is set and is used instead of the token of the active account\n", stderr.String())
+	assert.Equal(t, envTokenWarning, stderr.String())
 }
