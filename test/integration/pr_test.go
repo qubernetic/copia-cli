@@ -253,6 +253,22 @@ func TestPR_UpdateBranch(t *testing.T) {
 	}
 	updated := fmt.Sprintf("Updated the branch of pull request %s (%s)\n", ref, title)
 
+	// The up-to-date check of the command relies on the compare endpoint.
+	compare := func(basehead string) int {
+		t.Helper()
+		status, data := apiCall(t, env, "compare", "GET",
+			fmt.Sprintf("/repos/%s/%s/compare/%s", env.Owner, env.Repo, basehead), nil)
+		assertStatusCode(t, status, http.StatusOK)
+		var cmp struct {
+			TotalCommits *int `json:"total_commits"`
+		}
+		require.NoError(t, json.Unmarshal(data, &cmp))
+		require.True(t, cmp.TotalCommits != nil, "compare response has no total_commits")
+		return *cmp.TotalCommits
+	}
+	require.True(t, compare(pr.Base+"..."+pr.Head) == 1, "compare base...head: want 1 commit")
+	require.True(t, compare(pr.Head+"..."+pr.Base) == 0, "compare head...base: want 0 commits")
+
 	out, errOut := update(false)
 	assertOutputEmpty(t, out)
 	assertOutputEqual(t, errOut, fmt.Sprintf("! The branch of pull request %s (%s) is already up to date\n", ref, title))
