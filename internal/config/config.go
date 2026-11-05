@@ -349,3 +349,24 @@ func (c *Config) RemoveAccount(host, user string) string {
 	c.Hosts[host] = hc
 	return hc.User
 }
+
+// SwitchAccount makes user the active account of host and host the default
+// host. An unknown host or account changes nothing, and so does a host whose
+// old-shape token has no login: saving would bind that token to user.
+func (c *Config) SwitchAccount(host, user string) error {
+	hc := c.Hosts[host]
+	if hc == nil {
+		return fmt.Errorf("not logged in to %s", host)
+	}
+	if hc.User == "" && hc.Token != "" {
+		return fmt.Errorf("the token of %s has no account; run auth login", host)
+	}
+	hc = hc.migrated()
+	if _, ok := hc.Users[user]; !ok {
+		return fmt.Errorf("not logged in to %s account %s", host, user)
+	}
+	hc.User = user
+	c.Hosts[host] = hc
+	c.DefaultHostName = host
+	return nil
+}

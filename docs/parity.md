@@ -17,12 +17,13 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 | `gh auth login` | Full | `copia-cli auth login` | [x] |
 | `gh auth logout` | Full | `copia-cli auth logout` | [x] |
 | `gh auth status` | Full | `copia-cli auth status` | [x] |
+| `gh auth switch` | Full | `copia-cli auth switch` | [x] |
 | `gh auth token` | Full | `copia-cli auth token` | [ ] |
 | `gh auth setup-git` | None | n/a | — |
 
 The default host is the top-level config key `default_host`, which `auth login` sets to the host it logs in to; gh has no such key and defaults to `github.com` (or its only host) unless `GH_HOST` is set. The host order is `--host`, `COPIA_HOST`, `default_host`, then the alphabetically first host; `auth logout` of the default host moves `default_host` to the alphabetically first remaining host. `auth status` lists the hosts in alphabetical order and marks the default one with `(default)`.
 
-Several accounts per host follow gh: the host entry holds `users.<login>` (a `token` only for file storage) and `user`, the active account, whose token the commands use; a config of the old shape (`token` and `user` under the host) is read as one account and saved in the new shape. `auth login` adds or updates the account and makes it active, `auth logout --user/-u <login>` removes one account (without `--user` the active one; with several accounts gh asks which one on a terminal and fails otherwise, copia-cli has no prompts), and the alphabetically first remaining account becomes active with gh's `Switched active account for <host> to <login>`. `auth status` lists every account per host, the active one first, with `Active account: true/false` as gh does. The keyring has one entry per account (service `copia-cli:<host>`, account = the login); gh also keeps an entry for the active account under an empty account name, copia-cli does not. `auth switch` is not implemented yet (#421).
+Several accounts per host follow gh: the host entry holds `users.<login>` (a `token` only for file storage) and `user`, the active account, whose token the commands use; a config of the old shape (`token` and `user` under the host) is read as one account and saved in the new shape. `auth login` adds or updates the account and makes it active, `auth logout --user/-u <login>` removes one account (without `--user` the active one; with several accounts gh asks which one on a terminal and fails otherwise, copia-cli has no prompts), and the alphabetically first remaining account becomes active with gh's `Switched active account for <host> to <login>`. `auth status` lists every account per host, the active one first, with `Active account: true/false` as gh does. The keyring has one entry per account (service `copia-cli:<host>`, account = the login); gh also keeps an entry for the active account under an empty account name, copia-cli does not. `auth switch` follows gh's choice of the account: `--host` and `--user/-u` narrow the accounts, one remaining account is switched to, and of two the one not in use (gh: on one host only; copia-cli also toggles between two hosts, the account in use being the active account of the default host). Where gh asks on a terminal, copia-cli has no prompts and fails with the list of accounts as `<host> <login>` lines. gh only changes the active account; copia-cli also sets `default_host` to the account's host, since gh has no default host. gh refuses to switch while `GH_TOKEN` is set for the host; copia-cli refuses a switch to an account on another host while `COPIA_TOKEN` is set and `COPIA_HOST` is not (the token would go to the new default host), and within the default host it switches and warns that `COPIA_TOKEN` still takes precedence.
 
 Token storage follows gh: `auth login` stores the token in the OS keyring (go-keyring, service `copia-cli:<host>` where gh uses `gh:<host>`, account = the login, every call bounded by a three-second timeout as in gh's `internal/keyring`) and falls back to the config file with a warning on standard error when the keyring fails; `--insecure-storage` writes the config file on request. The stored token is read from the config file first, then from the keyring, as gh does; `auth logout` deletes it from both. `auth status` adds the source to the token line (`Token: **** (keyring)` or `(config file)`), where gh prints it after the account (`(keyring)` or `(<path to hosts.yml>)`). The snap has no `password-manager-service` plug, so it always falls back to the config file.
 
@@ -204,10 +205,10 @@ Client side, no API call. Aliases are stored under the top-level key `aliases` o
 
 | Status | Count |
 |--------|-------|
-| Implemented | 61 |
+| Implemented | 62 |
 | Not yet implemented (Full parity) | 12 |
 | Not yet implemented (Partial) | 6 |
 | No equivalent | 13 |
-| **Total implementable** | **79** |
+| **Total implementable** | **80** |
 
 Counted from the rows above: every `[x]` row, and every other row by its Parity value. The Parity values follow the Gitea 1.26 API (`release/v1.26` swagger); `TestAPI_Version` in `test/integration/api_test.go` logs what Copia's `GET /version` reports in the PR `integration` job. On 2026-11-04 that was `0.59.0`, Copia's own version number, not a Gitea release, so the API does not show which Gitea version Copia is built on; a command's integration test shows whether Copia serves its endpoint.

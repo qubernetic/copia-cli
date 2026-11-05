@@ -51,6 +51,13 @@ The commands read the stored token from the config file first, then from the key
 copia-cli auth logout --host app.copia.io --user john
 ```
 
+`auth switch` makes another stored account active and its host the default host, then prints `Switched active account for <host> to <login>`. `--host` and `--user` (`-u`) name the account. `--host` alone is enough when the host has one account (the host becomes the default host) or two (the other one becomes active). Without flags it switches to the other account when exactly two accounts are stored in total, on one host or on two. Otherwise it fails and lists the stored accounts, one `<host> <login>` per line, so you can pick one with `--host` and `--user`; there is no prompt. An unknown host or login fails and leaves the config file as it was. No token is read or moved, and `COPIA_TOKEN` still beats the token of the active account (a warning says so when it is set). `COPIA_TOKEN` is sent to the default host when `COPIA_HOST` is not set, so while it is set without `COPIA_HOST`, `auth switch` refuses to switch to an account on another host and leaves the config file as it was; unset `COPIA_TOKEN` first. A host entry of the old shape with a token but no login cannot be switched on; run `auth login` for that host first.
+
+```bash
+copia-cli auth switch
+copia-cli auth switch --host app.copia.io --user john
+```
+
 The config file is `~/.config/copia/config.yml`:
 
 ```yaml
@@ -72,7 +79,7 @@ aliases:
 
 A host keeps several accounts, as in gh: `users` holds every account by its login (with a `token` key only when that token is stored in the config file), and `user` names the active account, whose token the commands use. A config of an older version, with `token` and `user` directly under the host, is read as one account and written in the new shape on the next save.
 
-`default_host` names the host the commands use when neither `--host` nor `COPIA_HOST` is given. `auth login` sets it to the host it logs in to, and `auth logout` of that host moves it to the alphabetically first remaining host, or removes it when none remains. When it is unset (a config of an older version) or names a host that is no longer in `hosts`, the alphabetically first host is the default.
+`default_host` names the host the commands use when neither `--host` nor `COPIA_HOST` is given. `auth login` sets it to the host it logs in to, `auth switch` to the host of the account it switches to, and `auth logout` of that host moves it to the alphabetically first remaining host, or removes it when none remains. When it is unset (a config of an older version) or names a host that is no longer in `hosts`, the alphabetically first host is the default.
 
 The other top-level keys beside `hosts` are the settings of `copia-cli config` (`output`, `browser`, `pager`, `editor`); `config set` changes one of them and keeps `hosts` and the tokens as they are. Every save keeps the keys copia-cli does not know, at the top level and under a host (such as `default_org` above), and writes them back unchanged.
 
