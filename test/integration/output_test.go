@@ -18,6 +18,8 @@ import (
 // temporary config file that holds output: json and no --json flag.
 func TestOutput_ConfigJSON(t *testing.T) {
 	env := loadTestEnv(t)
+	// An issue, so the table output is not empty either.
+	createIssue(t, env, "[integration-test] output")
 
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)

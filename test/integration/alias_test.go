@@ -17,6 +17,8 @@ import (
 // once with placeholders.
 func TestAlias_IssueList(t *testing.T) {
 	env := loadTestEnv(t)
+	// -L 1 prints one issue only if the run repository has one.
+	createIssue(t, env, "[integration-test] alias")
 
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)

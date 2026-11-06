@@ -6,12 +6,14 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -26,23 +28,37 @@ type testEnv struct {
 	Repo  string
 }
 
+// runRepo is the repository the tests of this run use, created by the first
+// loadTestEnv and deleted by TestMain after the run.
+var runRepo struct {
+	once sync.Once
+	name string
+	err  error
+}
+
 func loadTestEnv(t *testing.T) testEnv {
 	t.Helper()
 
 	host := os.Getenv("COPIA_TEST_HOST")
 	token := os.Getenv("COPIA_TEST_TOKEN")
 	owner := os.Getenv("COPIA_TEST_OWNER")
-	repo := os.Getenv("COPIA_TEST_REPO")
 
-	if host == "" || token == "" || owner == "" || repo == "" {
-		t.Skip("Integration test env vars not set (COPIA_TEST_HOST, COPIA_TEST_TOKEN, COPIA_TEST_OWNER, COPIA_TEST_REPO)")
+	if host == "" || token == "" || owner == "" {
+		t.Skip("Integration test env vars not set (COPIA_TEST_HOST, COPIA_TEST_TOKEN, COPIA_TEST_OWNER)")
+	}
+
+	runRepo.once.Do(func() {
+		runRepo.name, runRepo.err = setUpRunRepo(newAPI(host, token), owner, time.Now())
+	})
+	if runRepo.err != nil {
+		t.Fatalf("set up the run repository: %v", runRepo.err)
 	}
 
 	return testEnv{
 		Host:  host,
 		Token: token,
 		Owner: owner,
-		Repo:  repo,
+		Repo:  runRepo.name,
 	}
 }
 
@@ -62,32 +78,65 @@ func testHTTPClient() *http.Client {
 // show the status but never the body.
 func apiCall(t *testing.T, env testEnv, step, method, path string, payload any) (int, []byte) {
 	t.Helper()
-	var body io.Reader
-	if payload != nil {
-		data, err := json.Marshal(payload)
-		if err != nil {
-			t.Fatalf("%s: encode request: %v", step, err)
+	status, data, err := newAPI(env.Host, env.Token)(method, path, payload)
+	if err != nil {
+		t.Fatalf("%s: %v", step, err)
+	}
+	return status, data
+}
+
+// newAPI returns the apiFunc of host with token. Its errors name neither the
+// URL nor the response, which hold the owner and the repository.
+func newAPI(host, token string) apiFunc {
+	client := &http.Client{Timeout: 2 * time.Minute}
+	return func(method, path string, payload any) (int, []byte, error) {
+		var body io.Reader
+		if payload != nil {
+			data, err := json.Marshal(payload)
+			if err != nil {
+				return 0, nil, errors.New("encode request")
+			}
+			body = bytes.NewReader(data)
 		}
-		body = bytes.NewReader(data)
+		req, err := http.NewRequest(method, "https://"+host+"/api/v1"+path, body)
+		if err != nil {
+			return 0, nil, errors.New("build request")
+		}
+		req.Header.Set("Authorization", "token "+token)
+		if payload != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return 0, nil, errors.New("request failed")
+		}
+		defer func() { _ = resp.Body.Close() }()
+		data, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return 0, nil, errors.New("read response")
+		}
+		return resp.StatusCode, data, nil
 	}
-	req, err := http.NewRequest(method, fmt.Sprintf("https://%s/api/v1%s", env.Host, path), body)
-	if err != nil {
-		t.Fatalf("%s: build request: %v", step, err)
+}
+
+// createIssue opens an issue with title in the run repository and returns
+// its number. The issue goes with the repository at the end of the run.
+func createIssue(t *testing.T, env testEnv, title string) int64 {
+	t.Helper()
+	status, data := apiCall(t, env, "create issue", "POST", fmt.Sprintf("/repos/%s/%s/issues", env.Owner, env.Repo), map[string]string{
+		"title": title,
+		"body":  "Created by the integration tests.",
+	})
+	if status != http.StatusCreated {
+		t.Fatalf("create issue: status %d, want %d", status, http.StatusCreated)
 	}
-	req.Header.Set("Authorization", "token "+env.Token)
-	if payload != nil {
-		req.Header.Set("Content-Type", "application/json")
+	var issue struct {
+		Number int64 `json:"number"`
 	}
-	resp, err := testHTTPClient().Do(req)
-	if err != nil {
-		t.Fatalf("%s: request failed", step)
+	if err := json.Unmarshal(data, &issue); err != nil || issue.Number < 1 {
+		t.Fatal("create issue: no number in the response")
 	}
-	defer func() { _ = resp.Body.Close() }()
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("%s: read response", step)
-	}
-	return resp.StatusCode, data
+	return issue.Number
 }
 
 // prFixture is a pull request between two branches the test created.
