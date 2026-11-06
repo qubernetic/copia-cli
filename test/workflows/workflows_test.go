@@ -1307,13 +1307,13 @@ const slowestRun = `gotestsum tool slowest --jsonfile "` + timingFile + `"`
 const notCancelled = "!cancelled()" //nolint:misspell // the GitHub Actions function name
 
 // quietFormats are the gotestsum formats that print no output of a passing
-// test.
+// test. testname is not one: on a runner (GITHUB_ACTIONS=true) gotestsum
+// switches it to github-actions, which prints the output of every test.
 var quietFormats = map[string]bool{
 	"dots":                   true,
 	"dots-v2":                true,
 	"pkgname":                true,
 	"pkgname-and-test-fails": true,
-	"testname":               true,
 }
 
 // jsonFlag matches the go test flag that prints every event, output included.
@@ -1404,13 +1404,16 @@ func TestIntegrationRunViolations(t *testing.T) {
 		want int
 	}{
 		{"good", good, 0},
-		{"flags with =", `gotestsum --format=testname --hide-summary=failed,skipped --jsonfile-timing-events="` + timingFile + `" -- -timeout=30m ./...`, 0},
+		{"flags with =", `gotestsum --format=pkgname-and-test-fails --hide-summary=failed,skipped --jsonfile-timing-events="` + timingFile + `" -- -timeout=30m ./...`, 0},
 		{"plain go test", "go test -tags=integration -timeout 30m ./...", 1},
 		{"gotestsum twice", good + "\n" + good, 1},
 		{"verbose go test", strings.Replace(good, "-- ", "-- -v ", 1), 1},
 		{"json go test", strings.Replace(good, "-- ", "-- -json ", 1), 1},
 		{"loud format", strings.Replace(good, "pkgname", "standard-verbose", 1), 1},
 		{"github-actions format", strings.Replace(good, "pkgname", "github-actions", 1), 1},
+		// gotestsum switches testname to github-actions when GITHUB_ACTIONS is
+		// true, as on every runner.
+		{"testname format", strings.Replace(good, "pkgname", "testname", 1), 1},
 		{"no format", strings.Replace(good, "--format pkgname ", "", 1), 1},
 		{"short format flag", strings.Replace(good, "--format", "-f", 1), 2},
 		{"skipped summary shown", strings.Replace(good, "--hide-summary skipped ", "", 1), 1},
