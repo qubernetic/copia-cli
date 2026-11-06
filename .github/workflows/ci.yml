@@ -5,6 +5,8 @@ on:
     branches: [main, develop]
   pull_request:
     branches: [main, develop, 'epic/**']
+    # ready_for_review starts the integration job a draft skipped.
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
@@ -130,7 +132,14 @@ jobs:
             exit 1
           fi
 
+  # Ready pull requests only, one run at a time per pull request: every run
+  # adds fixtures to the shared test repository, and a cancelled run would
+  # skip its t.Cleanup, so a newer push waits instead of cancelling.
   integration:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    concurrency:
+      group: integration-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

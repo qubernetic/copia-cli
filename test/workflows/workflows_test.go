@@ -1622,6 +1622,191 @@ jobs:
 	}
 }
 
+// gateWorkflow is the part of an integration workflow
+// integrationGateViolations reads.
+type gateWorkflow struct {
+	On   any `yaml:"on"`
+	Jobs map[string]struct {
+		If          string `yaml:"if"`
+		Concurrency any    `yaml:"concurrency"`
+	} `yaml:"jobs"`
+}
+
+// readyPullRequest skips the integration job on a draft pull request and runs
+// it on every other event.
+const readyPullRequest = "github.event_name != 'pull_request' || !github.event.pull_request.draft"
+
+// pullRequestTypes start CI on a new, pushed, reopened or ready pull request;
+// without ready_for_review a draft marked ready would get no integration run.
+var pullRequestTypes = []string{"opened", "synchronize", "reopened", "ready_for_review"}
+
+// integrationGateViolations lists what lets the integration job of a workflow
+// run more often than once at a time per pull request or ref: the job sits in
+// the concurrency group named group and never cancels a running job, whose
+// t.Cleanup would then leave fixture pull requests and branches behind. When
+// pr is set or the workflow runs on pull_request, the job skips drafts and the event lists
+// pullRequestTypes, so marking a draft ready starts the run.
+func integrationGateViolations(file, group string, pr bool, data []byte) ([]string, error) {
+	var wf gateWorkflow
+	if err := yaml.Unmarshal(data, &wf); err != nil {
+		return nil, fmt.Errorf("%s: %w", file, err)
+	}
+	job, ok := wf.Jobs["integration"]
+	if !ok {
+		return []string{fmt.Sprintf("%s: no job integration", file)}, nil
+	}
+	var out []string
+	c, _ := job.Concurrency.(map[string]any)
+	if g, _ := c["group"].(string); g != group {
+		out = append(out, fmt.Sprintf("%s: job integration concurrency group is %v, want %s", file, c["group"], group))
+	}
+	if cancel, isBool := c["cancel-in-progress"].(bool); !isBool || cancel {
+		out = append(out, fmt.Sprintf("%s: job integration concurrency cancel-in-progress is %v, want false", file, c["cancel-in-progress"]))
+	}
+	types, onPR := pullRequestTypesOf(wf.On)
+	if !onPR {
+		if pr {
+			out = append(out, fmt.Sprintf("%s: no pull_request trigger", file))
+		}
+		return out, nil
+	}
+	cond := strings.Join(strings.Fields(job.If), " ")
+	if cond != "${{ "+readyPullRequest+" }}" && cond != readyPullRequest {
+		out = append(out, fmt.Sprintf("%s: job integration runs if %q, want %s", file, job.If, readyPullRequest))
+	}
+	for _, typ := range pullRequestTypes {
+		if !slices.Contains(types, typ) {
+			out = append(out, fmt.Sprintf("%s: pull_request types lack %s", file, typ))
+		}
+	}
+	return out, nil
+}
+
+// pullRequestTypesOf reads the on: key of a workflow in any of its forms
+// (event name, list of names, map of events) and reports whether it holds
+// pull_request and which activity types that event lists.
+func pullRequestTypesOf(on any) ([]string, bool) {
+	switch v := on.(type) {
+	case string:
+		return nil, v == "pull_request"
+	case []any:
+		return nil, slices.Contains(v, any("pull_request"))
+	case map[string]any:
+		event, ok := v["pull_request"]
+		if !ok {
+			return nil, false
+		}
+		m, _ := event.(map[string]any)
+		var types []string
+		switch t := m["types"].(type) {
+		case string:
+			types = append(types, t)
+		case []any:
+			for _, typ := range t {
+				s, _ := typ.(string)
+				types = append(types, s)
+			}
+		}
+		return types, true
+	}
+	return nil, false
+}
+
+// TestIntegrationRunsOnReadyPullRequests keeps the integration job, which
+// cannot run locally and adds fixtures to the shared test repository on every
+// run, off draft pull requests, and runs at most one integration job per pull
+// request or ref at a time, so two runs never share the test account.
+func TestIntegrationRunsOnReadyPullRequests(t *testing.T) {
+	for _, w := range []struct {
+		file, group string
+		pr          bool
+	}{
+		{"ci.yml", "integration-${{ github.event.pull_request.number || github.ref }}", true},
+		{"integration-scheduled.yml", "integration-${{ github.ref }}", false},
+	} {
+		data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", w.file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		offenders, err := integrationGateViolations(w.file, w.group, w.pr, data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, o := range offenders {
+			t.Error(o)
+		}
+	}
+}
+
+func TestIntegrationGateViolations(t *testing.T) {
+	const group = "integration-${{ github.event.pull_request.number || github.ref }}"
+	const good = `
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+jobs:
+  integration:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    concurrency:
+      group: ` + group + `
+      cancel-in-progress: false
+`
+	const scheduled = `
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+jobs:
+  integration:
+    concurrency:
+      group: ` + group + `
+      cancel-in-progress: false
+`
+	jobs := scheduled[strings.Index(scheduled, "jobs:"):]
+	tests := []struct {
+		name string
+		yaml string
+		pr   bool
+		want int
+	}{
+		{"good", good, true, 0},
+		{"braced condition", strings.Replace(good, "if: github.event_name != 'pull_request' || !github.event.pull_request.draft", "if: ${{ github.event_name != 'pull_request' ||  !github.event.pull_request.draft }}", 1), true, 0},
+		{"no condition", strings.Replace(good, "    if: github.event_name != 'pull_request' || !github.event.pull_request.draft\n", "", 1), true, 1},
+		{"draft only on pull_request", strings.Replace(good, "github.event_name != 'pull_request' || ", "", 1), true, 1},
+		{"no types", strings.Replace(good, "    types: [opened, synchronize, reopened, ready_for_review]\n", "    branches: [main]\n", 1), true, 4},
+		{"no ready_for_review", strings.Replace(good, ", ready_for_review", "", 1), true, 1},
+		{"no synchronize", strings.Replace(good, " synchronize,", "", 1), true, 1},
+		{"cancel in progress", strings.Replace(good, "cancel-in-progress: false", "cancel-in-progress: true", 1), true, 1},
+		{"cancel in progress unset", strings.Replace(good, "      cancel-in-progress: false\n", "", 1), true, 1},
+		{"cancel in progress expression", strings.Replace(good, "cancel-in-progress: false", "cancel-in-progress: ${{ false }}", 1), true, 1},
+		{"other group", strings.Replace(good, "group: integration-", "group: ci-", 1), true, 1},
+		{"group as string", strings.Replace(good, "    concurrency:\n      group: "+group+"\n      cancel-in-progress: false\n", "    concurrency: "+group+"\n", 1), true, 2},
+		{"no concurrency", strings.Replace(good, "    concurrency:\n      group: "+group+"\n      cancel-in-progress: false\n", "", 1), true, 2},
+		{"scheduled", scheduled, false, 0},
+		{"scheduled without concurrency", strings.Replace(scheduled, "    concurrency:\n      group: "+group+"\n      cancel-in-progress: false\n", "    runs-on: ubuntu-latest\n", 1), false, 2},
+		{"scheduled on a pull request", strings.Replace(scheduled, "  schedule:\n    - cron: \"0 6 * * 1\"\n", "  pull_request:\n", 1), false, 5},
+		{"pull request workflow without pull_request", scheduled, true, 1},
+		{"single type", strings.Replace(good, "[opened, synchronize, reopened, ready_for_review]", "ready_for_review", 1), true, 3},
+		{"pull_request by name", "on: pull_request\n" + jobs, false, 5},
+		{"pull_request in a list", "on: [push, pull_request]\n" + jobs, false, 5},
+		{"push by name", "on: push\n" + jobs, false, 0},
+		{"no integration job", strings.Replace(good, "  integration:", "  other:", 1), true, 1},
+	}
+	for _, tt := range tests {
+		got, err := integrationGateViolations("test.yml", group, tt.pr, []byte(tt.yaml))
+		if err != nil {
+			t.Fatalf("%s: %v", tt.name, err)
+		}
+		if len(got) != tt.want {
+			t.Errorf("%s: integrationGateViolations() = %q, want %d violations", tt.name, got, tt.want)
+		}
+	}
+	if _, err := integrationGateViolations("test.yml", group, true, []byte("jobs: [")); err == nil {
+		t.Error("integrationGateViolations() succeeded on invalid YAML, want error")
+	}
+}
+
 // snapWorkflow is the part of snap.yml snapViolations reads.
 type snapWorkflow struct {
 	Env  any `yaml:"env"`
