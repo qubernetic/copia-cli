@@ -673,6 +673,118 @@ runs:
 	}
 }
 
+// scanRunners returns one message per runner label ending in `-latest`, in
+// any case, in every file walkRepo visits: a job's `runs-on` (a label, a list
+// or a mapping such as `labels:`) and every value of its `strategy.matrix`,
+// which `runs-on` may read through an expression.
+func scanRunners(repo string) ([]string, error) {
+	return walkRepo(repo, func(file string, data []byte, _ actionFile) ([]string, error) {
+		var doc yaml.Node
+		if err := yaml.Unmarshal(data, &doc); err != nil {
+			return nil, fmt.Errorf("%s: %w", file, err)
+		}
+		if len(doc.Content) == 0 {
+			return nil, nil
+		}
+		jobs := mappingValue(doc.Content[0], "jobs")
+		if jobs == nil || jobs.Kind != yaml.MappingNode {
+			return nil, nil
+		}
+		var offenders []string
+		var check func(where string, n *yaml.Node)
+		check = func(where string, n *yaml.Node) {
+			if n == nil {
+				return
+			}
+			if n.Kind == yaml.ScalarNode {
+				if strings.HasSuffix(strings.ToLower(strings.TrimSpace(n.Value)), "-latest") {
+					offenders = append(offenders, fmt.Sprintf("%s: %s %s; pin the runner to a named image such as ubuntu-24.04", file, where, strings.TrimSpace(n.Value)))
+				}
+				return
+			}
+			for i, c := range n.Content {
+				if n.Kind == yaml.MappingNode && i%2 == 0 {
+					continue
+				}
+				check(where, c)
+			}
+		}
+		names := make([]string, 0, len(jobs.Content)/2)
+		for j := 0; j+1 < len(jobs.Content); j += 2 {
+			names = append(names, jobs.Content[j].Value)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			job := mappingValue(jobs, name)
+			where := fmt.Sprintf("job %q", name)
+			check(where+" runs-on", mappingValue(job, "runs-on"))
+			check(where+" strategy.matrix", mappingValue(mappingValue(job, "strategy"), "matrix"))
+		}
+		return offenders, nil
+	})
+}
+
+// TestRunnersArePinned keeps every job on a named runner image: a `-latest`
+// label moves the image under the job without a commit.
+func TestRunnersArePinned(t *testing.T) {
+	offenders, err := scanRunners(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range offenders {
+		t.Error(o)
+	}
+}
+
+func TestScanRunners(t *testing.T) {
+	got, err := scanRunners(writeRepo(t, map[string]string{
+		".github/workflows/ci.yml": `
+jobs:
+  call:
+    uses: ./.github/workflows/reusable.yml
+  label:
+    runs-on: ubuntu-latest
+  list:
+    runs-on: [self-hosted, Ubuntu-Latest]
+  group:
+    runs-on:
+      group: runners
+      labels: [ubuntu-latest ]
+  matrix:
+    strategy:
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+        include:
+          - os: macos-latest
+    runs-on: ${{ matrix.os }}
+  pinned:
+    runs-on: ubuntu-24.04
+`,
+		".github/workflows/reusable.yml": `
+jobs:
+  inner:
+    runs-on: ubuntu-latest
+`,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		`.github/workflows/ci.yml: job "group" runs-on ubuntu-latest; pin the runner to a named image such as ubuntu-24.04`,
+		`.github/workflows/ci.yml: job "label" runs-on ubuntu-latest; pin the runner to a named image such as ubuntu-24.04`,
+		`.github/workflows/ci.yml: job "list" runs-on Ubuntu-Latest; pin the runner to a named image such as ubuntu-24.04`,
+		`.github/workflows/ci.yml: job "matrix" strategy.matrix windows-latest; pin the runner to a named image such as ubuntu-24.04`,
+		`.github/workflows/ci.yml: job "matrix" strategy.matrix macos-latest; pin the runner to a named image such as ubuntu-24.04`,
+		`.github/workflows/reusable.yml: job "inner" runs-on ubuntu-latest; pin the runner to a named image such as ubuntu-24.04`,
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("scanRunners() =\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	if _, err := scanRunners(t.TempDir()); err == nil {
+		t.Error("scanRunners() succeeded without workflow files, want error")
+	}
+}
+
 func TestUnpinnedUses(t *testing.T) {
 	const sha = "3d3c42e5aac5ba805825da76410c181273ba90b1"
 	step := func(uses string) string {
