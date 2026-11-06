@@ -31,7 +31,6 @@ jobs:
           COPIA_TEST_TOKEN: ${{ secrets.COPIA_TEST_TOKEN }}
           COPIA_TEST_HOST: ${{ secrets.COPIA_TEST_HOST }}
           COPIA_TEST_OWNER: ${{ secrets.COPIA_TEST_OWNER }}
-          COPIA_TEST_REPO: ${{ secrets.COPIA_TEST_REPO }}
 
       # Names and durations only, also after a failure or the -timeout panic.
       - name: Slowest tests
@@ -44,7 +43,6 @@ jobs:
           COPIA_TEST_TOKEN: ${{ secrets.COPIA_TEST_TOKEN }}
           COPIA_TEST_HOST: ${{ secrets.COPIA_TEST_HOST }}
           COPIA_TEST_OWNER: ${{ secrets.COPIA_TEST_OWNER }}
-          COPIA_TEST_REPO: ${{ secrets.COPIA_TEST_REPO }}
 
   report-failure:
     needs: integration

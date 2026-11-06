@@ -7,15 +7,16 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/qubernetic/copia-cli/pkg/cmdutil"
 	searchissues "github.com/qubernetic/copia-cli/pkg/cmd/search/issues"
 	searchprs "github.com/qubernetic/copia-cli/pkg/cmd/search/prs"
 	searchrepos "github.com/qubernetic/copia-cli/pkg/cmd/search/repos"
+	"github.com/qubernetic/copia-cli/pkg/cmdutil"
 )
 
 func TestSearchRepos_Run(t *testing.T) {
@@ -27,32 +28,47 @@ func TestSearchRepos_Run(t *testing.T) {
 		HTTPClient: &http.Client{},
 		Host:       env.Host,
 		Token:      env.Token,
-		Query:      "integration",
+		Query:      env.Repo,
 		Limit:      5,
 	}
 
 	err := searchrepos.SearchRun(opts)
 	require.NoError(t, err)
-	assertOutputContains(t, stdout.String(), "integration")
+	// The run repository's name stays out of the log, so no helper that
+	// names the expected text.
+	require.True(t, strings.Contains(stdout.String(), env.Owner+"/"+env.Repo), "search repos does not list the run repository")
 }
 
 func TestSearchIssues_Run(t *testing.T) {
 	env := loadTestEnv(t)
-	ios, _, _ := testIO()
+	token := "lifecycle" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	number := createIssue(t, env, "[integration-test] search issues "+token)
 
-	opts := &searchissues.SearchOptions{
-		IO:         ios,
-		HTTPClient: &http.Client{},
-		Host:       env.Host,
-		Token:      env.Token,
-		Owner:      env.Owner,
-		Repo:       env.Repo,
-		Query:      "lifecycle",
-		Limit:      5,
+	// Gitea indexes a new issue in the background.
+	var out string
+	for i := 0; i < 30; i++ {
+		ios, stdout, _ := testIO()
+		err := searchissues.SearchRun(&searchissues.SearchOptions{
+			IO:         ios,
+			HTTPClient: testHTTPClient(),
+			Host:       env.Host,
+			Token:      env.Token,
+			Owner:      env.Owner,
+			Repo:       env.Repo,
+			Query:      token,
+			Limit:      5,
+			JSON: cmdutil.JSONFlags{
+				Fields: []string{"number"},
+				JQ:     fmt.Sprintf(`[.[] | select(.number == %d)] | length`, number),
+			},
+		})
+		require.NoError(t, err)
+		if out = stdout.String(); out == "1\n" {
+			break
+		}
+		time.Sleep(time.Second)
 	}
-
-	err := searchissues.SearchRun(opts)
-	require.NoError(t, err)
+	assertOutputEqual(t, out, "1\n")
 }
 
 func TestSearchPRs_Run(t *testing.T) {

@@ -3,6 +3,7 @@
 package integration
 
 import (
+	"fmt"
 	"os"
 	"testing"
 
@@ -17,5 +18,15 @@ func TestMain(m *testing.M) {
 	if os.Getenv(runCLIEnv) == "1" {
 		os.Exit(copiacmd.Main())
 	}
-	os.Exit(m.Run())
+	code := m.Run()
+	// The run repository goes with everything the tests left in it. The
+	// message names neither the owner nor the repository.
+	if runRepo.name != "" {
+		api := newAPI(os.Getenv("COPIA_TEST_HOST"), os.Getenv("COPIA_TEST_TOKEN"))
+		if err := tearDownRunRepo(api, os.Getenv("COPIA_TEST_OWNER"), runRepo.name); err != nil {
+			fmt.Fprintf(os.Stderr, "tear down the run repository: %v\n", err)
+			code = 1
+		}
+	}
+	os.Exit(code)
 }
