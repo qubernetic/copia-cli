@@ -298,6 +298,16 @@ func assertOutputContains(t *testing.T, out, want string) bool {
 	return false
 }
 
+// assertOutputNotContains fails the test when out contains unwanted.
+func assertOutputNotContains(t *testing.T, out, unwanted string) bool {
+	t.Helper()
+	if !strings.Contains(out, unwanted) {
+		return true
+	}
+	t.Errorf("output (%d bytes) contains %q", len(out), unwanted)
+	return false
+}
+
 // assertOutputEqual fails the test when out is not want.
 func assertOutputEqual(t *testing.T, out, want string) bool {
 	t.Helper()

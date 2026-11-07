@@ -5,14 +5,18 @@ package integration
 import (
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	releasecreate "github.com/qubernetic/copia-cli/pkg/cmd/release/create"
 	releasedelete "github.com/qubernetic/copia-cli/pkg/cmd/release/delete"
+	releasedeleteasset "github.com/qubernetic/copia-cli/pkg/cmd/release/deleteasset"
 	releaseedit "github.com/qubernetic/copia-cli/pkg/cmd/release/edit"
 	releaselist "github.com/qubernetic/copia-cli/pkg/cmd/release/list"
+	releaseupload "github.com/qubernetic/copia-cli/pkg/cmd/release/upload"
 	releaseview "github.com/qubernetic/copia-cli/pkg/cmd/release/view"
 )
 
@@ -113,6 +117,66 @@ func TestRelease_Lifecycle(t *testing.T) {
 		assertOutputContains(t, viewOut.String(), "title:\t"+editedTitle+"\n")
 		assertOutputContains(t, viewOut.String(), fmt.Sprintf("draft:\t%t\n", draft))
 	}
+
+	// Upload an asset, delete it with delete-asset, view shows no asset
+	assetName := "integration-asset.txt"
+	assetPath := filepath.Join(t.TempDir(), assetName)
+	require.NoError(t, os.WriteFile(assetPath, []byte("integration test asset\n"), 0o600), "write asset file")
+
+	uploadIO, uploadOut, _ := testIO()
+	err = releaseupload.UploadRun(&releaseupload.UploadOptions{
+		IO:         uploadIO,
+		HTTPClient: &http.Client{},
+		Host:       env.Host,
+		Token:      env.Token,
+		Owner:      env.Owner,
+		Repo:       env.Repo,
+		Tag:        tag,
+		Files:      []string{assetPath},
+	})
+	require.NoError(t, err, "release upload")
+	assertOutputContains(t, uploadOut.String(), "Uploaded "+assetName)
+
+	assetViewIO, assetViewOut, _ := testIO()
+	err = releaseview.ViewRun(&releaseview.ViewOptions{
+		IO:         assetViewIO,
+		HTTPClient: &http.Client{},
+		Host:       env.Host,
+		Token:      env.Token,
+		Owner:      env.Owner,
+		Repo:       env.Repo,
+		Tag:        tag,
+	})
+	require.NoError(t, err, "release view after upload")
+	assertOutputContains(t, assetViewOut.String(), "asset:\t"+assetName+"\n")
+
+	deleteAssetIO, deleteAssetOut, _ := testIO()
+	err = releasedeleteasset.DeleteAssetRun(&releasedeleteasset.DeleteAssetOptions{
+		IO:         deleteAssetIO,
+		HTTPClient: &http.Client{},
+		Host:       env.Host,
+		Token:      env.Token,
+		Owner:      env.Owner,
+		Repo:       env.Repo,
+		Tag:        tag,
+		AssetName:  assetName,
+		Confirmed:  true,
+	})
+	require.NoError(t, err, "release delete-asset")
+	assertOutputEqual(t, deleteAssetOut.String(), "Deleted asset "+assetName+" from release "+tag+"\n")
+
+	noAssetViewIO, noAssetViewOut, _ := testIO()
+	err = releaseview.ViewRun(&releaseview.ViewOptions{
+		IO:         noAssetViewIO,
+		HTTPClient: &http.Client{},
+		Host:       env.Host,
+		Token:      env.Token,
+		Owner:      env.Owner,
+		Repo:       env.Repo,
+		Tag:        tag,
+	})
+	require.NoError(t, err, "release view after delete-asset")
+	assertOutputNotContains(t, noAssetViewOut.String(), "asset:\t")
 
 	// Delete release
 	deleteIO, deleteOut, _ := testIO()
