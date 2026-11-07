@@ -66,9 +66,7 @@ func TestNewCmdEdit_Flags(t *testing.T) {
 		{name: "prerelease false", args: []string{"--prerelease=false"}, wantBody: `{"prerelease":false}`},
 		{name: "title", args: []string{"-t", "New title"}, wantBody: `{"name":"New title"}`},
 		{name: "long title", args: []string{"--title", "New title"}, wantBody: `{"name":"New title"}`},
-		{name: "empty title", args: []string{"--title", ""}, wantBody: `{"name":""}`},
 		{name: "notes", args: []string{"-n", "New notes"}, wantBody: `{"body":"New notes"}`},
-		{name: "empty notes", args: []string{"--notes="}, wantBody: `{"body":""}`},
 		{name: "notes file", args: []string{"-F", notesPath}, wantBody: `{"body":"notes from a file\n"}`},
 		{name: "notes from stdin", args: []string{"--notes-file", "-"}, stdin: "notes from stdin", wantBody: `{"body":"notes from stdin"}`},
 		{name: "tag", args: []string{"--tag", "v1.0.1"}, wantBody: `{"tag_name":"v1.0.1"}`},
@@ -111,6 +109,34 @@ func TestNewCmdEdit_NoFlag(t *testing.T) {
 	require.EqualError(t, runCmd(t, f, "v1.0.0"), "use flags to specify properties to edit")
 	assert.Empty(t, stdout.String())
 	assert.Empty(t, reg.Requests)
+}
+
+func TestNewCmdEdit_EmptyTitleOrNotes(t *testing.T) {
+	emptyPath := filepath.Join(t.TempDir(), "empty.md")
+	require.NoError(t, os.WriteFile(emptyPath, nil, 0o600))
+
+	tests := []struct {
+		name    string
+		args    []string
+		wantErr string
+	}{
+		{name: "empty title", args: []string{"--title", ""}, wantErr: "cannot clear a release's title: Copia keeps the old value"},
+		{name: "empty title with notes", args: []string{"--title=", "-n", "N"}, wantErr: "cannot clear a release's title: Copia keeps the old value"},
+		{name: "empty notes", args: []string{"--notes="}, wantErr: "cannot clear a release's notes: Copia keeps the old value"},
+		{name: "empty notes file", args: []string{"-F", emptyPath}, wantErr: "cannot clear a release's notes: Copia keeps the old value"},
+		{name: "empty stdin", args: []string{"--notes-file", "-"}, wantErr: "cannot clear a release's notes: Copia keeps the old value"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			httpmock.ReplaceDefaultTransport(t, reg)
+
+			ios, _, stdout, _ := iostreams.Test()
+			require.EqualError(t, runCmd(t, readyFactory(ios), append([]string{"v1.0.0"}, tt.args...)...), tt.wantErr)
+			assert.Empty(t, stdout.String())
+			assert.Empty(t, reg.Requests)
+		})
+	}
 }
 
 func TestNewCmdEdit_Args(t *testing.T) {

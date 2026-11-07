@@ -16,8 +16,16 @@ import (
 
 var errNoChange = errors.New("use flags to specify properties to edit")
 
+// Gitea's EditRelease keeps the old title and notes when it gets an empty
+// string, so an empty value is refused instead of reported as a change.
+var (
+	errEmptyTitle = errors.New("cannot clear a release's title: Copia keeps the old value")
+	errEmptyNotes = errors.New("cannot clear a release's notes: Copia keeps the old value")
+)
+
 // EditOptions holds all inputs for the release edit command. A nil pointer
-// and an empty string leave the field as it is.
+// and an empty NewTag or Target leave the field as it is; an empty Title or
+// Notes is an error.
 type EditOptions struct {
 	IO         *iostreams.IOStreams
 	HTTPClient *http.Client
@@ -58,7 +66,8 @@ func NewCmdEdit(f *cmdutil.Factory) *cobra.Command {
 		Long: `Edit a release of a Copia repository.
 
 Only the properties given as flags change. --notes-file reads the notes from
-a file; "-" reads standard input. On success the release URL is printed.`,
+a file; "-" reads standard input. Copia cannot clear a release's title or
+notes, so an empty value is refused. On success the release URL is printed.`,
 		Example: `  # Publish a release that was previously a draft
   $ copia-cli release edit v1.0 --draft=false
 
@@ -129,6 +138,13 @@ a file; "-" reads standard input. On success the release URL is printed.`,
 // EditRun looks the release up by tag and sends the given fields with
 // PATCH /repos/{owner}/{repo}/releases/{id}, then prints the release URL.
 func EditRun(opts *EditOptions) error {
+	if opts.Title != nil && *opts.Title == "" {
+		return errEmptyTitle
+	}
+	if opts.Notes != nil && *opts.Notes == "" {
+		return errEmptyNotes
+	}
+
 	payload := editRequest{
 		TagName:         opts.NewTag,
 		TargetCommitish: opts.Target,
