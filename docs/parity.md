@@ -44,7 +44,7 @@ Token storage follows gh: `auth login` stores the token in the OS keyring (go-ke
 | `gh repo delete` | Full | `copia-cli repo delete` | [x] |
 | `gh repo archive` | Partial | `copia-cli repo archive` | [ ] |
 | `gh repo rename` | Full | `copia-cli repo rename` | [ ] |
-| `gh repo edit` | Full | `copia-cli repo edit` | [ ] |
+| `gh repo edit` | Full | `copia-cli repo edit` | [x] |
 | `gh repo set-default` | n/a | `copia-cli repo set-default` | [x] |
 | `gh repo sync` | Partial | `copia-cli repo sync` | [ ] |
 | `gh repo deploy-key` | Full | `copia-cli repo deploy-key` | [ ] |
@@ -52,6 +52,8 @@ Token storage follows gh: `auth login` stores the token in the OS keyring (go-ke
 `gh repo view --web/-w`: client side, no API call and no token, opened as for the issue commands: `/{owner}/{repo}` of the argument, `-R` or the git remote. gh's `--branch` does not exist in `repo view`.
 
 `gh repo set-default`: client side, no API call and no token. The default is the git config key `remote.<name>.copia-resolved` (gh uses `gh-resolved`) with the value `base`, and the commands that work on the current repository read the marked remote first, then `origin`; `-R` wins over both. The argument is `owner/repo` (any case) or a remote name, `--view/-v` prints the default and `--unset/-u` removes it. Differences from gh: there is no prompt, so without an argument the only remote is used and several remotes fail with their list; gh also offers the parent of a fork found through the API, which copia-cli does not, so the repository must be one of the git remotes; the argument fails with `--view` or `--unset`, and the messages print whether or not standard output is a terminal.
+
+`gh repo edit [<owner/repo>]`: `PATCH /repos/{owner}/{repo}` with only the given settings: `-d/--description` as `description`, `--homepage` as `website`, `--default-branch` as `default_branch`, `--visibility public|private` as `private`, `--template` as `template`, `--enable-issues`, `--enable-wiki` and `--enable-projects` as `has_issues`, `has_wiki` and `has_projects`, `--enable-merge-commit`, `--enable-squash-merge` and `--enable-rebase-merge` as `allow_merge_commits`, `allow_squash_merge` and `allow_rebase`, and `--delete-branch-on-merge` as `default_delete_branch_after_merge` (every boolean flag takes `=false`). `--add-topic` and `--remove-topic` read `GET /repos/{owner}/{repo}/topics` and write the new list with `PUT /repos/{owner}/{repo}/topics` only when it changed; a topic is compared in lower case without surrounding space, as Copia stores it. `--visibility` needs `--accept-visibility-change-consequences`, with gh's message. app.copia.io (0.60.0 on 2026-11-07) refuses to make a repository public with 403, as Gitea does under its `FORCE_PRIVATE` setting, so `--visibility public` fails there with `failed to edit repository (HTTP 403): the server may not allow public repositories` and changes nothing; `--visibility private` works. Differences from gh: there is no prompt, so without a flag it fails with `specify properties to edit`; `--homepage` has no `-h` (copia-cli's help flag); `--visibility` takes no `internal`, since a Gitea repository is public or private; `--enable-discussions`, `--enable-auto-merge`, `--allow-forking`, `--allow-update-branch`, `--squash-merge-commit-message` and the security flags are left out (no Gitea repository setting matches them); `Edited repository <owner>/<repo>` is printed on standard output also without a terminal.
 
 `gh repo sync`: `POST /repos/{owner}/{repo}/merge-upstream` (`branch`, `ff_only`) brings a branch of a fork up to date with its upstream on the server. There is no `--force` (hard reset) and no sync of a local clone, which `gh` does with git.
 
@@ -226,8 +228,8 @@ Client side, no API call. Aliases are stored under the top-level key `aliases` o
 
 | Status | Count |
 |--------|-------|
-| Implemented | 72 |
-| Not yet implemented (Full parity) | 6 |
+| Implemented | 73 |
+| Not yet implemented (Full parity) | 5 |
 | Not yet implemented (Partial) | 6 |
 | No equivalent | 12 |
 | **Total implementable** | **84** |
