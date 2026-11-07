@@ -22,6 +22,7 @@ func TestNewCmdRelease_Subcommands(t *testing.T) {
 		"create": "General commands",
 		"delete": "Targeted commands",
 		"upload": "Targeted commands",
+		"view":   "Targeted commands",
 	}, groups)
 
 	var titles []string
