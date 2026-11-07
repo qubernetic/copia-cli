@@ -297,7 +297,7 @@ func TestDownloadRun_OtherHost(t *testing.T) {
 		reg.Register(httpmock.REST("GET", tagPath), httpmock.StringResponse(http.StatusOK, releaseJSON))
 		reg.Register(
 			httpmock.REST("GET", "/releases/download/v1.0.0/a.zip"),
-			httpmock.WithHeader(httpmock.StringResponse(http.StatusFound, ""), "Location", "https://storage.example/a.zip"),
+			httpmock.WithHeader(httpmock.StringResponse(http.StatusFound, ""), "Location", "https://storage.example/a.zip?X-Amz-Signature=secret"),
 		)
 
 		dir := t.TempDir()
@@ -310,6 +310,8 @@ func TestDownloadRun_OtherHost(t *testing.T) {
 		err := DownloadRun(opts)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "refusing redirect from https://app.copia.io to https://storage.example")
+		assert.NotContains(t, err.Error(), "X-Amz-Signature", "a signed redirect URL is not printed")
+		assert.NotContains(t, err.Error(), "/a.zip", "no URL is printed, only hosts")
 		for _, req := range reg.Requests {
 			assert.Equal(t, "app.copia.io", req.URL.Host, "nothing is sent to another host")
 		}

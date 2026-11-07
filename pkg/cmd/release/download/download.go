@@ -220,6 +220,12 @@ func download(opts *DownloadOptions, hostURL *url.URL, dest *destination, t targ
 
 	resp, err := opts.HTTPClient.Do(req)
 	if err != nil {
+		// A url.Error names the last URL, which after a redirect can be a
+		// signed storage URL; its cause names the hosts only.
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) {
+			err = urlErr.Err
+		}
 		return fmt.Errorf("downloading %s: %w", displayName(t), err)
 	}
 	defer func() { _ = resp.Body.Close() }()
