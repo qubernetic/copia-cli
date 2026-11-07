@@ -91,7 +91,7 @@ func TestRepoView_NotFound(t *testing.T) {
 }
 
 // TestRepoEdit edits a scratch repository, since it changes the visibility:
-// the description and topics, then public and back to private.
+// the description and topics, then public (refused by Copia) and private.
 func TestRepoEdit(t *testing.T) {
 	env := loadTestEnv(t)
 	scratch := newScratchRepo(t, env, "edit")
@@ -119,14 +119,23 @@ func TestRepoEdit(t *testing.T) {
 	edit(repoedit.EditOptions{RemoveTopics: []string{"plc"}})
 	assert.True(t, slices.Equal(repoTopics(t, scratch), []string{"copia-cli-it"}), "the topic was not removed")
 
+	// app.copia.io keeps repositories private (Gitea FORCE_PRIVATE): the
+	// switch to public is refused with 403 and changes nothing.
 	public, priv := "public", "private"
-	edit(repoedit.EditOptions{Visibility: &public})
+	ios, stdout, _ := testIO()
+	err := repoedit.EditRun(&repoedit.EditOptions{
+		IO: ios, HTTPClient: testHTTPClient(),
+		Host: scratch.Host, Token: scratch.Token, Owner: scratch.Owner, Repo: scratch.Repo,
+		Visibility: &public,
+	})
+	require.ErrorContains(t, err, "failed to edit repository (HTTP 403): the server may not allow public repositories", "the switch to public was not refused as expected")
+	assertOutputEmpty(t, stdout.String())
 	_, private = repoSettings(t, scratch)
-	assert.False(t, private, "the repository did not become public")
+	assert.True(t, private, "a refused switch to public changed the visibility")
 
 	edit(repoedit.EditOptions{Visibility: &priv})
 	desc, private = repoSettings(t, scratch)
-	assert.True(t, private, "the repository did not become private again")
+	assert.True(t, private, "the repository is not private")
 	assert.True(t, desc == description, "a visibility edit changed the description")
 }
 

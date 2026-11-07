@@ -184,7 +184,14 @@ func EditRun(opts *EditOptions) error {
 	repoURL := fmt.Sprintf("https://%s/api/v1/repos/%s/%s", opts.Host, opts.Owner, opts.Repo)
 
 	if opts.Edits != (EditRepositoryInput{}) {
-		if err := send(opts, "PATCH", repoURL, opts.Edits, http.StatusOK, "failed to edit repository"); err != nil {
+		err := send(opts, "PATCH", repoURL, opts.Edits, http.StatusOK, "failed to edit repository")
+		// Gitea answers 403 when its FORCE_PRIVATE setting keeps a
+		// repository from becoming public; app.copia.io does so.
+		var status statusError
+		if errors.As(err, &status) && status.code == http.StatusForbidden && opts.Edits.Private != nil && !*opts.Edits.Private {
+			return fmt.Errorf("%w: the server may not allow public repositories", err)
+		}
+		if err != nil {
 			return err
 		}
 	}
@@ -274,7 +281,17 @@ func send(opts *EditOptions, method, url string, payload any, want int, failMsg 
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != want {
-		return fmt.Errorf("%s (HTTP %d)", failMsg, resp.StatusCode)
+		return statusError{msg: failMsg, code: resp.StatusCode}
 	}
 	return nil
+}
+
+// statusError is an unexpected API status.
+type statusError struct {
+	msg  string
+	code int
+}
+
+func (e statusError) Error() string {
+	return fmt.Sprintf("%s (HTTP %d)", e.msg, e.code)
 }

@@ -209,6 +209,7 @@ func TestNewCmdEdit_SettingsAndTopics(t *testing.T) {
 func TestEditRun_Errors(t *testing.T) {
 	desc := "x"
 	bad := "internal"
+	public := "public"
 
 	tests := []struct {
 		name      string
@@ -229,6 +230,12 @@ func TestEditRun_Errors(t *testing.T) {
 			opts:    EditOptions{Edits: EditRepositoryInput{Description: &desc}},
 			patch:   httpmock.StringResponse(http.StatusForbidden, `{}`),
 			wantErr: "failed to edit repository (HTTP 403)",
+		},
+		{
+			name:    "public refused",
+			opts:    EditOptions{Visibility: &public},
+			patch:   httpmock.StringResponse(http.StatusForbidden, `{"message":"cannot change private repository to public"}`),
+			wantErr: "failed to edit repository (HTTP 403): the server may not allow public repositories",
 		},
 		{
 			name: "transport error on edit",
