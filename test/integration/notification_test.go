@@ -11,6 +11,9 @@ import (
 	notiflist "github.com/qubernetic/copia-cli/pkg/cmd/notification/list"
 )
 
+// The notification tests ask for one notification: the server takes about two
+// seconds per notification it returns, so the default of 30 took up to a
+// minute (#447).
 func TestNotificationList_Run(t *testing.T) {
 	env := loadTestEnv(t)
 	ios, _, _ := testIO()
@@ -20,7 +23,7 @@ func TestNotificationList_Run(t *testing.T) {
 		HTTPClient: &http.Client{},
 		Host:       env.Host,
 		Token:      env.Token,
-		Limit:      30,
+		Limit:      1,
 	}
 
 	err := notiflist.ListRun(opts)
@@ -37,7 +40,7 @@ func TestNotificationList_All(t *testing.T) {
 		Host:       env.Host,
 		Token:      env.Token,
 		All:        true,
-		Limit:      30,
+		Limit:      1,
 	}
 
 	err := notiflist.ListRun(opts)

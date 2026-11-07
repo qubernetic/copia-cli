@@ -204,7 +204,7 @@ func xxxRun(opts *XxxOptions) error { ... }  // unexported, testable
 
 ### `test/integration/`
 **Purpose:** Live API tests against Copia instance
-**Pattern:** `//go:build integration`, env vars for credentials, defer cleanup
+**Pattern:** `//go:build integration`, env vars for credentials, every run in its own `it-run-*` repository that `TestMain` deletes (`runrepo_test.go`, no build tag)
 **Files:** auth, repo, issue, label, PR tests + shared `helpers_test.go`
 
 ## Data Flow

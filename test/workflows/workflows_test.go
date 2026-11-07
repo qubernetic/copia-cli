@@ -14,6 +14,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -672,6 +673,118 @@ runs:
 	}
 }
 
+// scanRunners returns one message per runner label ending in `-latest`, in
+// any case, in every file walkRepo visits: a job's `runs-on` (a label, a list
+// or a mapping such as `labels:`) and every value of its `strategy.matrix`,
+// which `runs-on` may read through an expression.
+func scanRunners(repo string) ([]string, error) {
+	return walkRepo(repo, func(file string, data []byte, _ actionFile) ([]string, error) {
+		var doc yaml.Node
+		if err := yaml.Unmarshal(data, &doc); err != nil {
+			return nil, fmt.Errorf("%s: %w", file, err)
+		}
+		if len(doc.Content) == 0 {
+			return nil, nil
+		}
+		jobs := mappingValue(doc.Content[0], "jobs")
+		if jobs == nil || jobs.Kind != yaml.MappingNode {
+			return nil, nil
+		}
+		var offenders []string
+		var check func(where string, n *yaml.Node)
+		check = func(where string, n *yaml.Node) {
+			if n == nil {
+				return
+			}
+			if n.Kind == yaml.ScalarNode {
+				if strings.HasSuffix(strings.ToLower(strings.TrimSpace(n.Value)), "-latest") {
+					offenders = append(offenders, fmt.Sprintf("%s: %s %s; pin the runner to a named image such as ubuntu-24.04", file, where, strings.TrimSpace(n.Value)))
+				}
+				return
+			}
+			for i, c := range n.Content {
+				if n.Kind == yaml.MappingNode && i%2 == 0 {
+					continue
+				}
+				check(where, c)
+			}
+		}
+		names := make([]string, 0, len(jobs.Content)/2)
+		for j := 0; j+1 < len(jobs.Content); j += 2 {
+			names = append(names, jobs.Content[j].Value)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			job := mappingValue(jobs, name)
+			where := fmt.Sprintf("job %q", name)
+			check(where+" runs-on", mappingValue(job, "runs-on"))
+			check(where+" strategy.matrix", mappingValue(mappingValue(job, "strategy"), "matrix"))
+		}
+		return offenders, nil
+	})
+}
+
+// TestRunnersArePinned keeps every job on a named runner image: a `-latest`
+// label moves the image under the job without a commit.
+func TestRunnersArePinned(t *testing.T) {
+	offenders, err := scanRunners(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range offenders {
+		t.Error(o)
+	}
+}
+
+func TestScanRunners(t *testing.T) {
+	got, err := scanRunners(writeRepo(t, map[string]string{
+		".github/workflows/ci.yml": `
+jobs:
+  call:
+    uses: ./.github/workflows/reusable.yml
+  label:
+    runs-on: ubuntu-latest
+  list:
+    runs-on: [self-hosted, Ubuntu-Latest]
+  group:
+    runs-on:
+      group: runners
+      labels: [ubuntu-latest ]
+  matrix:
+    strategy:
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+        include:
+          - os: macos-latest
+    runs-on: ${{ matrix.os }}
+  pinned:
+    runs-on: ubuntu-24.04
+`,
+		".github/workflows/reusable.yml": `
+jobs:
+  inner:
+    runs-on: ubuntu-latest
+`,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		`.github/workflows/ci.yml: job "group" runs-on ubuntu-latest; pin the runner to a named image such as ubuntu-24.04`,
+		`.github/workflows/ci.yml: job "label" runs-on ubuntu-latest; pin the runner to a named image such as ubuntu-24.04`,
+		`.github/workflows/ci.yml: job "list" runs-on Ubuntu-Latest; pin the runner to a named image such as ubuntu-24.04`,
+		`.github/workflows/ci.yml: job "matrix" strategy.matrix windows-latest; pin the runner to a named image such as ubuntu-24.04`,
+		`.github/workflows/ci.yml: job "matrix" strategy.matrix macos-latest; pin the runner to a named image such as ubuntu-24.04`,
+		`.github/workflows/reusable.yml: job "inner" runs-on ubuntu-latest; pin the runner to a named image such as ubuntu-24.04`,
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("scanRunners() =\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	if _, err := scanRunners(t.TempDir()); err == nil {
+		t.Error("scanRunners() succeeded without workflow files, want error")
+	}
+}
+
 func TestUnpinnedUses(t *testing.T) {
 	const sha = "3d3c42e5aac5ba805825da76410c181273ba90b1"
 	step := func(uses string) string {
@@ -1100,18 +1213,35 @@ func TestCoprInstallRunsInCI(t *testing.T) {
 // verboseFlag matches the go test flags that print t.Logf of a passing test.
 var verboseFlag = regexp.MustCompile(`^--?(test\.)?v(=.*)?$`)
 
-// verboseGoTest reports whether a run block runs go test with -v.
-func verboseGoTest(run string) bool {
+// goTestArgs returns the arguments of every go test in a run block: those of
+// go test itself and those gotestsum hands on to go test after --.
+func goTestArgs(run string) [][]string {
+	var out [][]string
 	for _, line := range strings.Split(run, "\n") {
 		fields := strings.Fields(line)
-		for i := 0; i+1 < len(fields); i++ {
-			if fields[i] != "go" || fields[i+1] != "test" {
-				continue
-			}
-			for _, f := range fields[i+2:] {
-				if verboseFlag.MatchString(f) {
-					return true
+		for i := range fields {
+			switch {
+			case fields[i] == "go" && i+1 < len(fields) && fields[i+1] == "test":
+				out = append(out, fields[i+2:])
+			case fields[i] == "gotestsum":
+				for j := i + 1; j < len(fields); j++ {
+					if fields[j] == "--" {
+						out = append(out, fields[j+1:])
+						break
+					}
 				}
+			}
+		}
+	}
+	return out
+}
+
+// verboseGoTest reports whether a run block runs go test with -v.
+func verboseGoTest(run string) bool {
+	for _, args := range goTestArgs(run) {
+		for _, f := range args {
+			if verboseFlag.MatchString(f) {
+				return true
 			}
 		}
 	}
@@ -1120,15 +1250,19 @@ func verboseGoTest(run string) bool {
 
 func TestVerboseGoTest(t *testing.T) {
 	for run, want := range map[string]bool{
-		"go test -tags=integration ./...":             false,
-		"go test -vet=off ./...":                      false,
-		"go test -tags=integration -v ./...":          true,
-		"go test -v=true ./...":                       true,
-		"go test --v ./...":                           true,
-		"go test -test.v ./...":                       true,
-		"echo start\ngo test -count=1 -v ./...":       true,
-		"go vet -v ./...":                             false,
-		"go test -run '^TestAPI_Version$' ./test/...": false,
+		"go test -tags=integration ./...":                  false,
+		"go test -vet=off ./...":                           false,
+		"go test -tags=integration -v ./...":               true,
+		"go test -v=true ./...":                            true,
+		"go test --v ./...":                                true,
+		"go test -test.v ./...":                            true,
+		"echo start\ngo test -count=1 -v ./...":            true,
+		"go vet -v ./...":                                  false,
+		"go test -run '^TestAPI_Version$' ./test/...":      false,
+		"gotestsum --format pkgname -- -timeout 30m ./...": false,
+		"gotestsum --format pkgname -- -v ./...":           true,
+		"gotestsum --format pkgname -- -test.v=true ./...": true,
+		"gotestsum tool slowest --jsonfile f.json":         false,
 	} {
 		if got := verboseGoTest(run); got != want {
 			t.Errorf("verboseGoTest(%q) = %v, want %v", run, got, want)
@@ -1166,20 +1300,14 @@ var timeoutFlag = regexp.MustCompile(`^--?(test\.)?timeout(=.+)?$`)
 
 // goTestTimeout reports whether a run block runs go test with -timeout.
 func goTestTimeout(run string) bool {
-	for _, line := range strings.Split(run, "\n") {
-		fields := strings.Fields(line)
-		for i := 0; i+1 < len(fields); i++ {
-			if fields[i] != "go" || fields[i+1] != "test" {
+	for _, args := range goTestArgs(run) {
+		for j, f := range args {
+			m := timeoutFlag.FindStringSubmatch(f)
+			if m == nil {
 				continue
 			}
-			for j, f := range fields[i+2:] {
-				m := timeoutFlag.FindStringSubmatch(f)
-				if m == nil {
-					continue
-				}
-				if m[2] != "" || i+2+j+1 < len(fields) {
-					return true
-				}
+			if m[2] != "" || j+1 < len(args) {
+				return true
 			}
 		}
 	}
@@ -1188,16 +1316,19 @@ func goTestTimeout(run string) bool {
 
 func TestGoTestTimeout(t *testing.T) {
 	for run, want := range map[string]bool{
-		"go test -tags=integration ./...":                false,
-		"go test -tags=integration -timeout 30m ./...":   true,
-		"go test -timeout=30m ./...":                     true,
-		"go test --timeout 30m ./...":                    true,
-		"go test -test.timeout=30m ./...":                true,
-		"echo start\ngo test -count=1 -timeout 1h ./...": true,
-		"go test -run TestTimeout ./...":                 false,
-		"go vet -timeout 30m ./...":                      false,
-		"go test ./... -timeout":                         false,
-		"timeout 30m go test -tags=integration ./...":    false,
+		"go test -tags=integration ./...":                   false,
+		"go test -tags=integration -timeout 30m ./...":      true,
+		"go test -timeout=30m ./...":                        true,
+		"go test --timeout 30m ./...":                       true,
+		"go test -test.timeout=30m ./...":                   true,
+		"echo start\ngo test -count=1 -timeout 1h ./...":    true,
+		"go test -run TestTimeout ./...":                    false,
+		"go vet -timeout 30m ./...":                         false,
+		"go test ./... -timeout":                            false,
+		"timeout 30m go test -tags=integration ./...":       false,
+		"gotestsum -- -tags=integration -timeout 30m ./...": true,
+		"gotestsum --format pkgname -- ./...":               false,
+		"gotestsum --format pkgname -- ./... -timeout":      false,
 	} {
 		if got := goTestTimeout(run); got != want {
 			t.Errorf("goTestTimeout(%q) = %v, want %v", run, got, want)
@@ -1271,6 +1402,520 @@ func TestIntegrationLogsOnlyTheVersion(t *testing.T) {
 		if fmt.Sprint(version.Env) != fmt.Sprint(main.Env) {
 			t.Errorf("%s: Copia version env %v differs from Integration tests env %v", file, version.Env, main.Env)
 		}
+	}
+}
+
+// timingFile is where the Integration tests step writes the pass, skip and
+// fail events of the integration tests, without their output, for the Slowest
+// tests step to read.
+const timingFile = "$RUNNER_TEMP/integration-timing.json"
+
+// slowestRun prints the integration tests by run time, names and durations
+// only.
+const slowestRun = `gotestsum tool slowest --jsonfile "` + timingFile + `"`
+
+// notCancelled runs a step also after a failed or timed-out step, unless the
+// run was canceled.
+const notCancelled = "!cancelled()" //nolint:misspell // the GitHub Actions function name
+
+// quietFormats are the gotestsum formats that print no output of a passing
+// test. testname is not one: on a runner (GITHUB_ACTIONS=true) gotestsum
+// switches it to github-actions, which prints the output of every test.
+var quietFormats = map[string]bool{
+	"dots":                   true,
+	"dots-v2":                true,
+	"pkgname":                true,
+	"pkgname-and-test-fails": true,
+}
+
+// jsonFlag matches the go test flag that prints every event, output included.
+var jsonFlag = regexp.MustCompile(`^--?(test\.)?json(=.*)?$`)
+
+// gotestsumFlags returns the flags the gotestsum lines of a run block give
+// gotestsum itself, before --, by name without dashes, and how many such lines
+// there are. A flag without = takes the next field as its value; a field
+// without a dash is kept under its own name, so it is never an allowed flag.
+func gotestsumFlags(run string) (map[string]string, int) {
+	flags := map[string]string{}
+	n := 0
+	for _, line := range strings.Split(run, "\n") {
+		fields := strings.Fields(line)
+		for i := range fields {
+			if fields[i] != "gotestsum" || (i+1 < len(fields) && fields[i+1] == "tool") {
+				continue
+			}
+			n++
+			for j := i + 1; j < len(fields) && fields[j] != "--"; j++ {
+				f := fields[j]
+				if !strings.HasPrefix(f, "-") {
+					flags[f] = ""
+					continue
+				}
+				name, value, ok := strings.Cut(strings.TrimLeft(f, "-"), "=")
+				if !ok && j+1 < len(fields) && fields[j+1] != "--" && !strings.HasPrefix(fields[j+1], "-") {
+					j++
+					value = fields[j]
+				}
+				flags[name] = strings.Trim(value, `"'`)
+			}
+		}
+	}
+	return flags, n
+}
+
+// integrationRunViolations lists what makes the run block of the Integration
+// tests step print more than package results and failing tests, or lose the
+// timing report: it runs gotestsum once, with only --format (a quiet one),
+// --hide-summary with skipped (go test without -v prints no skip message) and
+// --jsonfile-timing-events to timingFile (pass, skip and fail events, no
+// output; --jsonfile would hold every t.Logf), and hands go test a -timeout
+// but no -v or -json.
+func integrationRunViolations(run string) []string {
+	flags, n := gotestsumFlags(run)
+	if n != 1 {
+		return []string{fmt.Sprintf("runs gotestsum %d times, want once", n)}
+	}
+	var out []string
+	for _, name := range sortedKeys(flags) {
+		switch name {
+		case "format", "hide-summary", "jsonfile-timing-events":
+		default:
+			out = append(out, fmt.Sprintf("gotestsum flag %q is not allowed", name))
+		}
+	}
+	if !quietFormats[flags["format"]] {
+		out = append(out, fmt.Sprintf("gotestsum --format %q is not a quiet format", flags["format"]))
+	}
+	if !slices.Contains(strings.Split(flags["hide-summary"], ","), "skipped") {
+		out = append(out, "gotestsum does not hide the skipped summary")
+	}
+	if got := flags["jsonfile-timing-events"]; got != timingFile {
+		out = append(out, fmt.Sprintf("gotestsum --jsonfile-timing-events is %q, want %q", got, timingFile))
+	}
+	if verboseGoTest(run) {
+		out = append(out, "go test runs with -v")
+	}
+	for _, args := range goTestArgs(run) {
+		for _, f := range args {
+			if jsonFlag.MatchString(f) {
+				out = append(out, "go test runs with -json")
+			}
+		}
+	}
+	if !goTestTimeout(run) {
+		out = append(out, "go test runs without -timeout")
+	}
+	return out
+}
+
+func TestIntegrationRunViolations(t *testing.T) {
+	const good = `gotestsum --format pkgname --hide-summary skipped --jsonfile-timing-events "` + timingFile + `" -- -tags=integration -timeout 30m ./...`
+	tests := []struct {
+		name string
+		run  string
+		want int
+	}{
+		{"good", good, 0},
+		{"flags with =", `gotestsum --format=pkgname-and-test-fails --hide-summary=failed,skipped --jsonfile-timing-events="` + timingFile + `" -- -timeout=30m ./...`, 0},
+		{"plain go test", "go test -tags=integration -timeout 30m ./...", 1},
+		{"gotestsum twice", good + "\n" + good, 1},
+		{"verbose go test", strings.Replace(good, "-- ", "-- -v ", 1), 1},
+		{"json go test", strings.Replace(good, "-- ", "-- -json ", 1), 1},
+		{"loud format", strings.Replace(good, "pkgname", "standard-verbose", 1), 1},
+		{"github-actions format", strings.Replace(good, "pkgname", "github-actions", 1), 1},
+		// gotestsum switches testname to github-actions when GITHUB_ACTIONS is
+		// true, as on every runner.
+		{"testname format", strings.Replace(good, "pkgname", "testname", 1), 1},
+		{"no format", strings.Replace(good, "--format pkgname ", "", 1), 1},
+		{"short format flag", strings.Replace(good, "--format", "-f", 1), 2},
+		{"skipped summary shown", strings.Replace(good, "--hide-summary skipped ", "", 1), 1},
+		{"full jsonfile", strings.Replace(good, "--jsonfile-timing-events", "--jsonfile", 1), 2},
+		{"both json files", strings.Replace(good, "-- ", "--jsonfile out.json -- ", 1), 1},
+		{"other timing file", strings.Replace(good, timingFile, "timing.json", 1), 1},
+		{"post-run command", strings.Replace(good, "-- ", "--post-run-command true -- ", 1), 1},
+		{"raw command", strings.Replace(good, "-- ", "--raw-command -- ", 1), 1},
+		{"no timeout", strings.Replace(good, "-timeout 30m ", "", 1), 1},
+		{"timeout without value", strings.Replace(good, "-timeout 30m ./...", "./... -timeout", 1), 1},
+	}
+	for _, tt := range tests {
+		if got := integrationRunViolations(tt.run); len(got) != tt.want {
+			t.Errorf("%s: integrationRunViolations() = %q, want %d violations", tt.name, got, tt.want)
+		}
+	}
+}
+
+// reportWorkflow is the part of an integration workflow
+// integrationReportViolations reads.
+type reportWorkflow struct {
+	Env  map[string]any `yaml:"env"`
+	Jobs map[string]struct {
+		Env   map[string]any `yaml:"env"`
+		Steps []struct {
+			Name string         `yaml:"name"`
+			Uses string         `yaml:"uses"`
+			If   string         `yaml:"if"`
+			Run  string         `yaml:"run"`
+			With map[string]any `yaml:"with"`
+			Env  map[string]any `yaml:"env"`
+		} `yaml:"steps"`
+	} `yaml:"jobs"`
+}
+
+// integrationReportViolations lists what breaks the slowest tests report of a
+// workflow's integration job or lets the timing file out: the job installs
+// gotestsum, as every Install gotestsum step of the file does, before an
+// Integration tests step that passes integrationRunViolations with no
+// GOTESTSUM_ variable in reach, directly followed by a Slowest tests step that
+// runs slowestRun also when the tests failed or timed out. No other step of
+// the file names the timing file, and none uploads an artifact.
+func integrationReportViolations(file string, data []byte) ([]string, error) {
+	var wf reportWorkflow
+	if err := yaml.Unmarshal(data, &wf); err != nil {
+		return nil, fmt.Errorf("%s: %w", file, err)
+	}
+	var out []string
+	install := map[string]bool{}
+	for _, job := range sortedKeys(wf.Jobs) {
+		for i, s := range wf.Jobs[job].Steps {
+			if s.Name == "Install gotestsum" {
+				install[s.Run] = true
+			}
+			if strings.HasPrefix(strings.ToLower(s.Uses), "actions/upload-artifact") {
+				out = append(out, fmt.Sprintf("%s: job %q step %d uploads an artifact", file, job, i+1))
+			}
+			reads := job == "integration" && (s.Name == "Integration tests" || s.Name == "Slowest tests")
+			if !reads && strings.Contains(fmt.Sprint(s.Run, s.With, s.Env, s.If), path.Base(timingFile)) {
+				out = append(out, fmt.Sprintf("%s: job %q step %d names the timing file", file, job, i+1))
+			}
+		}
+	}
+	if len(install) > 1 {
+		out = append(out, fmt.Sprintf("%s: Install gotestsum steps differ", file))
+	}
+	integration, ok := wf.Jobs["integration"]
+	if !ok {
+		return append(out, fmt.Sprintf("%s: no job integration", file)), nil
+	}
+	main := -1
+	installed := false
+	for i, s := range integration.Steps {
+		if s.Name == "Install gotestsum" && main < 0 {
+			installed = true
+		}
+		if s.Name == "Integration tests" {
+			main = i
+		}
+	}
+	if main < 0 {
+		return append(out, fmt.Sprintf("%s: job integration has no Integration tests step", file)), nil
+	}
+	if !installed {
+		out = append(out, fmt.Sprintf("%s: job integration does not install gotestsum before Integration tests", file))
+	}
+	tests := integration.Steps[main]
+	for _, v := range sortedKeys(wf.Env) {
+		if strings.HasPrefix(strings.ToUpper(v), "GOTESTSUM_") {
+			out = append(out, fmt.Sprintf("%s: workflow env sets %s", file, v))
+		}
+	}
+	for _, env := range []map[string]any{integration.Env, tests.Env} {
+		for _, v := range sortedKeys(env) {
+			if strings.HasPrefix(strings.ToUpper(v), "GOTESTSUM_") {
+				out = append(out, fmt.Sprintf("%s: job integration sets %s", file, v))
+			}
+		}
+	}
+	for _, v := range integrationRunViolations(tests.Run) {
+		out = append(out, fmt.Sprintf("%s: Integration tests %s", file, v))
+	}
+	if main+1 >= len(integration.Steps) || integration.Steps[main+1].Name != "Slowest tests" {
+		return append(out, fmt.Sprintf("%s: Integration tests is not followed by Slowest tests", file)), nil
+	}
+	slowest := integration.Steps[main+1]
+	if got := strings.TrimSpace(slowest.Run); got != slowestRun {
+		out = append(out, fmt.Sprintf("%s: Slowest tests runs %q, want %q", file, got, slowestRun))
+	}
+	cond := strings.Join(strings.Fields(slowest.If), "")
+	if cond != "${{"+notCancelled+"}}" && cond != notCancelled {
+		out = append(out, fmt.Sprintf("%s: Slowest tests runs if %q, want ${{ %s }}", file, slowest.If, notCancelled))
+	}
+	return out, nil
+}
+
+// TestIntegrationPrintsSlowestTests keeps the run time of every integration
+// test in the public log without the tests' output: the Integration tests step
+// of ci.yml and integration-scheduled.yml writes only timing events through
+// gotestsum, at the version the test job installs, and the next step prints
+// the slowest tests, also after a failure or the -timeout panic.
+func TestIntegrationPrintsSlowestTests(t *testing.T) {
+	install := map[string]bool{}
+	for _, file := range []string{"ci.yml", "integration-scheduled.yml"} {
+		data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		offenders, err := integrationReportViolations(file, data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, o := range offenders {
+			t.Error(o)
+		}
+		install[stepRun(t, file, "Install gotestsum")] = true
+	}
+	if len(install) != 1 {
+		t.Errorf("Install gotestsum differs between ci.yml and integration-scheduled.yml: %q", sortedKeys(install))
+	}
+}
+
+func TestIntegrationReportViolations(t *testing.T) {
+	const good = `
+jobs:
+  test:
+    steps:
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@v1.13.0
+  integration:
+    steps:
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@v1.13.0
+      - name: Integration tests
+        run: gotestsum --format pkgname --hide-summary skipped --jsonfile-timing-events "$RUNNER_TEMP/integration-timing.json" -- -tags=integration -timeout 30m ./...
+      - name: Slowest tests
+        if: ${{ ` + notCancelled + ` }}
+        run: gotestsum tool slowest --jsonfile "$RUNNER_TEMP/integration-timing.json"
+      - name: Copia version
+        run: go test -tags=integration -v -run '^TestAPI_Version$' ./test/integration/
+`
+	upload := `
+      - uses: actions/upload-artifact@x
+        with:
+          path: ${{ runner.temp }}
+`
+	tests := []struct {
+		name string
+		yaml string
+		want int
+	}{
+		{"good", good, 0},
+		{"bare condition", strings.Replace(good, "${{ "+notCancelled+" }}", "'"+notCancelled+"'", 1), 0},
+		{"no condition", strings.Replace(good, "        if: ${{ "+notCancelled+" }}\n", "", 1), 1},
+		{"always", strings.Replace(good, notCancelled, "always()", 1), 1},
+		{"success only", strings.Replace(good, notCancelled, "success()", 1), 1},
+		{"no slowest step", strings.Replace(good, "Slowest tests", "Report", 1), 2},
+		{"slowest prints more", strings.Replace(good, `slowest --jsonfile`, `slowest --skip-stmt testing.Short --jsonfile`, 1), 1},
+		{"slowest not next", strings.Replace(good, "      - name: Slowest tests", "      - name: Between\n        run: true\n      - name: Slowest tests", 1), 1},
+		{"verbose go test", strings.Replace(good, "-- -tags", "-- -v -tags", 1), 1},
+		{"loud format", strings.Replace(good, "--format pkgname", "--format standard-verbose", 1), 1},
+		{"artifact upload", good + upload, 1},
+		{"artifact upload in another job", strings.Replace(good, "  integration:\n", "  other:\n    steps:"+upload+"  integration:\n", 1), 1},
+		{"step prints the file", good + "      - run: cat \"$RUNNER_TEMP/integration-timing.json\"\n", 1},
+		{"step in another job names the file", strings.Replace(good, "  integration:\n", "  other:\n    steps:\n      - run: echo integration-timing.json\n  integration:\n", 1), 1},
+		{"step env names the file", good + "      - run: true\n        env:\n          F: integration-timing.json\n", 1},
+		{"no install", strings.Replace(good, "      - name: Install gotestsum\n        run: go install gotest.tools/gotestsum@v1.13.0\n      - name: Integration tests", "      - name: Integration tests", 1), 1},
+		{"other gotestsum version", strings.Replace(good, "@v1.13.0\n      - name: Integration tests", "@v1.12.0\n      - name: Integration tests", 1), 1},
+		{"GOTESTSUM_JSONFILE in step env", strings.Replace(good, "-timeout 30m ./...\n", "-timeout 30m ./...\n        env:\n          GOTESTSUM_JSONFILE: out.json\n", 1), 1},
+		{"GOTESTSUM_FORMAT in job env", strings.Replace(good, "  integration:\n", "  integration:\n    env:\n      GOTESTSUM_FORMAT: standard-verbose\n", 1), 1},
+		{"GOTESTSUM_JSONFILE in workflow env", "env:\n  GOTESTSUM_JSONFILE: out.json\n" + good, 1},
+		{"no integration tests step", strings.Replace(good, "Integration tests", "Tests", 1), 2},
+		{"no integration job", strings.Replace(good, "  integration:", "  other:", 1), 3},
+	}
+	for _, tt := range tests {
+		got, err := integrationReportViolations("test.yml", []byte(tt.yaml))
+		if err != nil {
+			t.Fatalf("%s: %v", tt.name, err)
+		}
+		if len(got) != tt.want {
+			t.Errorf("%s: integrationReportViolations() = %q, want %d violations", tt.name, got, tt.want)
+		}
+	}
+	if _, err := integrationReportViolations("test.yml", []byte("jobs: [")); err == nil {
+		t.Error("integrationReportViolations() succeeded on invalid YAML, want error")
+	}
+}
+
+// gateWorkflow is the part of an integration workflow
+// integrationGateViolations reads.
+type gateWorkflow struct {
+	On   any `yaml:"on"`
+	Jobs map[string]struct {
+		If          string `yaml:"if"`
+		Concurrency any    `yaml:"concurrency"`
+	} `yaml:"jobs"`
+}
+
+// readyPullRequest skips the integration job on a draft pull request and runs
+// it on every other event.
+const readyPullRequest = "github.event_name != 'pull_request' || !github.event.pull_request.draft"
+
+// pullRequestTypes start CI on a new, pushed, reopened or ready pull request;
+// without ready_for_review a draft marked ready would get no integration run.
+var pullRequestTypes = []string{"opened", "synchronize", "reopened", "ready_for_review"}
+
+// integrationGateViolations lists what lets the integration job of a workflow
+// run more often than once at a time per pull request or ref: the job sits in
+// the concurrency group named group and never cancels a running job, whose
+// t.Cleanup would then leave fixture pull requests and branches behind. When
+// pr is set or the workflow runs on pull_request, the job skips drafts and the event lists
+// pullRequestTypes, so marking a draft ready starts the run.
+func integrationGateViolations(file, group string, pr bool, data []byte) ([]string, error) {
+	var wf gateWorkflow
+	if err := yaml.Unmarshal(data, &wf); err != nil {
+		return nil, fmt.Errorf("%s: %w", file, err)
+	}
+	job, ok := wf.Jobs["integration"]
+	if !ok {
+		return []string{fmt.Sprintf("%s: no job integration", file)}, nil
+	}
+	var out []string
+	c, _ := job.Concurrency.(map[string]any)
+	if g, _ := c["group"].(string); g != group {
+		out = append(out, fmt.Sprintf("%s: job integration concurrency group is %v, want %s", file, c["group"], group))
+	}
+	if cancel, isBool := c["cancel-in-progress"].(bool); !isBool || cancel {
+		out = append(out, fmt.Sprintf("%s: job integration concurrency cancel-in-progress is %v, want false", file, c["cancel-in-progress"]))
+	}
+	types, onPR := pullRequestTypesOf(wf.On)
+	if !onPR {
+		if pr {
+			out = append(out, fmt.Sprintf("%s: no pull_request trigger", file))
+		}
+		return out, nil
+	}
+	cond := strings.Join(strings.Fields(job.If), " ")
+	if cond != "${{ "+readyPullRequest+" }}" && cond != readyPullRequest {
+		out = append(out, fmt.Sprintf("%s: job integration runs if %q, want %s", file, job.If, readyPullRequest))
+	}
+	for _, typ := range pullRequestTypes {
+		if !slices.Contains(types, typ) {
+			out = append(out, fmt.Sprintf("%s: pull_request types lack %s", file, typ))
+		}
+	}
+	return out, nil
+}
+
+// pullRequestTypesOf reads the on: key of a workflow in any of its forms
+// (event name, list of names, map of events) and reports whether it holds
+// pull_request and which activity types that event lists.
+func pullRequestTypesOf(on any) ([]string, bool) {
+	switch v := on.(type) {
+	case string:
+		return nil, v == "pull_request"
+	case []any:
+		return nil, slices.Contains(v, any("pull_request"))
+	case map[string]any:
+		event, ok := v["pull_request"]
+		if !ok {
+			return nil, false
+		}
+		m, _ := event.(map[string]any)
+		var types []string
+		switch t := m["types"].(type) {
+		case string:
+			types = append(types, t)
+		case []any:
+			for _, typ := range t {
+				s, _ := typ.(string)
+				types = append(types, s)
+			}
+		}
+		return types, true
+	}
+	return nil, false
+}
+
+// TestIntegrationRunsOnReadyPullRequests keeps the integration job, which
+// cannot run locally and adds fixtures to the shared test repository on every
+// run, off draft pull requests, and runs at most one integration job per pull
+// request or ref at a time, so two runs never share the test account.
+func TestIntegrationRunsOnReadyPullRequests(t *testing.T) {
+	for _, w := range []struct {
+		file, group string
+		pr          bool
+	}{
+		{"ci.yml", "integration-${{ github.event.pull_request.number || github.ref }}", true},
+		{"integration-scheduled.yml", "integration-${{ github.ref }}", false},
+	} {
+		data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", w.file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		offenders, err := integrationGateViolations(w.file, w.group, w.pr, data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, o := range offenders {
+			t.Error(o)
+		}
+	}
+}
+
+func TestIntegrationGateViolations(t *testing.T) {
+	const group = "integration-${{ github.event.pull_request.number || github.ref }}"
+	const good = `
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+jobs:
+  integration:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    concurrency:
+      group: ` + group + `
+      cancel-in-progress: false
+`
+	const scheduled = `
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+jobs:
+  integration:
+    concurrency:
+      group: ` + group + `
+      cancel-in-progress: false
+`
+	jobs := scheduled[strings.Index(scheduled, "jobs:"):]
+	tests := []struct {
+		name string
+		yaml string
+		pr   bool
+		want int
+	}{
+		{"good", good, true, 0},
+		{"braced condition", strings.Replace(good, "if: github.event_name != 'pull_request' || !github.event.pull_request.draft", "if: ${{ github.event_name != 'pull_request' ||  !github.event.pull_request.draft }}", 1), true, 0},
+		{"no condition", strings.Replace(good, "    if: github.event_name != 'pull_request' || !github.event.pull_request.draft\n", "", 1), true, 1},
+		{"draft only on pull_request", strings.Replace(good, "github.event_name != 'pull_request' || ", "", 1), true, 1},
+		{"no types", strings.Replace(good, "    types: [opened, synchronize, reopened, ready_for_review]\n", "    branches: [main]\n", 1), true, 4},
+		{"no ready_for_review", strings.Replace(good, ", ready_for_review", "", 1), true, 1},
+		{"no synchronize", strings.Replace(good, " synchronize,", "", 1), true, 1},
+		{"cancel in progress", strings.Replace(good, "cancel-in-progress: false", "cancel-in-progress: true", 1), true, 1},
+		{"cancel in progress unset", strings.Replace(good, "      cancel-in-progress: false\n", "", 1), true, 1},
+		{"cancel in progress expression", strings.Replace(good, "cancel-in-progress: false", "cancel-in-progress: ${{ false }}", 1), true, 1},
+		{"other group", strings.Replace(good, "group: integration-", "group: ci-", 1), true, 1},
+		{"group as string", strings.Replace(good, "    concurrency:\n      group: "+group+"\n      cancel-in-progress: false\n", "    concurrency: "+group+"\n", 1), true, 2},
+		{"no concurrency", strings.Replace(good, "    concurrency:\n      group: "+group+"\n      cancel-in-progress: false\n", "", 1), true, 2},
+		{"scheduled", scheduled, false, 0},
+		{"scheduled without concurrency", strings.Replace(scheduled, "    concurrency:\n      group: "+group+"\n      cancel-in-progress: false\n", "    runs-on: ubuntu-latest\n", 1), false, 2},
+		{"scheduled on a pull request", strings.Replace(scheduled, "  schedule:\n    - cron: \"0 6 * * 1\"\n", "  pull_request:\n", 1), false, 5},
+		{"pull request workflow without pull_request", scheduled, true, 1},
+		{"single type", strings.Replace(good, "[opened, synchronize, reopened, ready_for_review]", "ready_for_review", 1), true, 3},
+		{"pull_request by name", "on: pull_request\n" + jobs, false, 5},
+		{"pull_request in a list", "on: [push, pull_request]\n" + jobs, false, 5},
+		{"push by name", "on: push\n" + jobs, false, 0},
+		{"no integration job", strings.Replace(good, "  integration:", "  other:", 1), true, 1},
+	}
+	for _, tt := range tests {
+		got, err := integrationGateViolations("test.yml", group, tt.pr, []byte(tt.yaml))
+		if err != nil {
+			t.Fatalf("%s: %v", tt.name, err)
+		}
+		if len(got) != tt.want {
+			t.Errorf("%s: integrationGateViolations() = %q, want %d violations", tt.name, got, tt.want)
+		}
+	}
+	if _, err := integrationGateViolations("test.yml", group, true, []byte("jobs: [")); err == nil {
+		t.Error("integrationGateViolations() succeeded on invalid YAML, want error")
 	}
 }
 

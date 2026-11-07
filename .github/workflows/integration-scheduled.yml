@@ -10,7 +10,11 @@ permissions:
 
 jobs:
   integration:
-    runs-on: ubuntu-latest
+    # Never cancel a running job: it would skip its t.Cleanup.
+    concurrency:
+      group: integration-${{ github.ref }}
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -18,13 +22,20 @@ jobs:
           go-version-file: go.mod
           cache: false
 
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@v1.13.0
+
       - name: Integration tests
-        run: go test -tags=integration -timeout 30m ./...
+        run: gotestsum --format pkgname --hide-summary skipped --jsonfile-timing-events "$RUNNER_TEMP/integration-timing.json" -- -tags=integration -timeout 30m ./...
         env:
           COPIA_TEST_TOKEN: ${{ secrets.COPIA_TEST_TOKEN }}
           COPIA_TEST_HOST: ${{ secrets.COPIA_TEST_HOST }}
           COPIA_TEST_OWNER: ${{ secrets.COPIA_TEST_OWNER }}
-          COPIA_TEST_REPO: ${{ secrets.COPIA_TEST_REPO }}
+
+      # Names and durations only, also after a failure or the -timeout panic.
+      - name: Slowest tests
+        if: ${{ !cancelled() }}
+        run: gotestsum tool slowest --jsonfile "$RUNNER_TEMP/integration-timing.json"
 
       - name: Copia version
         run: go test -tags=integration -v -run '^TestAPI_Version$' ./test/integration/
@@ -32,12 +43,11 @@ jobs:
           COPIA_TEST_TOKEN: ${{ secrets.COPIA_TEST_TOKEN }}
           COPIA_TEST_HOST: ${{ secrets.COPIA_TEST_HOST }}
           COPIA_TEST_OWNER: ${{ secrets.COPIA_TEST_OWNER }}
-          COPIA_TEST_REPO: ${{ secrets.COPIA_TEST_REPO }}
 
   report-failure:
     needs: integration
     if: failure()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       issues: write
     steps:
