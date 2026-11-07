@@ -155,3 +155,97 @@ func TestNewHTTPClient_FollowsSameOriginRedirect(t *testing.T) {
 	assert.Equal(t, int32(1), got.requests.Load())
 	assert.Equal(t, int32(1), got.withAuth.Load())
 }
+
+func TestCheckDownloadRedirect(t *testing.T) {
+	origin := "https://app.copia.io/o/r/releases/download/v1/a.zip"
+	tests := []struct {
+		name     string
+		target   string
+		wantAuth bool
+		wantErr  string
+	}{
+		{name: "same origin keeps the token", target: "https://app.copia.io/attachments/x", wantAuth: true},
+		{name: "other host drops the token", target: "https://s3.example/bucket/x?X-Amz-Signature=s"},
+		{name: "subdomain drops the token", target: "https://storage.app.copia.io/x"},
+		{name: "other port drops the token", target: "https://app.copia.io:8443/x"},
+		{name: "http refused", target: "http://s3.example/bucket/x?X-Amz-Signature=s", wantErr: "refusing redirect from https://app.copia.io to http://s3.example: a download follows https redirects only"},
+		{name: "http on the same host refused", target: "http://app.copia.io/x", wantErr: "refusing redirect from https://app.copia.io to http://app.copia.io: a download follows https redirects only"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := redirectRequest(t, tt.target)
+			req.Header.Set("Authorization", "token secret")
+			req.Header.Set("Cookie", "session=secret")
+			req.Header.Set("Proxy-Authorization", "secret")
+			err := checkDownloadRedirect(req, []*http.Request{redirectRequest(t, origin)})
+			if tt.wantErr != "" {
+				require.EqualError(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			if tt.wantAuth {
+				assert.Equal(t, "token secret", req.Header.Get("Authorization"))
+				return
+			}
+			assert.Empty(t, req.Header.Get("Authorization"))
+			assert.Empty(t, req.Header.Get("Cookie"))
+			assert.Empty(t, req.Header.Get("Proxy-Authorization"))
+		})
+	}
+}
+
+func TestCheckDownloadRedirect_NoTokenAfterLeavingTheOrigin(t *testing.T) {
+	via := []*http.Request{
+		redirectRequest(t, "https://app.copia.io/a"),
+		redirectRequest(t, "https://s3.example/b"),
+	}
+	req := redirectRequest(t, "https://app.copia.io/c")
+	req.Header.Set("Authorization", "token secret")
+	require.NoError(t, checkDownloadRedirect(req, via))
+	assert.Empty(t, req.Header.Get("Authorization"))
+}
+
+func TestCheckDownloadRedirect_StopsAfterThreeRedirects(t *testing.T) {
+	via := make([]*http.Request, 3)
+	for i := range via {
+		via[i] = redirectRequest(t, "https://app.copia.io/a")
+	}
+	err := checkDownloadRedirect(redirectRequest(t, "https://s3.example/b?X-Amz-Signature=s"), via)
+	require.EqualError(t, err, "stopped after 3 redirects")
+}
+
+func TestNewDownloadHTTPClient_FollowsCrossOriginRedirectWithoutToken(t *testing.T) {
+	var storage authCounter
+	store := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		storage.record(r)
+		_, _ = w.Write([]byte("asset"))
+	}))
+	defer store.Close()
+	// Both servers listen on 127.0.0.1, so only the port differs: Go's own
+	// header stripping keeps the token there, the download client does not.
+	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, store.URL+"/bucket/a.zip?X-Amz-Signature=s", http.StatusFound)
+	}))
+	defer origin.Close()
+
+	client := NewDownloadHTTPClient()
+	assert.Nil(t, client.Transport)
+	client.Transport = origin.Client().Transport
+	req, err := http.NewRequest(http.MethodGet, origin.URL+"/o/r/releases/download/v1/a.zip", nil)
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "token secret")
+
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, int32(1), storage.requests.Load())
+	assert.Zero(t, storage.withAuth.Load(), "storage received the token")
+}
+
+func TestNewHTTPClient_StillRefusesWhatDownloadsFollow(t *testing.T) {
+	via := []*http.Request{redirectRequest(t, "https://app.copia.io/a")}
+	err := checkSameOriginRedirect(redirectRequest(t, "https://s3.example/b"), via)
+	require.Error(t, err)
+	assert.Nil(t, NewHTTPClient().Transport)
+}

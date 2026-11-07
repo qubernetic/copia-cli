@@ -162,7 +162,7 @@ copia-cli/
 |------|---------|
 | `factory.go` | Factory struct with `ResolveAuth()` |
 | `json.go` | `JSONFlags`, `AddJSONFlags()`, `PrintJSON()` |
-| `httpclient.go` | `NewHTTPClient()`, the client of every command; refuses redirects that change scheme, host or port |
+| `httpclient.go` | `NewHTTPClient()`, the client of every command; refuses redirects that change scheme, host or port. `NewDownloadHTTPClient()`, only for the file requests of `release download`: follows https redirects (at most 3) to another host without `Authorization`, `Proxy-Authorization` or `Cookie` |
 
 ### `pkg/iostreams/`
 **Purpose:** TTY-aware I/O abstraction
