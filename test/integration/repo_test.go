@@ -5,17 +5,24 @@ package integration
 import (
 	"encoding/json"
 	"net/http"
+	"os/exec"
+	"path/filepath"
 	"slices"
+	"strconv"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	repoarchive "github.com/qubernetic/copia-cli/pkg/cmd/repo/archive"
+	repoclone "github.com/qubernetic/copia-cli/pkg/cmd/repo/clone"
 	repoedit "github.com/qubernetic/copia-cli/pkg/cmd/repo/edit"
 	repofork "github.com/qubernetic/copia-cli/pkg/cmd/repo/fork"
 	repolist "github.com/qubernetic/copia-cli/pkg/cmd/repo/list"
 	reporename "github.com/qubernetic/copia-cli/pkg/cmd/repo/rename"
+	reposync "github.com/qubernetic/copia-cli/pkg/cmd/repo/sync"
 	repoview "github.com/qubernetic/copia-cli/pkg/cmd/repo/view"
 	"github.com/qubernetic/copia-cli/pkg/cmdutil"
 )
@@ -240,6 +247,75 @@ func TestRepoFork(t *testing.T) {
 	require.NoError(t, json.Unmarshal(body, &me), "decode current user")
 	status, _ = apiCall(t, env, "get fork", "GET", "/repos/"+me.Login+"/"+env.Repo, nil)
 	assertStatusCode(t, status, http.StatusNotFound)
+}
+
+// TestRepoSync clones the run repository, checks out a branch of its own,
+// adds a commit to that branch through the API and syncs the clone with
+// repo sync, which fetches with the token over https. The clone's branch
+// then points at the server's head. The remote mode of the run repository,
+// which is not a fork, fails: app.copia.io has no merge-upstream route.
+func TestRepoSync(t *testing.T) {
+	env := loadTestEnv(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(home, ".gitconfig"))
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_TERMINAL_PROMPT", "0")
+
+	repoPath := "/repos/" + env.Owner + "/" + env.Repo
+	branch := "it-sync-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	status, _ := apiCall(t, env, "create branch", "POST", repoPath+"/branches", map[string]string{"new_branch_name": branch})
+	assertStatusCode(t, status, http.StatusCreated)
+	t.Cleanup(func() {
+		status, _ := apiCall(t, env, "delete branch", "DELETE", repoPath+"/branches/"+branch, nil)
+		assertStatusCode(t, status, http.StatusNoContent)
+	})
+
+	work := filepath.Join(t.TempDir(), "work")
+	cloneIO, _, _ := testIO()
+	err := repoclone.CloneRun(&repoclone.CloneOptions{
+		IO: cloneIO, Host: env.Host, Token: env.Token,
+		Repo: env.Owner + "/" + env.Repo, Dir: work,
+	})
+	require.True(t, err == nil, "repo clone of the run repository failed")
+	t.Chdir(work)
+	_, err = exec.Command("git", "checkout", "-q", branch).CombinedOutput()
+	require.True(t, err == nil, "git checkout of the sync branch failed")
+
+	commitFile(t, env, branch, "integration-test/"+branch+".txt")
+
+	ios, stdout, stderr := testIO()
+	err = reposync.SyncRun(&reposync.SyncOptions{
+		IO: ios, HTTPClient: testHTTPClient(),
+		Host: env.Host, Token: env.Token,
+		BaseRepo: func() (string, string, error) { return env.Owner, env.Repo, nil },
+		Branch:   branch,
+	})
+	require.True(t, err == nil, "repo sync of the clone failed")
+	assertOutputContains(t, stdout.String(), `Synced the "`+branch+`" branch from "`)
+	assertOutputEmpty(t, stderr.String())
+
+	status, body := apiCall(t, env, "get branch", "GET", repoPath+"/branches/"+branch, nil)
+	assertStatusCode(t, status, http.StatusOK)
+	var remote struct {
+		Commit struct {
+			ID string `json:"id"`
+		} `json:"commit"`
+	}
+	require.NoError(t, json.Unmarshal(body, &remote), "decode the branch")
+	out, err := exec.Command("git", "rev-parse", "HEAD").Output()
+	require.True(t, err == nil, "git rev-parse HEAD failed")
+	require.True(t, remote.Commit.ID != "" && strings.TrimSpace(string(out)) == remote.Commit.ID, "the synced branch does not point at the server's head")
+
+	remoteIO, remoteOut, _ := testIO()
+	err = reposync.SyncRun(&reposync.SyncOptions{
+		IO: remoteIO, HTTPClient: testHTTPClient(),
+		Host: env.Host, Token: env.Token,
+		DestArg: env.Owner + "/" + env.Repo,
+		Branch:  branch,
+	})
+	require.ErrorContains(t, err, "Copia does not offer fork sync through its API", "repo sync of the run repository")
+	assertOutputEmpty(t, remoteOut.String())
 }
 
 // repoSettings returns the description and the private flag of the

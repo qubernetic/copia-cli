@@ -11,6 +11,7 @@ import (
 	listCmd "github.com/qubernetic/copia-cli/pkg/cmd/repo/list"
 	renameCmd "github.com/qubernetic/copia-cli/pkg/cmd/repo/rename"
 	setDefaultCmd "github.com/qubernetic/copia-cli/pkg/cmd/repo/setdefault"
+	syncCmd "github.com/qubernetic/copia-cli/pkg/cmd/repo/sync"
 	unarchiveCmd "github.com/qubernetic/copia-cli/pkg/cmd/repo/unarchive"
 	viewCmd "github.com/qubernetic/copia-cli/pkg/cmd/repo/view"
 	"github.com/qubernetic/copia-cli/pkg/cmdutil"
@@ -39,6 +40,7 @@ func NewCmdRepo(f *cmdutil.Factory) *cobra.Command {
 		deleteCmd.NewCmdDelete(f),
 		forkCmd.NewCmdFork(f),
 		setDefaultCmd.NewCmdSetDefault(f),
+		syncCmd.NewCmdSync(f),
 	)
 
 	return cmd
