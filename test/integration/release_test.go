@@ -157,15 +157,16 @@ func TestRelease_Lifecycle(t *testing.T) {
 	downloadDir := t.TempDir()
 	downloadIO, downloadOut, _ := testIO()
 	err = releasedownload.DownloadRun(&releasedownload.DownloadOptions{
-		IO:           downloadIO,
-		HTTPClient:   cmdutil.NewHTTPClient(),
-		Host:         env.Host,
-		Token:        env.Token,
-		Owner:        env.Owner,
-		Repo:         env.Repo,
-		Tag:          tag,
-		FilePatterns: []string{"integration-*.txt"},
-		Destination:  downloadDir,
+		IO:                 downloadIO,
+		HTTPClient:         cmdutil.NewHTTPClient(),
+		DownloadHTTPClient: cmdutil.NewDownloadHTTPClient(),
+		Host:               env.Host,
+		Token:              env.Token,
+		Owner:              env.Owner,
+		Repo:               env.Repo,
+		Tag:                tag,
+		FilePatterns:       []string{"integration-*.txt"},
+		Destination:        downloadDir,
 	})
 	require.NoError(t, err, "release download by pattern")
 	assertOutputEmpty(t, downloadOut.String())
@@ -179,15 +180,16 @@ func TestRelease_Lifecycle(t *testing.T) {
 	archiveDir := t.TempDir()
 	archiveIO, _, _ := testIO()
 	err = releasedownload.DownloadRun(&releasedownload.DownloadOptions{
-		IO:          archiveIO,
-		HTTPClient:  cmdutil.NewHTTPClient(),
-		Host:        env.Host,
-		Token:       env.Token,
-		Owner:       env.Owner,
-		Repo:        env.Repo,
-		Tag:         tag,
-		ArchiveType: "zip",
-		Destination: archiveDir,
+		IO:                 archiveIO,
+		HTTPClient:         cmdutil.NewHTTPClient(),
+		DownloadHTTPClient: cmdutil.NewDownloadHTTPClient(),
+		Host:               env.Host,
+		Token:              env.Token,
+		Owner:              env.Owner,
+		Repo:               env.Repo,
+		Tag:                tag,
+		ArchiveType:        "zip",
+		Destination:        archiveDir,
 	})
 	require.NoError(t, err, "release download --archive zip")
 	archives, err := os.ReadDir(archiveDir)
