@@ -27,14 +27,15 @@ const (
 
 func newOpts(reg *httpmock.Registry, ios *iostreams.IOStreams) *DownloadOptions {
 	return &DownloadOptions{
-		IO:          ios,
-		HTTPClient:  &http.Client{Transport: reg},
-		Host:        "app.copia.io",
-		Token:       "test-token",
-		Owner:       "my-org",
-		Repo:        "my-repo",
-		Tag:         "v1.0.0",
-		Destination: ".",
+		IO:                 ios,
+		HTTPClient:         &http.Client{Transport: reg},
+		DownloadHTTPClient: &http.Client{Transport: reg},
+		Host:               "app.copia.io",
+		Token:              "test-token",
+		Owner:              "my-org",
+		Repo:               "my-repo",
+		Tag:                "v1.0.0",
+		Destination:        ".",
 	}
 }
 
@@ -291,33 +292,91 @@ func TestDownloadRun_OtherHost(t *testing.T) {
 		assert.Empty(t, entries)
 	})
 
-	t.Run("redirect to another host", func(t *testing.T) {
+	t.Run("storage redirect followed without the token", func(t *testing.T) {
 		reg := &httpmock.Registry{}
+		defer reg.Verify(t)
 		httpmock.ReplaceDefaultTransport(t, reg)
-		reg.Register(httpmock.REST("GET", tagPath), httpmock.StringResponse(http.StatusOK, releaseJSON))
+		reg.Register(
+			httpmock.REST("GET", tagPath),
+			func(req *http.Request) (*http.Response, error) {
+				assert.Equal(t, "token test-token", req.Header.Get("Authorization"))
+				return httpmock.StringResponse(http.StatusOK, releaseJSON)(req)
+			},
+		)
 		reg.Register(
 			httpmock.REST("GET", "/releases/download/v1.0.0/a.zip"),
-			httpmock.WithHeader(httpmock.StringResponse(http.StatusFound, ""), "Location", "https://storage.example/a.zip?X-Amz-Signature=secret"),
+			func(req *http.Request) (*http.Response, error) {
+				assert.Equal(t, "token test-token", req.Header.Get("Authorization"), "the configured host gets the token")
+				return httpmock.WithHeader(httpmock.StringResponse(http.StatusFound, ""),
+					"Location", "https://storage.example/bucket/a.zip?X-Amz-Signature=s")(req)
+			},
+		)
+		reg.Register(
+			httpmock.REST("GET", "/bucket/a.zip"),
+			func(req *http.Request) (*http.Response, error) {
+				assert.Equal(t, "storage.example", req.URL.Host)
+				assert.Empty(t, req.Header.Get("Authorization"), "storage receives no token")
+				return httpmock.StringResponse(http.StatusOK, "zip")(req)
+			},
 		)
 
 		dir := t.TempDir()
 		ios, _, _, _ := iostreams.Test()
 		opts := newOpts(reg, ios)
 		opts.HTTPClient = cmdutil.NewHTTPClient()
+		opts.DownloadHTTPClient = cmdutil.NewDownloadHTTPClient()
+		opts.Destination = dir
+		opts.FilePatterns = []string{"a.zip"}
+
+		require.NoError(t, DownloadRun(opts))
+		assert.Equal(t, "zip", readFile(t, filepath.Join(dir, "a.zip")))
+	})
+
+	t.Run("http redirect refused", func(t *testing.T) {
+		reg := &httpmock.Registry{}
+		httpmock.ReplaceDefaultTransport(t, reg)
+		reg.Register(httpmock.REST("GET", tagPath), httpmock.StringResponse(http.StatusOK, releaseJSON))
+		reg.Register(
+			httpmock.REST("GET", "/releases/download/v1.0.0/a.zip"),
+			httpmock.WithHeader(httpmock.StringResponse(http.StatusFound, ""), "Location", "http://storage.example/a.zip?X-Amz-Signature=secret"),
+		)
+
+		dir := t.TempDir()
+		ios, _, _, _ := iostreams.Test()
+		opts := newOpts(reg, ios)
+		opts.HTTPClient = cmdutil.NewHTTPClient()
+		opts.DownloadHTTPClient = cmdutil.NewDownloadHTTPClient()
 		opts.Destination = dir
 		opts.FilePatterns = []string{"a.zip"}
 
 		err := DownloadRun(opts)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "refusing redirect from https://app.copia.io to https://storage.example")
-		assert.NotContains(t, err.Error(), "X-Amz-Signature", "a signed redirect URL is not printed")
-		assert.NotContains(t, err.Error(), "/a.zip", "no URL is printed, only hosts")
+		require.EqualError(t, err, "downloading a.zip: refusing redirect from https://app.copia.io to http://storage.example: a download follows https redirects only")
 		for _, req := range reg.Requests {
 			assert.Equal(t, "app.copia.io", req.URL.Host, "nothing is sent to another host")
 		}
 		entries, err := os.ReadDir(dir)
 		require.NoError(t, err)
 		assert.Empty(t, entries)
+	})
+
+	t.Run("release lookup keeps the same-origin rule", func(t *testing.T) {
+		reg := &httpmock.Registry{}
+		httpmock.ReplaceDefaultTransport(t, reg)
+		reg.Register(
+			httpmock.REST("GET", tagPath),
+			httpmock.WithHeader(httpmock.StringResponse(http.StatusFound, ""), "Location", "https://storage.example/release.json"),
+		)
+
+		ios, _, _, _ := iostreams.Test()
+		opts := newOpts(reg, ios)
+		opts.HTTPClient = cmdutil.NewHTTPClient()
+		opts.DownloadHTTPClient = cmdutil.NewDownloadHTTPClient()
+		opts.Destination = t.TempDir()
+
+		err := DownloadRun(opts)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "refusing redirect from https://app.copia.io to https://storage.example")
+		assert.Len(t, reg.Requests, 1)
 	})
 }
 

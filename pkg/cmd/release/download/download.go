@@ -11,16 +11,19 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/spf13/cobra"
 	"github.com/qubernetic/copia-cli/pkg/cmd/release/shared"
 	"github.com/qubernetic/copia-cli/pkg/cmdutil"
 	"github.com/qubernetic/copia-cli/pkg/iostreams"
+	"github.com/spf13/cobra"
 )
 
 // DownloadOptions holds all inputs for the release download command.
 type DownloadOptions struct {
-	IO                *iostreams.IOStreams
-	HTTPClient        *http.Client
+	IO         *iostreams.IOStreams
+	HTTPClient *http.Client
+	// DownloadHTTPClient fetches the files only; it may follow Copia's
+	// redirect to storage on another host, without the token.
+	DownloadHTTPClient *http.Client
 	Host              string
 	Token             string
 	Owner             string
@@ -97,6 +100,7 @@ is required.`,
 			opts.Owner = owner
 			opts.Repo = repo
 			opts.HTTPClient = cmdutil.NewHTTPClient()
+			opts.DownloadHTTPClient = cmdutil.NewDownloadHTTPClient()
 			return DownloadRun(opts)
 		},
 	}
@@ -124,7 +128,9 @@ var errSkipped = errors.New("skipped")
 
 // DownloadRun downloads the matching assets of the release Tag (the latest
 // release when Tag is empty), or its source archive, into Destination or
-// OutputFile. Every request goes to the configured host only.
+// OutputFile. Every request goes to the configured host; only a file
+// download may follow a redirect to storage on another host, without the
+// token.
 func DownloadRun(opts *DownloadOptions) error {
 	hostURL, err := cmdutil.ParseHost(opts.Host)
 	if err != nil {
@@ -218,7 +224,7 @@ func download(opts *DownloadOptions, hostURL *url.URL, dest *destination, t targ
 	req.Header.Set("Authorization", "token "+opts.Token)
 	req.Header.Set("Accept", "application/octet-stream")
 
-	resp, err := opts.HTTPClient.Do(req)
+	resp, err := opts.DownloadHTTPClient.Do(req)
 	if err != nil {
 		// A url.Error names the last URL, which after a redirect can be a
 		// signed storage URL; its cause names the hosts only.
