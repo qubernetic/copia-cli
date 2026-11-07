@@ -205,6 +205,18 @@ func TestCheckDownloadRedirect_NoTokenAfterLeavingTheOrigin(t *testing.T) {
 	assert.Empty(t, req.Header.Get("Authorization"))
 }
 
+func TestCheckDownloadRedirect_DropsReferer(t *testing.T) {
+	storage := "https://s3.example/bucket/a.zip?X-Amz-Signature=s"
+	via := []*http.Request{
+		redirectRequest(t, "https://app.copia.io/a"),
+		redirectRequest(t, storage),
+	}
+	req := redirectRequest(t, "https://other.example/c")
+	req.Header.Set("Referer", storage)
+	require.NoError(t, checkDownloadRedirect(req, via))
+	assert.Empty(t, req.Header.Get("Referer"))
+}
+
 func TestCheckDownloadRedirect_StopsAfterThreeRedirects(t *testing.T) {
 	via := make([]*http.Request, 3)
 	for i := range via {

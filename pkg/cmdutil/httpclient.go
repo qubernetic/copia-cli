@@ -35,6 +35,12 @@ func checkSameOriginRedirect(req *http.Request, via []*http.Request) error {
 	return nil
 }
 
+// RedirectError is a redirect the download client refused. Its message names
+// hosts only, never a path or a query, so a caller may print it.
+type RedirectError struct{ msg string }
+
+func (e *RedirectError) Error() string { return e.msg }
+
 // maxDownloadRedirects bounds the redirects of a download; Copia sends an
 // asset download to its storage with one.
 const maxDownloadRedirects = 3
@@ -44,7 +50,8 @@ const maxDownloadRedirects = 3
 // Copia answers it with a redirect to presigned storage on another host.
 // It follows https redirects only, at most maxDownloadRedirects, and once a
 // hop leaves the origin of the first request no request carries the
-// Authorization header or another credential. Every other request uses
+// Authorization header or another credential. No redirected request carries
+// a Referer, which would name the previous, possibly signed, URL. Every other request uses
 // NewHTTPClient.
 func NewDownloadHTTPClient() *http.Client {
 	return &http.Client{CheckRedirect: checkDownloadRedirect}
@@ -52,13 +59,16 @@ func NewDownloadHTTPClient() *http.Client {
 
 func checkDownloadRedirect(req *http.Request, via []*http.Request) error {
 	if len(via) >= maxDownloadRedirects {
-		return fmt.Errorf("stopped after %d redirects", maxDownloadRedirects)
+		return &RedirectError{fmt.Sprintf("stopped after %d redirects", maxDownloadRedirects)}
 	}
 	from, to := via[0].URL, req.URL
 	if to.Scheme != "https" {
-		return errors.New("refusing redirect from " + from.Scheme + "://" + from.Host +
-			" to " + to.Scheme + "://" + to.Host + ": a download follows https redirects only")
+		return &RedirectError{"refusing redirect from " + from.Scheme + "://" + from.Host +
+			" to " + to.Scheme + "://" + to.Host + ": a download follows https redirects only"}
 	}
+	// Go sets Referer to the previous URL, which can be a signed storage
+	// URL; a download needs none.
+	req.Header.Del("Referer")
 	left := !sameOrigin(from, to)
 	for _, r := range via[1:] {
 		left = left || !sameOrigin(from, r.URL)
