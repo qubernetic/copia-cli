@@ -88,11 +88,10 @@ func RenameRun(opts *RenameOptions) error {
 		return fmt.Errorf("renaming %s/%s to %s needs confirmation; use --yes to confirm", opts.Owner, opts.Repo, opts.NewName)
 	}
 
-	fullName, err := rename(opts)
-	if err != nil {
+	if err := rename(opts); err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintf(opts.IO.Out, "Renamed repository %s\n", fullName)
+	_, _ = fmt.Fprintf(opts.IO.Out, "Renamed repository %s/%s\n", opts.Owner, opts.NewName)
 
 	if !opts.UpdateRemote {
 		return nil
@@ -207,45 +206,34 @@ func sameHostName(remote, configured string) bool {
 	return strings.EqualFold(remote, u.Hostname())
 }
 
-// rename sends the new name and returns the repository's new full name.
-func rename(opts *RenameOptions) (string, error) {
+// rename sends the new name with PATCH /repos/{owner}/{repo}.
+func rename(opts *RenameOptions) error {
 	body, err := json.Marshal(map[string]string{"name": opts.NewName})
 	if err != nil {
-		return "", err
+		return err
 	}
 	repoURL := fmt.Sprintf("https://%s/api/v1/repos/%s/%s", opts.Host, opts.Owner, opts.Repo)
 	req, err := http.NewRequest("PATCH", repoURL, bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return err
 	}
 	req.Header.Set("Authorization", "token "+opts.Token)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := opts.HTTPClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("connecting to %s: %w", opts.Host, err)
+		return fmt.Errorf("connecting to %s: %w", opts.Host, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("reading response: %w", err)
+	if resp.StatusCode == http.StatusOK {
+		return nil
 	}
-	if resp.StatusCode != http.StatusOK {
-		var apiErr struct {
-			Message string `json:"message"`
-		}
-		if json.Unmarshal(data, &apiErr) == nil && apiErr.Message != "" {
-			return "", fmt.Errorf("failed to rename repository (HTTP %d): %s", resp.StatusCode, apiErr.Message)
-		}
-		return "", fmt.Errorf("failed to rename repository (HTTP %d)", resp.StatusCode)
+	var apiErr struct {
+		Message string `json:"message"`
 	}
-
-	var repo struct {
-		FullName string `json:"full_name"`
+	if data, err := io.ReadAll(resp.Body); err == nil && json.Unmarshal(data, &apiErr) == nil && apiErr.Message != "" {
+		return fmt.Errorf("failed to rename repository (HTTP %d): %s", resp.StatusCode, apiErr.Message)
 	}
-	if json.Unmarshal(data, &repo) != nil || repo.FullName == "" {
-		return opts.Owner + "/" + opts.NewName, nil
-	}
-	return repo.FullName, nil
+	return fmt.Errorf("failed to rename repository (HTTP %d)", resp.StatusCode)
 }
