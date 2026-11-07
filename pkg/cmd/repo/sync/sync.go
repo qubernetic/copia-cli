@@ -240,6 +240,97 @@ func isUnroutedNotFound(resp *http.Response) bool {
 	return err == nil && mediaType == "text/plain"
 }
 
+var errDiverging = errors.New("can't sync because there are diverging changes; use `--force` to overwrite the destination branch")
+
+// syncLocalRepo fetches the branch of the source repository's git remote
+// and brings the local branch to it, fast-forward unless --force.
 func syncLocalRepo(opts *SyncOptions) error {
-	return errors.New("not implemented")
+	var owner, repo string
+	var err error
+	if opts.SrcArg != "" {
+		owner, repo, err = cmdutil.SplitOwnerRepo(opts.SrcArg)
+	} else {
+		owner, repo, err = opts.BaseRepo()
+		if err != nil {
+			err = fmt.Errorf("could not determine repository: %w", err)
+		}
+	}
+	if err != nil {
+		return err
+	}
+
+	remotes, err := cmdutil.ListRemotes()
+	if err != nil {
+		return err
+	}
+	remote := ""
+	for _, r := range remotes {
+		if strings.EqualFold(r.Owner, owner) && strings.EqualFold(r.Repo, repo) {
+			remote = r.Name
+			break
+		}
+	}
+	if remote == "" {
+		return fmt.Errorf("can't find corresponding remote for %s/%s", owner, repo)
+	}
+
+	if opts.Branch == "" {
+		if opts.Branch, err = defaultBranch(opts, owner, repo); err != nil {
+			return err
+		}
+	}
+
+	if err := fetch(opts, remote, opts.Branch); err != nil {
+		return err
+	}
+	if err := executeLocalRepoSync(remote, opts.Branch, opts.Force); err != nil {
+		return err
+	}
+
+	_, _ = fmt.Fprintf(opts.IO.Out, "Synced the \"%s\" branch from \"%s/%s\" to local repository\n", opts.Branch, owner, repo)
+	return nil
+}
+
+// executeLocalRepoSync moves the local branch to FETCH_HEAD as gh does: a
+// checked-out branch with merge --ff-only (reset --hard with --force) after
+// refusing a dirty tree, another branch with branch --force, a missing one
+// is created tracking remote.
+func executeLocalRepoSync(remote, branch string, force bool) error {
+	hasLocal := hasLocalBranch(branch)
+	if hasLocal {
+		fastForward := isAncestor(branch, "FETCH_HEAD")
+		if !fastForward && !force {
+			return errDiverging
+		}
+		if fastForward {
+			force = false
+		}
+	}
+
+	var err error
+	if currentBranch() == branch {
+		dirty, err := isDirty()
+		if err != nil {
+			return err
+		}
+		if dirty {
+			return errors.New("refusing to sync due to uncommitted/untracked local changes\ntip: use `git stash --all` before retrying the sync and run `git stash pop` afterwards")
+		}
+		if force {
+			_, err = git("reset", "--hard", "FETCH_HEAD")
+		} else {
+			_, err = git("merge", "--ff-only", "--quiet", "FETCH_HEAD")
+		}
+		return err
+	}
+
+	if hasLocal {
+		_, err = git("branch", "--force", "--", branch, "FETCH_HEAD")
+		return err
+	}
+	if _, err := git("branch", "--", branch, "FETCH_HEAD"); err != nil {
+		return err
+	}
+	_, err = git("branch", "--set-upstream-to", remote+"/"+branch, "--", branch)
+	return err
 }
