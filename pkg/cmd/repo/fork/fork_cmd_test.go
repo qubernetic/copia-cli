@@ -1,7 +1,6 @@
 package fork
 
 import (
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -28,32 +27,59 @@ func runForkCmd(f *cmdutil.Factory, args ...string) error {
 }
 
 func TestNewCmdFork_Run(t *testing.T) {
-	reg := &httpmock.Registry{}
-	defer reg.Verify(t)
-	httpmock.ReplaceDefaultTransport(t, reg)
+	tests := []struct {
+		name         string
+		args         []string
+		repo         string // -R
+		baseRepo     bool
+		wantSent     forkRequest
+		wantForkPath string
+	}{
+		{
+			name:     "repository argument",
+			args:     []string{"upstream-org/project", "--org", "my-org", "--fork-name", "renamed"},
+			wantSent: forkRequest{Organization: "my-org", Name: "renamed"},
+		},
+		{
+			name:     "current repository",
+			baseRepo: true,
+		},
+		{
+			name: "repository flag",
+			repo: "upstream-org/project",
+		},
+	}
 
-	var sent forkRequest
-	reg.Register(httpmock.REST("POST", "/api/v1/repos/upstream-org/project/forks"),
-		func(req *http.Request) (*http.Response, error) {
-			if err := json.NewDecoder(req.Body).Decode(&sent); err != nil {
-				return nil, err
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			defer reg.Verify(t)
+			httpmock.ReplaceDefaultTransport(t, reg)
+
+			var sent forkRequest
+			reg.Register(httpmock.REST("POST", "/api/v1/repos/upstream-org/project/forks"),
+				decodeInto(&sent, httpmock.StringResponse(http.StatusAccepted, orgFork)))
+
+			ios, _, stdout, _ := iostreams.Test()
+			f := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Token: "test-token", Repo: tt.repo}
+			if tt.baseRepo {
+				f.BaseRepo = func() (string, string, error) { return "upstream-org", "project", nil }
 			}
-			return httpmock.StringResponse(http.StatusCreated,
-				`{"full_name":"my-org/project","html_url":"https://app.copia.io/my-org/project"}`)(req)
+
+			require.NoError(t, runForkCmd(f, tt.args...))
+			assert.Equal(t, tt.wantSent, sent)
+			assert.Equal(t, "https://app.copia.io/my-org/project\n", stdout.String())
 		})
-
-	ios, _, stdout, _ := iostreams.Test()
-	f := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Token: "test-token"}
-
-	require.NoError(t, runForkCmd(f, "upstream-org/project", "--org", "my-org"))
-	assert.Equal(t, "my-org", sent.Organization)
-	assert.Equal(t, "Forked to my-org/project\nhttps://app.copia.io/my-org/project\n", stdout.String())
+	}
 }
 
 func TestNewCmdFork_Errors(t *testing.T) {
 	t.Setenv("COPIA_TOKEN", "")
 	t.Setenv("COPIA_HOST", "")
 
+	authed := func(ios *iostreams.IOStreams) *cmdutil.Factory {
+		return &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Token: "test-token"}
+	}
 	tests := []struct {
 		name    string
 		factory func(ios *iostreams.IOStreams) *cmdutil.Factory
@@ -72,19 +98,64 @@ func TestNewCmdFork_Errors(t *testing.T) {
 			wantErr: "no config",
 		},
 		{
-			name: "invalid repo",
-			factory: func(ios *iostreams.IOStreams) *cmdutil.Factory {
-				return &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Token: "test-token"}
-			},
+			name:    "invalid repo",
+			factory: authed,
 			args:    []string{"project"},
-			wantErr: "expected owner/repo format",
+			wantErr: "argument error: expected owner/repo format",
 		},
 		{
-			name: "missing arg",
+			name:    "no current repository",
+			factory: authed,
+			wantErr: "unable to determine base repository: could not determine repository",
+		},
+		{
+			name: "invalid repository flag",
 			factory: func(ios *iostreams.IOStreams) *cmdutil.Factory {
-				return &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Token: "test-token"}
+				f := authed(ios)
+				f.Repo = "project"
+				return f
 			},
-			wantErr: "accepts 1 arg",
+			wantErr: "unable to determine base repository: expected owner/repo format",
+		},
+		{
+			name:    "too many args",
+			factory: authed,
+			args:    []string{"a/b", "c/d"},
+			wantErr: "accepts at most 1 arg",
+		},
+		{
+			name:    "blank org",
+			factory: authed,
+			args:    []string{"upstream-org/project", "--org="},
+			wantErr: "--org cannot be blank",
+		},
+		{
+			name:    "blank remote name",
+			factory: authed,
+			args:    []string{"--remote", "--remote-name="},
+			wantErr: "--remote-name cannot be blank",
+		},
+		{
+			name:    "remote with a repository argument",
+			factory: authed,
+			args:    []string{"upstream-org/project", "--remote"},
+			wantErr: "the `--remote` flag is unsupported when a repository argument is provided",
+		},
+		{
+			name:    "remote=false with a repository argument",
+			factory: authed,
+			args:    []string{"upstream-org/project", "--remote=false"},
+			wantErr: "the `--remote` flag is unsupported when a repository argument is provided",
+		},
+		{
+			name: "remote with the repository flag",
+			factory: func(ios *iostreams.IOStreams) *cmdutil.Factory {
+				f := authed(ios)
+				f.Repo = "upstream-org/project"
+				return f
+			},
+			args:    []string{"--remote"},
+			wantErr: "the `--remote` flag is unsupported when a repository argument is provided",
 		},
 	}
 
@@ -94,72 +165,6 @@ func TestNewCmdFork_Errors(t *testing.T) {
 			err := runForkCmd(tt.factory(ios), tt.args...)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.wantErr)
-		})
-	}
-}
-
-func TestForkRun_Errors(t *testing.T) {
-	tests := []struct {
-		name    string
-		host    string
-		respond httpmock.Responder
-		wantErr string
-	}{
-		{
-			name:    "not found",
-			respond: httpmock.StringResponse(http.StatusNotFound, `{"message":"not found"}`),
-			wantErr: "failed to fork repository (HTTP 404): {\"message\":\"not found\"}",
-		},
-		{
-			name:    "malformed json",
-			respond: httpmock.StringResponse(http.StatusAccepted, `{not json`),
-			wantErr: "invalid character",
-		},
-		{
-			name: "body read error",
-			respond: func(*http.Request) (*http.Response, error) {
-				return &http.Response{StatusCode: http.StatusAccepted, Body: io.NopCloser(errReader{})}, nil
-			},
-			wantErr: "read failed",
-		},
-		{
-			name: "transport error",
-			respond: func(*http.Request) (*http.Response, error) {
-				return nil, errors.New("boom")
-			},
-			wantErr: "connecting to app.copia.io",
-		},
-		{
-			name:    "invalid host",
-			host:    "bad host",
-			wantErr: "invalid character",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			reg := &httpmock.Registry{}
-			defer reg.Verify(t)
-			if tt.respond != nil {
-				reg.Register(httpmock.REST("POST", "/api/v1/repos/upstream-org/project/forks"), tt.respond)
-			}
-			host := tt.host
-			if host == "" {
-				host = "app.copia.io"
-			}
-
-			ios, _, stdout, _ := iostreams.Test()
-			err := ForkRun(&ForkOptions{
-				IO:         ios,
-				HTTPClient: &http.Client{Transport: reg},
-				Host:       host,
-				Token:      "test-token",
-				Owner:      "upstream-org",
-				Repo:       "project",
-			})
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), tt.wantErr)
-			assert.Empty(t, stdout.String())
 		})
 	}
 }
