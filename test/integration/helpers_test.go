@@ -29,11 +29,33 @@ type testEnv struct {
 }
 
 // runRepo is the repository the tests of this run use, created by the first
-// loadTestEnv and deleted by TestMain after the run.
+// loadTestEnv and deleted by TestMain after the run, together with the
+// scratch repositories tests created with newScratchRepo.
 var runRepo struct {
 	once sync.Once
 	name string
 	err  error
+
+	mu      sync.Mutex
+	scratch []string
+}
+
+// newScratchRepo creates a private scratch repository of this run with
+// suffix (0-9 and a-z, unique in the run) under the owner of env and returns
+// env with Repo set to it. TestMain deletes it after the run; a test that
+// changes a repository as a whole (rename, archive, visibility, forks) works
+// there instead of in the run repository.
+func newScratchRepo(t *testing.T, env testEnv, suffix string) testEnv {
+	t.Helper()
+	name, err := createScratchRepo(newAPI(env.Host, env.Token), env.Owner, runRepo.name, suffix)
+	if err != nil {
+		t.Fatalf("set up a scratch repository: %v", err)
+	}
+	runRepo.mu.Lock()
+	runRepo.scratch = append(runRepo.scratch, name)
+	runRepo.mu.Unlock()
+	env.Repo = name
+	return env
 }
 
 func loadTestEnv(t *testing.T) testEnv {

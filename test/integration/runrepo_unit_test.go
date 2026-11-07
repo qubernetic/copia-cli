@@ -36,8 +36,21 @@ func TestDeleteRunRepo_RefusesOtherNames(t *testing.T) {
 		"it-run-T3M5K0",
 		"it-run--5",
 		"it-run-+5",
-		"it-run-t3m5k0-x",
 		"it-run-t3m5k0/../other",
+		"it-run-t3m5k0-",
+		"it-run-t3m5k0--x",
+		"it-run-t3m5k0-X",
+		"it-run-t3m5k0-Labels",
+		"it-run-t3m5k0-a-b",
+		"it-run-t3m5k0-a_b",
+		"it-run-t3m5k0-a.b",
+		"it-run-t3m5k0-a/b",
+		"it-run-t3m5k0-../x",
+		"it-run-t3m5k0-a\\b",
+		"it-run-t3m5k0-a b",
+		"it-run--x",
+		"it-run-0-x",
+		"x-it-run-t3m5k0-x",
 		"it-run-t3m_5k0",
 		"it-run-0",
 		"it-run-zzzzzzzzzzzzzzzzzzzz",
@@ -59,6 +72,14 @@ func TestDeleteRunRepo_DeletesRunRepository(t *testing.T) {
 
 	api, _ = recordingAPI(403, "")
 	require.Error(t, deleteRunRepo(api, "owner", name))
+}
+
+func TestDeleteRunRepo_DeletesScratchRepository(t *testing.T) {
+	for _, name := range []string{"it-run-tro8w0-x", "it-run-tro8w0-labels", "it-run-tro8w0-0", "it-run-tro8w0-fork2"} {
+		api, calls := recordingAPI(204, "")
+		require.NoError(t, deleteRunRepo(api, "owner", name))
+		require.True(t, len(*calls) == 1 && (*calls)[0] == "DELETE /repos/owner/"+name, "the delete path sent no single DELETE of the scratch repository")
+	}
 }
 
 func TestDeleteStaleRunRepos(t *testing.T) {
@@ -159,5 +180,79 @@ func TestTearDownRunRepo(t *testing.T) {
 			"DELETE /repos/owner/it-run-tro8w0",
 			"GET /repos/owner/it-run-tro8w0",
 		}), "tear down deletes the run repository and reads it back")
+	}
+}
+
+func TestCreateScratchRepo(t *testing.T) {
+	var calls []string
+	var created map[string]any
+	api := func(method, path string, payload any) (int, []byte, error) {
+		calls = append(calls, method+" "+path)
+		data, _ := json.Marshal(payload)
+		_ = json.Unmarshal(data, &created)
+		return 201, nil, nil
+	}
+	name, err := createScratchRepo(api, "owner", "it-run-tro8w0", "labels")
+	require.NoError(t, err)
+	require.True(t, name == "it-run-tro8w0-labels", "the scratch repository is the run repository's name and the suffix")
+	require.True(t, slices.Equal(calls, []string{"POST /orgs/owner/repos"}), "a scratch repository is created under the owner")
+	require.True(t, created["name"] == name && created["private"] == true && created["auto_init"] == true,
+		"the scratch repository is private and has an initial commit")
+
+	api = func(method, path string, payload any) (int, []byte, error) { return 422, nil, nil }
+	_, err = createScratchRepo(api, "owner", "it-run-tro8w0", "labels")
+	require.ErrorContains(t, err, "status 422")
+}
+
+func TestCreateScratchRepo_RefusesBadNames(t *testing.T) {
+	for _, tt := range []struct{ run, suffix string }{
+		{"it-run-tro8w0", ""},
+		{"it-run-tro8w0", "Labels"},
+		{"it-run-tro8w0", "a-b"},
+		{"it-run-tro8w0", "../x"},
+		{"it-run-tro8w0-x", "labels"},
+		{"other", "labels"},
+		{"", "labels"},
+	} {
+		api, calls := recordingAPI(201, "")
+		_, err := createScratchRepo(api, "owner", tt.run, tt.suffix)
+		require.Error(t, err)
+		require.True(t, len(*calls) == 0, "a scratch repository with a name the delete path refuses was created")
+	}
+}
+
+func TestTearDownRun(t *testing.T) {
+	run := "it-run-tro8w0"
+	scratch := []string{"it-run-tro8w0-a", "it-run-tro8w0-b"}
+	for _, tt := range []struct {
+		name    string
+		stillAt string
+		ok      bool
+	}{
+		{"every repository gone", "", true},
+		{"a scratch repository stays", "/repos/owner/it-run-tro8w0-a", false},
+		{"the run repository stays", "/repos/owner/it-run-tro8w0", false},
+	} {
+		var calls []string
+		api := func(method, path string, _ any) (int, []byte, error) {
+			calls = append(calls, method+" "+path)
+			if method == "DELETE" {
+				return 204, nil, nil
+			}
+			if path == tt.stillAt {
+				return 200, nil, nil
+			}
+			return 404, nil, nil
+		}
+		err := tearDownRun(api, "owner", run, scratch)
+		require.True(t, (err == nil) == tt.ok, "tear down fails exactly when a repository is still there")
+		require.True(t, slices.Equal(calls, []string{
+			"DELETE /repos/owner/it-run-tro8w0-a",
+			"GET /repos/owner/it-run-tro8w0-a",
+			"DELETE /repos/owner/it-run-tro8w0-b",
+			"GET /repos/owner/it-run-tro8w0-b",
+			"DELETE /repos/owner/it-run-tro8w0",
+			"GET /repos/owner/it-run-tro8w0",
+		}), "tear down deletes every scratch repository, then the run repository, and reads each back")
 	}
 }
