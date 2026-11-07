@@ -88,7 +88,7 @@ func RenameRun(opts *RenameOptions) error {
 		return fmt.Errorf("renaming %s/%s to %s needs confirmation; use --yes to confirm", opts.Owner, opts.Repo, opts.NewName)
 	}
 
-	if err := rename(opts); err != nil {
+	if err := Rename(opts); err != nil {
 		return err
 	}
 	_, _ = fmt.Fprintf(opts.IO.Out, "Renamed repository %s/%s\n", opts.Owner, opts.NewName)
@@ -206,8 +206,9 @@ func sameHostName(remote, configured string) bool {
 	return strings.EqualFold(remote, u.Hostname())
 }
 
-// rename sends the new name with PATCH /repos/{owner}/{repo}.
-func rename(opts *RenameOptions) error {
+// Rename sends the new name with PATCH /repos/{owner}/{repo}; repo fork
+// uses it to rename an existing fork.
+func Rename(opts *RenameOptions) error {
 	body, err := json.Marshal(map[string]string{"name": opts.NewName})
 	if err != nil {
 		return err
