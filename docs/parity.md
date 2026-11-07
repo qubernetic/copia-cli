@@ -19,7 +19,7 @@ Mapping of GitHub CLI (`gh`) commands to Copia CLI equivalents. Tracks what is a
 | `gh auth status` | Full | `copia-cli auth status` | [x] |
 | `gh auth switch` | Full | `copia-cli auth switch` | [x] |
 | `gh auth git-credential` | Full | `copia-cli auth git-credential` | [x] |
-| `gh auth token` | Full | `copia-cli auth token` | [ ] |
+| `gh auth token` | Full | `copia-cli auth token` | [x] |
 | `gh auth setup-git` | Full | `copia-cli auth setup-git` | [x] |
 
 The default host is the top-level config key `default_host`, which `auth login` sets to the host it logs in to; gh has no such key and defaults to `github.com` (or its only host) unless `GH_HOST` is set. The host order is `--host`, `COPIA_HOST`, `default_host`, then the alphabetically first host; `auth logout` of the default host moves `default_host` to the alphabetically first remaining host. `auth status` lists the hosts in alphabetical order and marks the default one with `(default)`.
@@ -30,6 +30,8 @@ Token storage follows gh: `auth login` stores the token in the OS keyring (go-ke
 
 `auth git-credential` is hidden, as in gh, and answers git's `get` with `username=<login>` and `password=<token>` of the active account of the configured host git asks about (https only, the port must match, a missing one is 443). Like gh it reads a `url` line as well as `protocol`, `host`, `path` and `username`, refuses a request whose `username` is not the active account's login, ignores `--token` and `COPIA_TOKEN`, and does nothing for `store` and `erase`. Where gh exits 1 when it has no credential, copia-cli prints nothing and exits 0, and it prints no `protocol` and `host` lines. A token or login with a character outside printable ASCII is refused, as `repo clone` does. `auth setup-git` writes the helper into the global git config as gh does: for each logged-in host (a host with at least one account) or the one `--host` names, `git config --global --replace-all credential.https://<host>.helper ""` and then `--add` of `!'<path>' auth git-credential`. As with gh, the empty value drops only the helpers configured before it; a helper configured after it (later in the global file, repository-local, worktree or `-c`) still takes part. gh's flag is `--hostname/-h`; copia-cli uses `--host`, as its other commands do, and `--force/-f` as gh. The path is the `copia-cli` found in `PATH` when it is a symlink to the running binary (gh does the same, a hard link does not count), otherwise the running binary; gh quotes it only when it contains a space, `$` or a backslash, copia-cli always quotes it, a single quote included. gh prints nothing on success and so does copia-cli; with no host logged in gh prints a hint and exits 1, copia-cli fails with the hint as its error. gh also configures `gist.<host>`, which Copia has no equivalent of.
 
+`auth token` prints the token for the host the commands resolve, followed by a newline, as gh does: the active account's token as the other commands would use it (`--token`, `COPIA_TOKEN` under the host rule above, then the stored token), or with `--user/-u <login>` that account's stored token. gh's `--hostname/-h` is the global `--host`. Without a token it fails with gh's message without `oauth`, `no token found for <host>` (and ` account <login>` with `--user`). copia-cli has no refreshable tokens, so gh's `--no-refresh` and its expiry warning do not apply, and no hidden `--secure-storage`, since go-gh does not read copia-cli's storage.
+
 ## repo
 
 | gh command | Parity | Copia CLI | Status |
@@ -38,20 +40,29 @@ Token storage follows gh: `auth login` stores the token in the OS keyring (go-ke
 | `gh repo view` | Full | `copia-cli repo view` | [x] |
 | `gh repo create` | Full | `copia-cli repo create` | [x] |
 | `gh repo clone` | Full | `copia-cli repo clone` | [x] |
-| `gh repo fork` | Full | `copia-cli repo fork` | [x] |
+| `gh repo fork` | None | `copia-cli repo fork` fails on Copia, works on Gitea | — |
 | `gh repo delete` | Full | `copia-cli repo delete` | [x] |
-| `gh repo archive` | Partial | `copia-cli repo archive` | [ ] |
-| `gh repo rename` | Full | `copia-cli repo rename` | [ ] |
-| `gh repo edit` | Full | `copia-cli repo edit` | [ ] |
+| `gh repo archive` | Partial | `copia-cli repo archive` | [x] |
+| `gh repo unarchive` | Partial | `copia-cli repo unarchive` | [x] |
+| `gh repo rename` | Full | `copia-cli repo rename` | [x] |
+| `gh repo edit` | Full | `copia-cli repo edit` | [x] |
 | `gh repo set-default` | n/a | `copia-cli repo set-default` | [x] |
-| `gh repo sync` | Partial | `copia-cli repo sync` | [ ] |
+| `gh repo sync` | Partial | `copia-cli repo sync` | [x] |
 | `gh repo deploy-key` | Full | `copia-cli repo deploy-key` | [ ] |
 
 `gh repo view --web/-w`: client side, no API call and no token, opened as for the issue commands: `/{owner}/{repo}` of the argument, `-R` or the git remote. gh's `--branch` does not exist in `repo view`.
 
 `gh repo set-default`: client side, no API call and no token. The default is the git config key `remote.<name>.copia-resolved` (gh uses `gh-resolved`) with the value `base`, and the commands that work on the current repository read the marked remote first, then `origin`; `-R` wins over both. The argument is `owner/repo` (any case) or a remote name, `--view/-v` prints the default and `--unset/-u` removes it. Differences from gh: there is no prompt, so without an argument the only remote is used and several remotes fail with their list; gh also offers the parent of a fork found through the API, which copia-cli does not, so the repository must be one of the git remotes; the argument fails with `--view` or `--unset`, and the messages print whether or not standard output is a terminal.
 
-`gh repo sync`: `POST /repos/{owner}/{repo}/merge-upstream` (`branch`, `ff_only`) brings a branch of a fork up to date with its upstream on the server. There is no `--force` (hard reset) and no sync of a local clone, which `gh` does with git.
+`gh repo edit [<owner/repo>]`: `PATCH /repos/{owner}/{repo}` with only the given settings: `-d/--description` as `description`, `--homepage` as `website`, `--default-branch` as `default_branch`, `--visibility public|private` as `private`, `--template` as `template`, `--enable-issues`, `--enable-wiki` and `--enable-projects` as `has_issues`, `has_wiki` and `has_projects`, `--enable-merge-commit`, `--enable-squash-merge` and `--enable-rebase-merge` as `allow_merge_commits`, `allow_squash_merge` and `allow_rebase`, and `--delete-branch-on-merge` as `default_delete_branch_after_merge` (every boolean flag takes `=false`). `--add-topic` and `--remove-topic` read `GET /repos/{owner}/{repo}/topics` and write the new list with `PUT /repos/{owner}/{repo}/topics` only when it changed; a topic is compared in lower case without surrounding space, as Copia stores it. `--visibility` needs `--accept-visibility-change-consequences`, with gh's message. app.copia.io (0.60.0 on 2026-11-07) refuses to make a repository public with 403, as Gitea does under its `FORCE_PRIVATE` setting, so `--visibility public` fails there with `failed to edit repository (HTTP 403): the server may not allow public repositories` and changes nothing; `--visibility private` works. Differences from gh: there is no prompt, so without a flag it fails with `specify properties to edit`; `--homepage` has no `-h` (copia-cli's help flag); `--visibility` takes no `internal`, since a Gitea repository is public or private; `--enable-discussions`, `--enable-auto-merge`, `--allow-forking`, `--allow-update-branch`, `--squash-merge-commit-message` and the security flags are left out (no Gitea repository setting matches them); `Edited repository <owner>/<repo>` is printed on standard output also without a terminal.
+
+`gh repo rename <new-name>`: `PATCH /repos/{owner}/{repo}` with `{"name"}` on the current repository or `-R`, then `Renamed repository <owner>/<new-name>`. A name with `/` fails with gh's message before any API call. Without `-R` the git remote that names the old repository on the configured host (host name compared without port and case; the one marked by `repo set-default` first, then `origin`, then the first in config order) gets the new name with `git remote set-url`; only the last path segment of its configured URL changes, so scheme, user, host and a `.git` suffix stay, and `Updated the "<remote>" remote` follows. When no remote matches or git fails, `! Warning: unable to update remote ...` goes to standard error and the command still exits 0, as in gh. Differences from gh: there is no prompt, so `--yes` (`-y`) is required, also with `-R` (gh asks only without it), and the name argument is required; both success lines are printed also without a terminal; gh's deprecated `--confirm` is left out.
+
+`gh repo archive [<owner/repo>]` and `gh repo unarchive [<owner/repo>]`: `GET /repos/{owner}/{repo}` reads `archived`; a repository already in the asked state gets gh's warning on standard error (`! Repository <owner>/<repo> is already archived` or `is not archived`), no PATCH and exit 0, otherwise `PATCH /repos/{owner}/{repo}` with `{"archived": true}` or `false`, then `Archived repository <owner>/<repo>` or `Unarchived repository <owner>/<repo>`. Without an argument the current repository is used, or `-R`. `repo view --json archived` shows the state. Differences from gh: there is no prompt, so `--yes` (`-y`) is always required and is checked first, with gh's non-interactive message `--yes required when not running interactively`; the argument is `owner/repo`, a bare name does not default to the user's own repository; the success line is printed also without a terminal; gh's deprecated `--confirm` is left out.
+
+`gh repo fork`: None on Copia. app.copia.io has no `/repos/{owner}/{repo}/forks` route: `GET` and `POST` answer the plain-text `404 page not found` of an unknown path, while the other repository routes answer normally (found by the `integration` job of #174, 2026-11-07). `repo fork` sends Gitea's `POST /repos/{owner}/{repo}/forks` (`organization` for `--org`) and reports a plain-text 404 as `Copia does not offer forking through its API`; against a Gitea-compatible server that serves the route it forks, and a JSON 404 there means the repository was not found. gh's `--clone`, `--remote`, `--remote-name`, `--fork-name` and `--default-branch-only` are not added (#174 was closed as not possible on Copia).
+
+`gh repo sync`: Partial. Without an argument it syncs the local clone with git, as gh does: the source is `-s/--source owner/repo` or the default repository (`-R`, the remote marked by `repo set-default`, else `origin`) and must be one of the git remotes (owner and name in any case), the branch is `-b/--branch` or the source's `default_branch` from `GET /repos/{owner}/{repo}`. `git fetch` of the branch from that remote gets the token only when the remote's URL is https on the configured host (the scoped credential helper of `repo clone`), then a checked-out branch is fast-forwarded with `merge --ff-only`, another one is moved with `branch --force`, a missing one is created tracking the remote. Diverged branches fail with gh's message unless `--force`, which uses `reset --hard`; a dirty working tree on the checked-out branch is refused with gh's message. With an argument (`owner/repo`) gh syncs a fork from its parent on the server. app.copia.io has no `/repos/{owner}/{repo}/merge-upstream` route: `POST` answers the plain-text `404 page not found` of an unknown path (found by the `integration` job of #45, 2026-11-07), so the remote mode reports `Copia does not offer fork sync through its API`, as Copia has no forks either (`gh repo fork`). Against a Gitea-compatible server that serves the route it sends `{"branch", "ff_only": true}` (the branch defaults to the repository's `default_branch`), prints `Synced the "<owner>:<branch>" branch from its parent` or that it is already up to date, and reports `<owner>/<repo> is not a fork` and diverging changes (gh's message, pointing at a local `--force`); `--force` and `-s/--source` are refused with an argument, since the endpoint only fast-forwards from the parent. Differences from gh: the success line is printed also without a terminal, and gh's worktree hints on a branch checked out in another worktree are left out (git's own error is shown).
 
 `gh repo deploy-key`: `GET` and `POST /repos/{owner}/{repo}/keys`, `DELETE /repos/{owner}/{repo}/keys/{id}` for list, add and delete.
 
@@ -128,11 +139,20 @@ Token storage follows gh: `auth login` stores the token in the OS keyring (go-ke
 |-----------|--------|-----------|--------|
 | `gh release list` | Full | `copia-cli release list` | [x] |
 | `gh release create` | Full | `copia-cli release create` | [x] |
-| `gh release view` | Full | `copia-cli release view` | [ ] |
+| `gh release view` | Full | `copia-cli release view` | [x] |
 | `gh release delete` | Full | `copia-cli release delete` | [x] |
 | `gh release upload` | Full | `copia-cli release upload` | [x] |
-| `gh release download` | Full | `copia-cli release download` | [ ] |
-| `gh release edit` | Full | `copia-cli release edit` | [ ] |
+| `gh release download` | Full | `copia-cli release download` | [x] |
+| `gh release edit` | Full | `copia-cli release edit` | [x] |
+| `gh release delete-asset` | Full | `copia-cli release delete-asset` | [x] |
+
+`gh release view [<tag>]`: `GET /repos/{owner}/{repo}/releases/tags/{tag}`. Without a tag it shows the newest release that is neither a draft nor a pre-release, as GitHub's latest release, from `GET /repos/{owner}/{repo}/releases?draft=false&pre-release=false` (newest first; the flags are checked on the client too, and further pages are read until one matches): Copia (0.60.0 on 2026-11-07) answers `GET /repos/{owner}/{repo}/releases/latest` with the same 404 as for a missing tag even when such a release exists. Without a terminal it prints gh's tab-separated `title`, `tag`, `draft`, `prerelease`, `author`, `created`, `published` (not for a draft) and `url` lines, one `asset` line per asset, `--` and the notes; gh's `immutable` line is left out, since Gitea has no immutable releases. On a terminal it prints the tag, `<login> released this <time ago>` (`created this` for a draft, with `Draft` or `Pre-release` in front), the notes as plain text (gh renders Markdown) and a `NAME`/`SIZE` table of the assets (gh's `Digest` column is left out, Gitea has no asset digest). `--json` takes the Gitea field names `id`, `tag_name`, `name`, `body`, `draft`, `prerelease`, `created_at`, `published_at`, `author` (`login`), `html_url`, `tarball_url`, `zipball_url`, `target_commitish` and `assets` (`id`, `name`, `size`, `download_count`, `browser_download_url`). `--web/-w` with a tag opens `/{owner}/{repo}/releases/tag/{tag}` with no API call and no token (gh looks the release up first); without a tag it looks the latest release up as above and opens its `html_url`, as gh does. A missing release fails with `release <tag> not found`, or `release not found` without a tag. `release delete` and `release upload` use the same lookup by tag, which now path-escapes the tag.
+
+`gh release edit <tag>`: finds the release with the lookup of `release view` and sends `PATCH /repos/{owner}/{repo}/releases/{id}` with only the given fields: `--draft` and `--prerelease` (`=false` allowed) as `draft` and `prerelease`, `-t/--title` as `name`, `-n/--notes` or `-F/--notes-file` (`-` reads standard input) as `body`, `--tag` as `tag_name` and `--target` as `target_commitish`. Without one of these flags it fails with `use flags to specify properties to edit` and makes no API call. An empty title or notes (`--title ""`, `--notes ""`, an empty `--notes-file` or empty standard input) fails with `cannot clear a release's title: Copia keeps the old value` (or `notes`) before any API call: gh clears the field, but Gitea's `EditRelease` ignores an empty string and keeps the old value. An empty `--tag` or `--target` is dropped for the same reason; given alone it fails with `use flags to specify properties to edit`. It prints the release URL. gh's `--latest` and `--verify-tag` are left out (Gitea has no latest marker to set and no tag check on edit), as is `--discussion-category` (no discussions).
+
+`gh release download [<tag>]`: finds the release with the lookup of `release view` (the latest one without a tag, where `-p/--pattern` or `-A/--archive` is required) and downloads every asset, or the ones whose name matches a `-p/--pattern` glob, from its `browser_download_url`; `-A/--archive zip|tar.gz` downloads `GET /repos/{owner}/{repo}/archive/<tag>.<format>` under the name of its `Content-Disposition` header, else `<repo>-<tag>.<format>`. `-D/--dir`, `-O/--output` (`-` is standard output), `--clobber` and `--skip-existing` and the flag checks follow gh, messages included. An asset name with a path separator or `..` is refused before any download, the file is written to a temporary file in the target directory and renamed, and a download URL that is not https on the configured host is refused without a request. Copia answers the download with a redirect to presigned storage on another host (AWS S3); only the download request follows it, https only, at most 3 hops, without `Authorization` once it leaves the configured host. The release lookup keeps the same-origin rule of every command. gh's `--allow-escape-sequences` is not offered: copia-cli writes an asset to standard output unchanged. It prints nothing on success, as gh does without a terminal.
+
+`gh release delete-asset <tag> <asset-name>`: finds the release with the lookup of `release view`, the asset by name in its `assets`, and sends `DELETE /repos/{owner}/{repo}/releases/{id}/assets/{asset_id}`. It needs `-y/--yes`, since copia-cli has no prompts: without it it fails with `deleting asset <name> from release <tag> is irreversible; use --yes to confirm` and makes no API call. A missing asset fails with gh's `asset <name> not found in release <tag>`. On success it prints `Deleted asset <name> from release <tag>` on standard output; gh prints that line on standard error and only on a terminal.
 
 ## label
 
@@ -140,10 +160,17 @@ Token storage follows gh: `auth login` stores the token in the OS keyring (go-ke
 |-----------|--------|-----------|--------|
 | `gh label list` | Full | `copia-cli label list` | [x] |
 | `gh label create` | Full | `copia-cli label create` | [x] |
-| `gh label edit` | Full | `copia-cli label edit` | [ ] |
-| `gh label delete` | Full | `copia-cli label delete` | [ ] |
+| `gh label edit` | Full | `copia-cli label edit` | [x] |
+| `gh label delete` | Full | `copia-cli label delete` | [x] |
+| `gh label clone` | Full | `copia-cli label clone` | [x] |
 
 `gh label list --web/-w`: client side, no API call and no token; opens `/{owner}/{repo}/labels`.
+
+`gh label edit <name>`: reads every page of `GET /repos/{owner}/{repo}/labels` to find the label by its exact name (Gitea compares label names case-sensitively, GitHub does not), then `PATCH /repos/{owner}/{repo}/labels/{id}` with the flags given (`--name/-n`, `--color/-c` without a leading `#`, `--description/-d`). Gitea accepts a second label of the same name, so the conflict gh reports from the API (`label with name "<new>" already exists`) is checked on the client against the listed labels. gh prints `Label "<name>" updated in <owner>/<repo>` on a terminal only; copia-cli prints it always, as its other commands print their success line.
+
+`gh label delete <name>`: reads every page of `GET /repos/{owner}/{repo}/labels` to find the label by its exact name, then `DELETE /repos/{owner}/{repo}/labels/{id}` (gh deletes by name, which the Gitea API does not offer). Without `--yes` it fails before any API call, with or without a terminal, since copia-cli never prompts; gh's deprecated `--confirm` is not added. gh prints `Label "<name>" deleted from <owner>/<repo>` on a terminal only; copia-cli prints it always.
+
+`gh label clone <source-repository>`: reads every page of `GET /repos/{owner}/{repo}/labels` of the source and of the destination (`-R` or the current repository), then sends `POST /repos/{owner}/{repo}/labels` with the name, color and description of each source label the destination lacks, and with `--force/-f` `PATCH /repos/{owner}/{repo}/labels/{id}` with the color and description of each one it has by exact name. Gitea accepts a second label of the same name, so existing labels are found in the list rather than from gh's `already_exists` error; labels only in the destination stay. The requests run one after another instead of gh's ten workers, and the first failed request aborts. gh prints its result on a terminal only; copia-cli prints `Cloned N labels from <source> to <destination>` on standard output always, or `! Cloned N labels of TOTAL from <source> to <destination>` on standard error when labels were skipped.
 
 ## config
 
@@ -208,10 +235,10 @@ Client side, no API call. Aliases are stored under the top-level key `aliases` o
 
 | Status | Count |
 |--------|-------|
-| Implemented | 64 |
-| Not yet implemented (Full parity) | 12 |
-| Not yet implemented (Partial) | 6 |
-| No equivalent | 12 |
-| **Total implementable** | **82** |
+| Implemented | 76 |
+| Not yet implemented (Full parity) | 4 |
+| Not yet implemented (Partial) | 4 |
+| No equivalent | 13 |
+| **Total implementable** | **84** |
 
 Counted from the rows above: every `[x]` row, and every other row by its Parity value. The Parity values follow the Gitea 1.26 API (`release/v1.26` swagger); `TestAPI_Version` in `test/integration/api_test.go` logs what Copia's `GET /version` reports in the PR `integration` job. On 2026-11-04 that was `0.59.0`, Copia's own version number, not a Gitea release, so the API does not show which Gitea version Copia is built on; a command's integration test shows whether Copia serves its endpoint.

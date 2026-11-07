@@ -19,12 +19,13 @@ func TestMain(m *testing.M) {
 		os.Exit(copiacmd.Main())
 	}
 	code := m.Run()
-	// The run repository goes with everything the tests left in it. The
-	// message names neither the owner nor the repository.
+	// The scratch repositories, then the run repository, go with everything
+	// the tests left in them. The message names neither the owner nor a
+	// repository.
 	if runRepo.name != "" {
 		api := newAPI(os.Getenv("COPIA_TEST_HOST"), os.Getenv("COPIA_TEST_TOKEN"))
-		if err := tearDownRunRepo(api, os.Getenv("COPIA_TEST_OWNER"), runRepo.name); err != nil {
-			fmt.Fprintf(os.Stderr, "tear down the run repository: %v\n", err)
+		if err := tearDownRun(api, os.Getenv("COPIA_TEST_OWNER"), runRepo.name, runRepo.scratch); err != nil {
+			fmt.Fprintf(os.Stderr, "tear down the run repositories: %v\n", err)
 			code = 1
 		}
 	}

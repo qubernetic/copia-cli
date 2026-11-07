@@ -3,14 +3,24 @@
 package integration
 
 import (
+	"bytes"
+	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	releasecreate "github.com/qubernetic/copia-cli/pkg/cmd/release/create"
 	releasedelete "github.com/qubernetic/copia-cli/pkg/cmd/release/delete"
+	releasedeleteasset "github.com/qubernetic/copia-cli/pkg/cmd/release/deleteasset"
+	releasedownload "github.com/qubernetic/copia-cli/pkg/cmd/release/download"
+	releaseedit "github.com/qubernetic/copia-cli/pkg/cmd/release/edit"
 	releaselist "github.com/qubernetic/copia-cli/pkg/cmd/release/list"
+	releaseupload "github.com/qubernetic/copia-cli/pkg/cmd/release/upload"
+	releaseview "github.com/qubernetic/copia-cli/pkg/cmd/release/view"
+	"github.com/qubernetic/copia-cli/pkg/cmdutil"
 )
 
 func TestRelease_Lifecycle(t *testing.T) {
@@ -60,6 +70,162 @@ func TestRelease_Lifecycle(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assertOutputContains(t, listOut.String(), tag)
+
+	// View release by tag, then as the latest (the only release of the run repository)
+	for _, viewTag := range []string{tag, ""} {
+		viewIO, viewOut, _ := testIO()
+		err = releaseview.ViewRun(&releaseview.ViewOptions{
+			IO:         viewIO,
+			HTTPClient: &http.Client{},
+			Host:       env.Host,
+			Token:      env.Token,
+			Owner:      env.Owner,
+			Repo:       env.Repo,
+			Tag:        viewTag,
+		})
+		require.NoError(t, err, "release view")
+		assertOutputContains(t, viewOut.String(), "tag:\t"+tag+"\n")
+		assertOutputContains(t, viewOut.String(), "title:\tIntegration Test Release\n")
+	}
+
+	// Edit title and draft state, view shows them, then publish again
+	editedTitle := "Integration Test Release (edited)"
+	for _, draft := range []bool{true, false} {
+		editIO, editOut, _ := testIO()
+		err = releaseedit.EditRun(&releaseedit.EditOptions{
+			IO:         editIO,
+			HTTPClient: &http.Client{},
+			Host:       env.Host,
+			Token:      env.Token,
+			Owner:      env.Owner,
+			Repo:       env.Repo,
+			Tag:        tag,
+			Title:      &editedTitle,
+			Draft:      &draft,
+		})
+		require.NoError(t, err, "release edit")
+		assertOutputContains(t, editOut.String(), "/releases/tag/"+tag+"\n")
+
+		viewIO, viewOut, _ := testIO()
+		err = releaseview.ViewRun(&releaseview.ViewOptions{
+			IO:         viewIO,
+			HTTPClient: &http.Client{},
+			Host:       env.Host,
+			Token:      env.Token,
+			Owner:      env.Owner,
+			Repo:       env.Repo,
+			Tag:        tag,
+		})
+		require.NoError(t, err, "release view after edit")
+		assertOutputContains(t, viewOut.String(), "title:\t"+editedTitle+"\n")
+		assertOutputContains(t, viewOut.String(), fmt.Sprintf("draft:\t%t\n", draft))
+	}
+
+	// Upload an asset, delete it with delete-asset, view shows no asset
+	assetName := "integration-asset.txt"
+	assetPath := filepath.Join(t.TempDir(), assetName)
+	require.NoError(t, os.WriteFile(assetPath, []byte("integration test asset\n"), 0o600), "write asset file")
+
+	uploadIO, uploadOut, _ := testIO()
+	err = releaseupload.UploadRun(&releaseupload.UploadOptions{
+		IO:         uploadIO,
+		HTTPClient: &http.Client{},
+		Host:       env.Host,
+		Token:      env.Token,
+		Owner:      env.Owner,
+		Repo:       env.Repo,
+		Tag:        tag,
+		Files:      []string{assetPath},
+	})
+	require.NoError(t, err, "release upload")
+	assertOutputContains(t, uploadOut.String(), "Uploaded "+assetName)
+
+	assetViewIO, assetViewOut, _ := testIO()
+	err = releaseview.ViewRun(&releaseview.ViewOptions{
+		IO:         assetViewIO,
+		HTTPClient: &http.Client{},
+		Host:       env.Host,
+		Token:      env.Token,
+		Owner:      env.Owner,
+		Repo:       env.Repo,
+		Tag:        tag,
+	})
+	require.NoError(t, err, "release view after upload")
+	assertOutputContains(t, assetViewOut.String(), "asset:\t"+assetName+"\n")
+
+	// Download the asset by pattern, then the source archive, each into an empty directory
+	downloadDir := t.TempDir()
+	downloadIO, downloadOut, _ := testIO()
+	err = releasedownload.DownloadRun(&releasedownload.DownloadOptions{
+		IO:                 downloadIO,
+		HTTPClient:         cmdutil.NewHTTPClient(),
+		DownloadHTTPClient: cmdutil.NewDownloadHTTPClient(),
+		Host:               env.Host,
+		Token:              env.Token,
+		Owner:              env.Owner,
+		Repo:               env.Repo,
+		Tag:                tag,
+		FilePatterns:       []string{"integration-*.txt"},
+		Destination:        downloadDir,
+	})
+	require.NoError(t, err, "release download by pattern")
+	assertOutputEmpty(t, downloadOut.String())
+	uploaded, err := os.ReadFile(assetPath)
+	require.NoError(t, err, "read uploaded asset")
+	downloaded, err := os.ReadFile(filepath.Join(downloadDir, assetName))
+	require.NoError(t, err, "read downloaded asset")
+	require.True(t, len(downloaded) == len(uploaded), "downloaded asset has the uploaded size")
+	require.True(t, bytes.Equal(downloaded, uploaded), "downloaded asset has the uploaded content")
+
+	archiveDir := t.TempDir()
+	archiveIO, _, _ := testIO()
+	err = releasedownload.DownloadRun(&releasedownload.DownloadOptions{
+		IO:                 archiveIO,
+		HTTPClient:         cmdutil.NewHTTPClient(),
+		DownloadHTTPClient: cmdutil.NewDownloadHTTPClient(),
+		Host:               env.Host,
+		Token:              env.Token,
+		Owner:              env.Owner,
+		Repo:               env.Repo,
+		Tag:                tag,
+		ArchiveType:        "zip",
+		Destination:        archiveDir,
+	})
+	require.NoError(t, err, "release download --archive zip")
+	archives, err := os.ReadDir(archiveDir)
+	require.NoError(t, err, "read archive directory")
+	require.True(t, len(archives) == 1, "one archive file downloaded")
+	archiveInfo, err := archives[0].Info()
+	require.NoError(t, err, "stat archive file")
+	require.Greater(t, archiveInfo.Size(), int64(0), "archive is not empty")
+
+	deleteAssetIO, deleteAssetOut, _ := testIO()
+	err = releasedeleteasset.DeleteAssetRun(&releasedeleteasset.DeleteAssetOptions{
+		IO:         deleteAssetIO,
+		HTTPClient: &http.Client{},
+		Host:       env.Host,
+		Token:      env.Token,
+		Owner:      env.Owner,
+		Repo:       env.Repo,
+		Tag:        tag,
+		AssetName:  assetName,
+		Confirmed:  true,
+	})
+	require.NoError(t, err, "release delete-asset")
+	assertOutputEqual(t, deleteAssetOut.String(), "Deleted asset "+assetName+" from release "+tag+"\n")
+
+	noAssetViewIO, noAssetViewOut, _ := testIO()
+	err = releaseview.ViewRun(&releaseview.ViewOptions{
+		IO:         noAssetViewIO,
+		HTTPClient: &http.Client{},
+		Host:       env.Host,
+		Token:      env.Token,
+		Owner:      env.Owner,
+		Repo:       env.Repo,
+		Tag:        tag,
+	})
+	require.NoError(t, err, "release view after delete-asset")
+	assertOutputNotContains(t, noAssetViewOut.String(), "asset:\t")
 
 	// Delete release
 	deleteIO, deleteOut, _ := testIO()

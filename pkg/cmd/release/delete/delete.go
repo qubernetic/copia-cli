@@ -1,12 +1,11 @@
 package delete
 
 import (
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 
 	"github.com/spf13/cobra"
+	"github.com/qubernetic/copia-cli/pkg/cmd/release/shared"
 	"github.com/qubernetic/copia-cli/pkg/cmdutil"
 	"github.com/qubernetic/copia-cli/pkg/iostreams"
 )
@@ -56,38 +55,8 @@ func NewCmdDelete(f *cmdutil.Factory) *cobra.Command {
 }
 
 func DeleteRun(opts *DeleteOptions) error {
-	// First, look up release ID by tag
-	lookupURL := fmt.Sprintf("https://%s/api/v1/repos/%s/%s/releases/tags/%s",
-		opts.Host, opts.Owner, opts.Repo, opts.Tag)
-
-	lookupReq, err := http.NewRequest("GET", lookupURL, nil)
+	release, err := shared.FetchRelease(opts.HTTPClient, opts.Host, opts.Token, opts.Owner, opts.Repo, opts.Tag)
 	if err != nil {
-		return err
-	}
-	lookupReq.Header.Set("Authorization", "token "+opts.Token)
-
-	lookupResp, err := opts.HTTPClient.Do(lookupReq)
-	if err != nil {
-		return fmt.Errorf("connecting to %s: %w", opts.Host, err)
-	}
-	defer func() { _ = lookupResp.Body.Close() }()
-
-	if lookupResp.StatusCode == http.StatusNotFound {
-		return fmt.Errorf("release %s not found", opts.Tag)
-	}
-	if lookupResp.StatusCode != http.StatusOK {
-		return fmt.Errorf("API error (HTTP %d)", lookupResp.StatusCode)
-	}
-
-	body, err := io.ReadAll(lookupResp.Body)
-	if err != nil {
-		return err
-	}
-
-	var release struct {
-		ID int64 `json:"id"`
-	}
-	if err := json.Unmarshal(body, &release); err != nil {
 		return err
 	}
 

@@ -269,3 +269,15 @@ func TestNewCmdView_WebErrors(t *testing.T) {
 	require.EqualError(t, runViewCmd(failing, "-w"), "no browser")
 	assert.Empty(t, reg.Requests)
 }
+
+func TestNewCmdView_JSONArchived(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+	reg.Register(httpmock.REST("GET", "/api/v1/repos/my-org/my-repo"), httpmock.StringResponse(http.StatusOK, `{"full_name":"my-org/my-repo","archived":true}`))
+
+	ios, _, stdout, _ := iostreams.Test()
+	f := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Token: "test-token", Repo: "my-org/my-repo"}
+	require.NoError(t, runViewCmd(f, "--json", "archived"))
+	assert.JSONEq(t, `{"archived":true}`, stdout.String())
+}

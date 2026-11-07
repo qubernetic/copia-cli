@@ -19,6 +19,9 @@ func TestNewCmdLabel_Subcommands(t *testing.T) {
 	assert.Equal(t, map[string]string{
 		"list":   "General commands",
 		"create": "General commands",
+		"edit":   "General commands",
+		"delete": "General commands",
+		"clone":  "General commands",
 	}, groups)
 
 	var titles []string

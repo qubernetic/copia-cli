@@ -29,11 +29,45 @@ type testEnv struct {
 }
 
 // runRepo is the repository the tests of this run use, created by the first
-// loadTestEnv and deleted by TestMain after the run.
+// loadTestEnv and deleted by TestMain after the run, together with the
+// scratch repositories tests created with newScratchRepo.
 var runRepo struct {
 	once sync.Once
 	name string
 	err  error
+
+	mu      sync.Mutex
+	scratch []string
+}
+
+// newScratchRepo creates a private scratch repository of this run with
+// suffix (0-9 and a-z, unique in the run) under the owner of env and returns
+// env with Repo set to it. TestMain deletes it after the run; a test that
+// changes a repository as a whole (rename, archive, visibility, forks) works
+// there instead of in the run repository.
+func newScratchRepo(t *testing.T, env testEnv, suffix string) testEnv {
+	t.Helper()
+	name, err := createScratchRepo(newAPI(env.Host, env.Token), env.Owner, runRepo.name, suffix)
+	if err != nil {
+		t.Fatalf("set up a scratch repository: %v", err)
+	}
+	runRepo.mu.Lock()
+	runRepo.scratch = append(runRepo.scratch, name)
+	runRepo.mu.Unlock()
+	env.Repo = name
+	return env
+}
+
+// renameScratchRepo records that the scratch repository old of this run is
+// now named name, so TestMain deletes it under that name.
+func renameScratchRepo(old, name string) {
+	runRepo.mu.Lock()
+	defer runRepo.mu.Unlock()
+	for i, n := range runRepo.scratch {
+		if n == old {
+			runRepo.scratch[i] = name
+		}
+	}
 }
 
 func loadTestEnv(t *testing.T) testEnv {
@@ -276,6 +310,16 @@ func assertOutputContains(t *testing.T, out, want string) bool {
 	return false
 }
 
+// assertOutputNotContains fails the test when out contains unwanted.
+func assertOutputNotContains(t *testing.T, out, unwanted string) bool {
+	t.Helper()
+	if !strings.Contains(out, unwanted) {
+		return true
+	}
+	t.Errorf("output (%d bytes) contains %q", len(out), unwanted)
+	return false
+}
+
 // assertOutputEqual fails the test when out is not want.
 func assertOutputEqual(t *testing.T, out, want string) bool {
 	t.Helper()
@@ -283,6 +327,17 @@ func assertOutputEqual(t *testing.T, out, want string) bool {
 		return true
 	}
 	t.Errorf("output (%d bytes) is not %q (%d bytes)", len(out), want, len(want))
+	return false
+}
+
+// assertOutputEqualSecret fails the test when out is not want, a secret such
+// as the token: its message names the lengths only, never want.
+func assertOutputEqualSecret(t *testing.T, out, want string) bool {
+	t.Helper()
+	if out == want {
+		return true
+	}
+	t.Errorf("output (%d bytes) is not the expected secret (%d bytes)", len(out), len(want))
 	return false
 }
 

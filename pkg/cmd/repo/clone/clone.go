@@ -102,35 +102,48 @@ const credentialHelper = `!f() { test "$1" = get || return 0; printf 'username=t
 // existing is the number of GIT_CONFIG_* entries already in the
 // environment, which are kept.
 func cloneCommand(opts *CloneOptions, existing int) (args, env []string, err error) {
-	configured, err := cmdutil.ParseHost(opts.Host)
+	cloneURL := buildCloneURL(opts.Host, opts.Repo)
+	credEnv, err := CredentialEnv(opts.Host, opts.Token, cloneURL, existing)
 	if err != nil {
 		return nil, nil, err
 	}
-	if !cmdutil.IsPrintableASCII(opts.Token) {
-		return nil, nil, fmt.Errorf("invalid token: it may contain only printable ASCII characters")
-	}
-	cloneURL := buildCloneURL(opts.Host, opts.Repo)
 
 	args = []string{"clone", "--", cloneURL}
 	if opts.Dir != "" {
 		args = append(args, opts.Dir)
 	}
+	return args, append([]string{"GIT_TERMINAL_PROMPT=0"}, credEnv...), nil
+}
 
-	env = []string{"GIT_TERMINAL_PROMPT=0"}
-	if opts.Token == "" || !cmdutil.MatchesHost(configured, cloneURL) {
-		return args, env, nil
+// CredentialEnv returns the environment entries that hand token to git for
+// gitURL through credentialHelper, scoped to host, or none when the token is
+// empty or gitURL is not https on host. repo sync uses it for git fetch.
+func CredentialEnv(host, token, gitURL string, existing int) ([]string, error) {
+	configured, err := cmdutil.ParseHost(host)
+	if err != nil {
+		return nil, err
+	}
+	if !cmdutil.IsPrintableASCII(token) {
+		return nil, fmt.Errorf("invalid token: it may contain only printable ASCII characters")
+	}
+	if token == "" || !cmdutil.MatchesHost(configured, gitURL) {
+		return nil, nil
 	}
 
 	key := credentialKey(configured)
-	env = append(env,
-		"COPIA_CLONE_TOKEN="+opts.Token,
+	return []string{
+		"COPIA_CLONE_TOKEN=" + token,
 		fmt.Sprintf("GIT_CONFIG_COUNT=%d", existing+2),
 		fmt.Sprintf("GIT_CONFIG_KEY_%d=%s", existing, key),
 		fmt.Sprintf("GIT_CONFIG_VALUE_%d=", existing),
 		fmt.Sprintf("GIT_CONFIG_KEY_%d=%s", existing+1, key),
 		fmt.Sprintf("GIT_CONFIG_VALUE_%d=%s", existing+1, credentialHelper),
-	)
-	return args, env, nil
+	}, nil
+}
+
+// ConfigCount parses GIT_CONFIG_COUNT of the environment; see configCount.
+func ConfigCount() (int, error) {
+	return configCount(os.Getenv("GIT_CONFIG_COUNT"))
 }
 
 // credentialKey returns the git config key that scopes a credential helper

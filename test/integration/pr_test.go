@@ -244,11 +244,19 @@ func TestPR_UpdateBranch(t *testing.T) {
 		require.NoError(t, err)
 		return out.String(), errOut.String()
 	}
-	// onHead checks that the head branch has the file path.
+	// onHead checks that the head branch has the file path. Copia can answer
+	// 404 for a moment after the update, so it asks again for up to 30 s.
 	onHead := func(path string) {
 		t.Helper()
-		status, _ := apiCall(t, env, "read head file", "GET",
-			fmt.Sprintf("/repos/%s/%s/contents/%s?ref=%s", env.Owner, env.Repo, path, pr.Head), nil)
+		var status int
+		for i := 0; i < 30; i++ {
+			status, _ = apiCall(t, env, "read head file", "GET",
+				fmt.Sprintf("/repos/%s/%s/contents/%s?ref=%s", env.Owner, env.Repo, path, pr.Head), nil)
+			if status != http.StatusNotFound {
+				break
+			}
+			time.Sleep(time.Second)
+		}
 		assertStatusCode(t, status, http.StatusOK)
 	}
 	updated := fmt.Sprintf("Updated the branch of pull request %s (%s)\n", ref, title)

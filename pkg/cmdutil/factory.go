@@ -40,6 +40,10 @@ const envTokenIgnored = "COPIA_TOKEN is ignored because no host is named; set CO
 // another host than COPIA_HOST, the host the token belongs to.
 const envTokenOtherHost = "COPIA_TOKEN is ignored because --host names another host than COPIA_HOST; the token is sent only to the host COPIA_HOST names"
 
+// ErrNoToken is wrapped by the error ResolveAuth returns when neither a flag,
+// COPIA_TOKEN nor a stored token supplies a token for the host.
+var ErrNoToken = errors.New("no token configured")
+
 // ResolveAuth returns the host and token. The host comes from --host, then
 // COPIA_HOST, then the config's default host. The token comes from:
 // 1. --token (highest priority)
@@ -97,7 +101,7 @@ func (f *Factory) ResolveAuth() (host, token string, err error) {
 		return "", "", fmt.Errorf("no host configured. Run 'copia auth login' first%s", hint)
 	}
 	if token == "" {
-		return "", "", fmt.Errorf("no token configured for %s. Run 'copia auth login' first%s", host, hint)
+		return "", "", fmt.Errorf("%w for %s. Run 'copia auth login' first%s", ErrNoToken, host, hint)
 	}
 	if envTokenSkipped && !f.envTokenWarned {
 		f.envTokenWarned = true

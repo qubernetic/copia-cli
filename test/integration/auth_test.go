@@ -156,6 +156,48 @@ func TestAuth_LoginFallsBackToConfigFile(t *testing.T) {
 	assertOutputNotEmpty(t, stdout.String())
 }
 
+// TestAuth_Token logs in with the token stored in a temporary config file and
+// checks that auth token prints that token, for the active account and with
+// --user, without printing it anywhere else.
+func TestAuth_Token(t *testing.T) {
+	env := loadTestEnv(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(home, ".gitconfig"))
+	t.Setenv("COPIA_HOST", "")
+	t.Setenv("COPIA_TOKEN", "")
+	configPath := config.DefaultPath()
+
+	ios, _, _ := testIO()
+	err := login.LoginRun(&login.LoginOptions{
+		IO:              ios,
+		Host:            env.Host,
+		Token:           env.Token,
+		ConfigPath:      configPath,
+		HTTPClient:      testHTTPClient(),
+		InsecureStorage: true,
+	})
+	require.NoError(t, err, "auth login failed")
+	cfg, err := config.Load(configPath)
+	require.NoError(t, err, "reading the temporary config failed")
+	hc := cfg.Hosts[env.Host]
+	require.True(t, hc != nil && hc.User != "", "auth login stored no active account")
+
+	for _, args := range [][]string{
+		{"auth", "token"},
+		{"auth", "token", "--host", env.Host, "--user", hc.User},
+	} {
+		ios, stdout, stderr := testIO()
+		// The error of the --user case holds the login, so only its absence
+		// is checked.
+		err := copiacmd.Execute(copiacmd.NewFactory(ios), args)
+		require.True(t, err == nil, "auth token failed")
+		assertOutputEqualSecret(t, stdout.String(), env.Token+"\n")
+		assertOutputEmpty(t, stderr.String())
+	}
+}
+
 // TestAuth_LoginMakesAccountActive logs in with the token stored in a
 // temporary config file and checks that auth status lists the account as the
 // host's active account with a valid token.
