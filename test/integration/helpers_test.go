@@ -286,6 +286,17 @@ func assertOutputEqual(t *testing.T, out, want string) bool {
 	return false
 }
 
+// assertOutputEqualSecret fails the test when out is not want, a secret such
+// as the token: its message names the lengths only, never want.
+func assertOutputEqualSecret(t *testing.T, out, want string) bool {
+	t.Helper()
+	if out == want {
+		return true
+	}
+	t.Errorf("output (%d bytes) is not the expected secret (%d bytes)", len(out), len(want))
+	return false
+}
+
 // assertOutputEmpty fails the test when out is not empty.
 func assertOutputEmpty(t *testing.T, out string) bool {
 	t.Helper()
