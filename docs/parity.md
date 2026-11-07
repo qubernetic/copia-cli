@@ -142,10 +142,12 @@ Token storage follows gh: `auth login` stores the token in the OS keyring (go-ke
 |-----------|--------|-----------|--------|
 | `gh label list` | Full | `copia-cli label list` | [x] |
 | `gh label create` | Full | `copia-cli label create` | [x] |
-| `gh label edit` | Full | `copia-cli label edit` | [ ] |
+| `gh label edit` | Full | `copia-cli label edit` | [x] |
 | `gh label delete` | Full | `copia-cli label delete` | [ ] |
 
 `gh label list --web/-w`: client side, no API call and no token; opens `/{owner}/{repo}/labels`.
+
+`gh label edit <name>`: reads every page of `GET /repos/{owner}/{repo}/labels` to find the label by its exact name (Gitea compares label names case-sensitively, GitHub does not), then `PATCH /repos/{owner}/{repo}/labels/{id}` with the flags given (`--name/-n`, `--color/-c` without a leading `#`, `--description/-d`). Gitea accepts a second label of the same name, so the conflict gh reports from the API (`label with name "<new>" already exists`) is checked on the client against the listed labels. gh prints `Label "<name>" updated in <owner>/<repo>` on a terminal only; copia-cli prints it always, as its other commands print their success line.
 
 ## config
 
@@ -210,8 +212,8 @@ Client side, no API call. Aliases are stored under the top-level key `aliases` o
 
 | Status | Count |
 |--------|-------|
-| Implemented | 65 |
-| Not yet implemented (Full parity) | 11 |
+| Implemented | 66 |
+| Not yet implemented (Full parity) | 10 |
 | Not yet implemented (Partial) | 6 |
 | No equivalent | 12 |
 | **Total implementable** | **82** |
