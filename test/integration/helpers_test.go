@@ -58,6 +58,14 @@ func newScratchRepo(t *testing.T, env testEnv, suffix string) testEnv {
 	return env
 }
 
+// addScratchRepo records the scratch repository name of this run that a
+// command created, such as a fork, so TestMain deletes it.
+func addScratchRepo(name string) {
+	runRepo.mu.Lock()
+	defer runRepo.mu.Unlock()
+	runRepo.scratch = append(runRepo.scratch, name)
+}
+
 // renameScratchRepo records that the scratch repository old of this run is
 // now named name, so TestMain deletes it under that name.
 func renameScratchRepo(old, name string) {

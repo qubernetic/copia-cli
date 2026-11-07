@@ -5,6 +5,8 @@ package integration
 import (
 	"encoding/json"
 	"net/http"
+	"os/exec"
+	"path/filepath"
 	"slices"
 	"testing"
 
@@ -13,6 +15,7 @@ import (
 
 	repoarchive "github.com/qubernetic/copia-cli/pkg/cmd/repo/archive"
 	repoedit "github.com/qubernetic/copia-cli/pkg/cmd/repo/edit"
+	repofork "github.com/qubernetic/copia-cli/pkg/cmd/repo/fork"
 	repolist "github.com/qubernetic/copia-cli/pkg/cmd/repo/list"
 	reporename "github.com/qubernetic/copia-cli/pkg/cmd/repo/rename"
 	repoview "github.com/qubernetic/copia-cli/pkg/cmd/repo/view"
@@ -215,6 +218,56 @@ func TestRepoArchive(t *testing.T) {
 	stdout, stderr = setArchived(false)
 	assertOutputEmpty(t, stdout)
 	assertOutputEqual(t, stderr, "! Repository "+fullName+" is not archived\n")
+}
+
+// TestRepoFork forks the run repository into the test owner under a
+// scratch name with --clone: the clone has the fork as origin and the run
+// repository as upstream, the default repository. A second fork only
+// reports that the fork exists.
+func TestRepoFork(t *testing.T) {
+	env := loadTestEnv(t)
+	fork := env
+	fork.Repo = env.Repo + "-fork"
+	work := t.TempDir()
+	t.Chdir(work)
+
+	runFork := func(clone bool) (string, string, error) {
+		t.Helper()
+		ios, stdout, stderr := testIO()
+		err := repofork.ForkRun(&repofork.ForkOptions{
+			IO: ios, HTTPClient: testHTTPClient(),
+			Host: env.Host, Token: env.Token, Owner: env.Owner, Repo: env.Repo,
+			Org: env.Owner, ForkName: fork.Repo, Clone: clone,
+			RemoteName: "origin", Rename: true,
+		})
+		return stdout.String(), stderr.String(), err
+	}
+
+	stdout, _, err := runFork(true)
+	// Whatever ForkRun reports, a fork the server has is the run's to delete.
+	status, _ := apiCall(t, fork, "get fork", "GET", "/repos/"+fork.Owner+"/"+fork.Repo, nil)
+	if status == http.StatusOK {
+		addScratchRepo(fork.Repo)
+	}
+	require.NoError(t, err, "fork and clone the run repository")
+	require.True(t, status == http.StatusOK, "the fork is not found")
+	assertOutputContains(t, stdout, "/"+fork.Repo+"\n")
+
+	dir := filepath.Join(work, fork.Repo)
+	remotes, err := exec.Command("git", "-C", dir, "remote").Output()
+	require.NoError(t, err, "list the remotes of the clone")
+	assert.True(t, string(remotes) == "origin\nupstream\n", "the clone does not have exactly origin and upstream")
+	resolved, err := exec.Command("git", "-C", dir, "config", "--get", "remote.upstream.copia-resolved").Output()
+	require.NoError(t, err, "read the default remote of the clone")
+	assert.True(t, string(resolved) == "base\n", "upstream is not the default repository")
+	branches, err := exec.Command("git", "-C", dir, "branch", "-r").Output()
+	require.NoError(t, err, "list the remote branches of the clone")
+	assertOutputContains(t, string(branches), "upstream/")
+
+	stdout, stderr, err := runFork(false)
+	require.NoError(t, err, "fork the run repository again")
+	assertOutputEmpty(t, stdout)
+	assertOutputContains(t, stderr, "/"+fork.Repo+" already exists\n")
 }
 
 // repoSettings returns the description and the private flag of the
