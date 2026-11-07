@@ -11,6 +11,7 @@ import (
 	releasecreate "github.com/qubernetic/copia-cli/pkg/cmd/release/create"
 	releasedelete "github.com/qubernetic/copia-cli/pkg/cmd/release/delete"
 	releaselist "github.com/qubernetic/copia-cli/pkg/cmd/release/list"
+	releaseview "github.com/qubernetic/copia-cli/pkg/cmd/release/view"
 )
 
 func TestRelease_Lifecycle(t *testing.T) {
@@ -60,6 +61,23 @@ func TestRelease_Lifecycle(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assertOutputContains(t, listOut.String(), tag)
+
+	// View release by tag, then as the latest (the only release of the run repository)
+	for _, viewTag := range []string{tag, ""} {
+		viewIO, viewOut, _ := testIO()
+		err = releaseview.ViewRun(&releaseview.ViewOptions{
+			IO:         viewIO,
+			HTTPClient: &http.Client{},
+			Host:       env.Host,
+			Token:      env.Token,
+			Owner:      env.Owner,
+			Repo:       env.Repo,
+			Tag:        viewTag,
+		})
+		require.NoError(t, err, "release view")
+		assertOutputContains(t, viewOut.String(), "tag:\t"+tag+"\n")
+		assertOutputContains(t, viewOut.String(), "title:\tIntegration Test Release\n")
+	}
 
 	// Delete release
 	deleteIO, deleteOut, _ := testIO()

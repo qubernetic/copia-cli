@@ -130,11 +130,13 @@ Token storage follows gh: `auth login` stores the token in the OS keyring (go-ke
 |-----------|--------|-----------|--------|
 | `gh release list` | Full | `copia-cli release list` | [x] |
 | `gh release create` | Full | `copia-cli release create` | [x] |
-| `gh release view` | Full | `copia-cli release view` | [ ] |
+| `gh release view` | Full | `copia-cli release view` | [x] |
 | `gh release delete` | Full | `copia-cli release delete` | [x] |
 | `gh release upload` | Full | `copia-cli release upload` | [x] |
 | `gh release download` | Full | `copia-cli release download` | [ ] |
 | `gh release edit` | Full | `copia-cli release edit` | [ ] |
+
+`gh release view [<tag>]`: `GET /repos/{owner}/{repo}/releases/tags/{tag}`, or without a tag `GET /repos/{owner}/{repo}/releases/latest` (Gitea's latest release that is neither a draft nor a pre-release, as on GitHub). Without a terminal it prints gh's tab-separated `title`, `tag`, `draft`, `prerelease`, `author`, `created`, `published` (not for a draft) and `url` lines, one `asset` line per asset, `--` and the notes; gh's `immutable` line is left out, since Gitea has no immutable releases. On a terminal it prints the tag, `<login> released this <time ago>` (`created this` for a draft, with `Draft` or `Pre-release` in front), the notes as plain text (gh renders Markdown) and a `NAME`/`SIZE` table of the assets (gh's `Digest` column is left out, Gitea has no asset digest). `--json` takes the Gitea field names `id`, `tag_name`, `name`, `body`, `draft`, `prerelease`, `created_at`, `published_at`, `author` (`login`), `html_url`, `tarball_url`, `zipball_url`, `target_commitish` and `assets` (`id`, `name`, `size`, `download_count`, `browser_download_url`). `--web/-w` opens `/{owner}/{repo}/releases/tag/{tag}`, or `/{owner}/{repo}/releases/latest` without a tag, with no API call and no token (gh looks the release up first). A missing release fails with `release <tag> not found`, or `release not found` without a tag. `release delete` and `release upload` use the same lookup by tag, which now path-escapes the tag.
 
 ## label
 
@@ -217,8 +219,8 @@ Client side, no API call. Aliases are stored under the top-level key `aliases` o
 
 | Status | Count |
 |--------|-------|
-| Implemented | 68 |
-| Not yet implemented (Full parity) | 9 |
+| Implemented | 69 |
+| Not yet implemented (Full parity) | 8 |
 | Not yet implemented (Partial) | 6 |
 | No equivalent | 12 |
 | **Total implementable** | **83** |
