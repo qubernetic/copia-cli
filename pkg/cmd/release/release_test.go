@@ -18,12 +18,13 @@ func TestNewCmdRelease_Subcommands(t *testing.T) {
 		groups[c.Name()] = c.GroupID
 	}
 	assert.Equal(t, map[string]string{
-		"list":   "General commands",
-		"create": "General commands",
-		"delete": "Targeted commands",
-		"edit":   "Targeted commands",
-		"upload": "Targeted commands",
-		"view":   "Targeted commands",
+		"list":         "General commands",
+		"create":       "General commands",
+		"delete":       "Targeted commands",
+		"delete-asset": "Targeted commands",
+		"edit":         "Targeted commands",
+		"upload":       "Targeted commands",
+		"view":         "Targeted commands",
 	}, groups)
 
 	var titles []string
