@@ -189,7 +189,10 @@ func TestAuth_Token(t *testing.T) {
 		{"auth", "token", "--host", env.Host, "--user", hc.User},
 	} {
 		ios, stdout, stderr := testIO()
-		require.NoError(t, copiacmd.Execute(copiacmd.NewFactory(ios), args), "auth token failed")
+		// The error of the --user case holds the login, so only its absence
+		// is checked.
+		err := copiacmd.Execute(copiacmd.NewFactory(ios), args)
+		require.True(t, err == nil, "auth token failed")
 		assertOutputEqualSecret(t, stdout.String(), env.Token+"\n")
 		assertOutputEmpty(t, stderr.String())
 	}
