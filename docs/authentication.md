@@ -132,10 +132,12 @@ copia-cli auth status --host app.copia.io --show-token
 ```bash
 copia-cli auth token
 copia-cli auth token --host app.copia.io --user jane
-curl -H "Authorization: token $(copia-cli auth token)" https://app.copia.io/api/v1/user
+curl -H @- https://app.copia.io/api/v1/user <<EOF
+Authorization: token $(copia-cli auth token)
+EOF
 ```
 
-When there is no token, it fails with `no token found for <host>` (with `--user`, `no token found for <host> account <login>`), exits 1 and prints nothing on standard output. A keyring that fails gives an error starting with `reading the token for <host>`. **The output is the secret:** use it in a pipe or a variable, not where the terminal is recorded or shared. The token appears in no warning or error.
+When there is no token, it fails with `no token found for <host>` (with `--user`, `no token found for <host> account <login>`), exits 1 and prints nothing on standard output. A keyring that fails gives an error starting with `reading the token for <host>`. **The output is the secret:** use it in a pipe or a variable, not where the terminal is recorded or shared. Do not pass it as a command-line argument of another program: other local accounts can read a running program's arguments from the process list, which is why the `curl` example above gives curl the header on standard input. The token appears in no warning or error.
 
 ### Use the Token with git
 
