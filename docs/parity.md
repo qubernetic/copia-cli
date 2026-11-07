@@ -144,12 +144,15 @@ Token storage follows gh: `auth login` stores the token in the OS keyring (go-ke
 | `gh label create` | Full | `copia-cli label create` | [x] |
 | `gh label edit` | Full | `copia-cli label edit` | [x] |
 | `gh label delete` | Full | `copia-cli label delete` | [x] |
+| `gh label clone` | Full | `copia-cli label clone` | [x] |
 
 `gh label list --web/-w`: client side, no API call and no token; opens `/{owner}/{repo}/labels`.
 
 `gh label edit <name>`: reads every page of `GET /repos/{owner}/{repo}/labels` to find the label by its exact name (Gitea compares label names case-sensitively, GitHub does not), then `PATCH /repos/{owner}/{repo}/labels/{id}` with the flags given (`--name/-n`, `--color/-c` without a leading `#`, `--description/-d`). Gitea accepts a second label of the same name, so the conflict gh reports from the API (`label with name "<new>" already exists`) is checked on the client against the listed labels. gh prints `Label "<name>" updated in <owner>/<repo>` on a terminal only; copia-cli prints it always, as its other commands print their success line.
 
 `gh label delete <name>`: reads every page of `GET /repos/{owner}/{repo}/labels` to find the label by its exact name, then `DELETE /repos/{owner}/{repo}/labels/{id}` (gh deletes by name, which the Gitea API does not offer). Without `--yes` it fails before any API call, with or without a terminal, since copia-cli never prompts; gh's deprecated `--confirm` is not added. gh prints `Label "<name>" deleted from <owner>/<repo>` on a terminal only; copia-cli prints it always.
+
+`gh label clone <source-repository>`: reads every page of `GET /repos/{owner}/{repo}/labels` of the source and of the destination (`-R` or the current repository), then sends `POST /repos/{owner}/{repo}/labels` with the name, color and description of each source label the destination lacks, and with `--force/-f` `PATCH /repos/{owner}/{repo}/labels/{id}` with the color and description of each one it has by exact name. Gitea accepts a second label of the same name, so existing labels are found in the list rather than from gh's `already_exists` error; labels only in the destination stay. The requests run one after another instead of gh's ten workers, and the first failed request aborts. gh prints its result on a terminal only; copia-cli prints `Cloned N labels from <source> to <destination>` on standard output always, or `! Cloned N labels of TOTAL from <source> to <destination>` on standard error when labels were skipped.
 
 ## config
 
@@ -214,10 +217,10 @@ Client side, no API call. Aliases are stored under the top-level key `aliases` o
 
 | Status | Count |
 |--------|-------|
-| Implemented | 67 |
+| Implemented | 68 |
 | Not yet implemented (Full parity) | 9 |
 | Not yet implemented (Partial) | 6 |
 | No equivalent | 12 |
-| **Total implementable** | **82** |
+| **Total implementable** | **83** |
 
 Counted from the rows above: every `[x]` row, and every other row by its Parity value. The Parity values follow the Gitea 1.26 API (`release/v1.26` swagger); `TestAPI_Version` in `test/integration/api_test.go` logs what Copia's `GET /version` reports in the PR `integration` job. On 2026-11-04 that was `0.59.0`, Copia's own version number, not a Gitea release, so the API does not show which Gitea version Copia is built on; a command's integration test shows whether Copia serves its endpoint.

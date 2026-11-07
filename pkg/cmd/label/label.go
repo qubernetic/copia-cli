@@ -2,6 +2,7 @@ package label
 
 import (
 	"github.com/spf13/cobra"
+	cloneCmd "github.com/qubernetic/copia-cli/pkg/cmd/label/clone"
 	createCmd "github.com/qubernetic/copia-cli/pkg/cmd/label/create"
 	deleteCmd "github.com/qubernetic/copia-cli/pkg/cmd/label/delete"
 	editCmd "github.com/qubernetic/copia-cli/pkg/cmd/label/edit"
@@ -22,6 +23,7 @@ func NewCmdLabel(f *cmdutil.Factory) *cobra.Command {
 		createCmd.NewCmdCreate(f),
 		editCmd.NewCmdEdit(f),
 		deleteCmd.NewCmdDelete(f),
+		cloneCmd.NewCmdClone(f),
 	)
 
 	return cmd
