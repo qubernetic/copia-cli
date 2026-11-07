@@ -4,6 +4,7 @@ import (
 	"github.com/spf13/cobra"
 	createCmd "github.com/qubernetic/copia-cli/pkg/cmd/release/create"
 	deleteCmd "github.com/qubernetic/copia-cli/pkg/cmd/release/delete"
+	editCmd "github.com/qubernetic/copia-cli/pkg/cmd/release/edit"
 	listCmd "github.com/qubernetic/copia-cli/pkg/cmd/release/list"
 	uploadCmd "github.com/qubernetic/copia-cli/pkg/cmd/release/upload"
 	viewCmd "github.com/qubernetic/copia-cli/pkg/cmd/release/view"
@@ -24,6 +25,7 @@ func NewCmdRelease(f *cmdutil.Factory) *cobra.Command {
 
 	cmdutil.AddGroup(cmd, "Targeted commands",
 		deleteCmd.NewCmdDelete(f),
+		editCmd.NewCmdEdit(f),
 		uploadCmd.NewCmdUpload(f),
 		viewCmd.NewCmdView(f),
 	)
