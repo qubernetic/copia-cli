@@ -133,13 +133,15 @@ Token storage follows gh: `auth login` stores the token in the OS keyring (go-ke
 | `gh release view` | Full | `copia-cli release view` | [x] |
 | `gh release delete` | Full | `copia-cli release delete` | [x] |
 | `gh release upload` | Full | `copia-cli release upload` | [x] |
-| `gh release download` | Full | `copia-cli release download` | [ ] |
+| `gh release download` | Full | `copia-cli release download` | [x] |
 | `gh release edit` | Full | `copia-cli release edit` | [x] |
 | `gh release delete-asset` | Full | `copia-cli release delete-asset` | [x] |
 
 `gh release view [<tag>]`: `GET /repos/{owner}/{repo}/releases/tags/{tag}`. Without a tag it shows the newest release that is neither a draft nor a pre-release, as GitHub's latest release, from `GET /repos/{owner}/{repo}/releases?draft=false&pre-release=false` (newest first; the flags are checked on the client too, and further pages are read until one matches): Copia (0.60.0 on 2026-11-07) answers `GET /repos/{owner}/{repo}/releases/latest` with the same 404 as for a missing tag even when such a release exists. Without a terminal it prints gh's tab-separated `title`, `tag`, `draft`, `prerelease`, `author`, `created`, `published` (not for a draft) and `url` lines, one `asset` line per asset, `--` and the notes; gh's `immutable` line is left out, since Gitea has no immutable releases. On a terminal it prints the tag, `<login> released this <time ago>` (`created this` for a draft, with `Draft` or `Pre-release` in front), the notes as plain text (gh renders Markdown) and a `NAME`/`SIZE` table of the assets (gh's `Digest` column is left out, Gitea has no asset digest). `--json` takes the Gitea field names `id`, `tag_name`, `name`, `body`, `draft`, `prerelease`, `created_at`, `published_at`, `author` (`login`), `html_url`, `tarball_url`, `zipball_url`, `target_commitish` and `assets` (`id`, `name`, `size`, `download_count`, `browser_download_url`). `--web/-w` with a tag opens `/{owner}/{repo}/releases/tag/{tag}` with no API call and no token (gh looks the release up first); without a tag it looks the latest release up as above and opens its `html_url`, as gh does. A missing release fails with `release <tag> not found`, or `release not found` without a tag. `release delete` and `release upload` use the same lookup by tag, which now path-escapes the tag.
 
 `gh release edit <tag>`: finds the release with the lookup of `release view` and sends `PATCH /repos/{owner}/{repo}/releases/{id}` with only the given fields: `--draft` and `--prerelease` (`=false` allowed) as `draft` and `prerelease`, `-t/--title` as `name`, `-n/--notes` or `-F/--notes-file` (`-` reads standard input) as `body`, `--tag` as `tag_name` and `--target` as `target_commitish`. Without one of these flags it fails with `use flags to specify properties to edit` and makes no API call. An empty title or notes (`--title ""`, `--notes ""`, an empty `--notes-file` or empty standard input) fails with `cannot clear a release's title: Copia keeps the old value` (or `notes`) before any API call: gh clears the field, but Gitea's `EditRelease` ignores an empty string and keeps the old value. An empty `--tag` or `--target` is dropped for the same reason; given alone it fails with `use flags to specify properties to edit`. It prints the release URL. gh's `--latest` and `--verify-tag` are left out (Gitea has no latest marker to set and no tag check on edit), as is `--discussion-category` (no discussions).
+
+`gh release download [<tag>]`: finds the release with the lookup of `release view` (the latest one without a tag, where `-p/--pattern` or `-A/--archive` is required) and downloads every asset, or the ones whose name matches a `-p/--pattern` glob, from its `browser_download_url`; `-A/--archive zip|tar.gz` downloads `GET /repos/{owner}/{repo}/archive/<tag>.<format>` under the name of its `Content-Disposition` header, else `<repo>-<tag>.<format>`. `-D/--dir`, `-O/--output` (`-` is standard output), `--clobber` and `--skip-existing` and the flag checks follow gh, messages included. An asset name with a path separator or `..` is refused before any download, the file is written to a temporary file in the target directory and renamed, and a download URL that is not https on the configured host is refused without a request; a redirect to another host fails as in every command. gh's `--allow-escape-sequences` is not offered: copia-cli writes an asset to standard output unchanged. It prints nothing on success, as gh does without a terminal.
 
 `gh release delete-asset <tag> <asset-name>`: finds the release with the lookup of `release view`, the asset by name in its `assets`, and sends `DELETE /repos/{owner}/{repo}/releases/{id}/assets/{asset_id}`. It needs `-y/--yes`, since copia-cli has no prompts: without it it fails with `deleting asset <name> from release <tag> is irreversible; use --yes to confirm` and makes no API call. A missing asset fails with gh's `asset <name> not found in release <tag>`. On success it prints `Deleted asset <name> from release <tag>` on standard output; gh prints that line on standard error and only on a terminal.
 
@@ -224,8 +226,8 @@ Client side, no API call. Aliases are stored under the top-level key `aliases` o
 
 | Status | Count |
 |--------|-------|
-| Implemented | 71 |
-| Not yet implemented (Full parity) | 7 |
+| Implemented | 72 |
+| Not yet implemented (Full parity) | 6 |
 | Not yet implemented (Partial) | 6 |
 | No equivalent | 12 |
 | **Total implementable** | **84** |
