@@ -3,12 +3,15 @@
 package integration
 
 import (
+	"encoding/json"
 	"net/http"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	repoedit "github.com/qubernetic/copia-cli/pkg/cmd/repo/edit"
 	repolist "github.com/qubernetic/copia-cli/pkg/cmd/repo/list"
 	repoview "github.com/qubernetic/copia-cli/pkg/cmd/repo/view"
 	"github.com/qubernetic/copia-cli/pkg/cmdutil"
@@ -85,4 +88,71 @@ func TestRepoView_NotFound(t *testing.T) {
 	err := repoview.ViewRun(opts)
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "not found")
+}
+
+// TestRepoEdit edits a scratch repository, since it changes the visibility:
+// the description and topics, then public and back to private.
+func TestRepoEdit(t *testing.T) {
+	env := loadTestEnv(t)
+	scratch := newScratchRepo(t, env, "edit")
+
+	edit := func(opts repoedit.EditOptions) {
+		t.Helper()
+		ios, stdout, stderr := testIO()
+		opts.IO, opts.HTTPClient = ios, testHTTPClient()
+		opts.Host, opts.Token, opts.Owner, opts.Repo = scratch.Host, scratch.Token, scratch.Owner, scratch.Repo
+		require.NoError(t, repoedit.EditRun(&opts), "edit the scratch repository")
+		assertOutputEqual(t, stdout.String(), "Edited repository "+scratch.Owner+"/"+scratch.Repo+"\n")
+		assertOutputEmpty(t, stderr.String())
+	}
+
+	description := "Edited by the integration test"
+	edit(repoedit.EditOptions{
+		Edits:     repoedit.EditRepositoryInput{Description: &description},
+		AddTopics: []string{"copia-cli-it", "plc"},
+	})
+	desc, private := repoSettings(t, scratch)
+	assert.True(t, desc == description, "the description was not changed")
+	assert.True(t, private, "a description edit changed the visibility")
+	assert.True(t, slices.Equal(repoTopics(t, scratch), []string{"copia-cli-it", "plc"}), "the topics were not added")
+
+	edit(repoedit.EditOptions{RemoveTopics: []string{"plc"}})
+	assert.True(t, slices.Equal(repoTopics(t, scratch), []string{"copia-cli-it"}), "the topic was not removed")
+
+	public, priv := "public", "private"
+	edit(repoedit.EditOptions{Visibility: &public})
+	_, private = repoSettings(t, scratch)
+	assert.False(t, private, "the repository did not become public")
+
+	edit(repoedit.EditOptions{Visibility: &priv})
+	desc, private = repoSettings(t, scratch)
+	assert.True(t, private, "the repository did not become private again")
+	assert.True(t, desc == description, "a visibility edit changed the description")
+}
+
+// repoSettings returns the description and the private flag of the
+// repository of env.
+func repoSettings(t *testing.T, env testEnv) (string, bool) {
+	t.Helper()
+	status, data := apiCall(t, env, "get repository", "GET", "/repos/"+env.Owner+"/"+env.Repo, nil)
+	require.True(t, status == http.StatusOK, "get repository did not answer 200")
+	var repo struct {
+		Description string `json:"description"`
+		Private     bool   `json:"private"`
+	}
+	require.NoError(t, json.Unmarshal(data, &repo), "decode the repository")
+	return repo.Description, repo.Private
+}
+
+// repoTopics returns the topics of the repository of env, sorted.
+func repoTopics(t *testing.T, env testEnv) []string {
+	t.Helper()
+	status, data := apiCall(t, env, "get topics", "GET", "/repos/"+env.Owner+"/"+env.Repo+"/topics", nil)
+	require.True(t, status == http.StatusOK, "get topics did not answer 200")
+	var topics struct {
+		Topics []string `json:"topics"`
+	}
+	require.NoError(t, json.Unmarshal(data, &topics), "decode the topics")
+	slices.Sort(topics.Topics)
+	return topics.Topics
 }

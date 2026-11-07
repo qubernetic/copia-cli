@@ -5,6 +5,7 @@ import (
 	cloneCmd "github.com/qubernetic/copia-cli/pkg/cmd/repo/clone"
 	createCmd "github.com/qubernetic/copia-cli/pkg/cmd/repo/create"
 	deleteCmd "github.com/qubernetic/copia-cli/pkg/cmd/repo/delete"
+	editCmd "github.com/qubernetic/copia-cli/pkg/cmd/repo/edit"
 	forkCmd "github.com/qubernetic/copia-cli/pkg/cmd/repo/fork"
 	listCmd "github.com/qubernetic/copia-cli/pkg/cmd/repo/list"
 	setDefaultCmd "github.com/qubernetic/copia-cli/pkg/cmd/repo/setdefault"
@@ -28,6 +29,7 @@ func NewCmdRepo(f *cmdutil.Factory) *cobra.Command {
 
 	cmdutil.AddGroup(cmd, "Targeted commands",
 		viewCmd.NewCmdView(f),
+		editCmd.NewCmdEdit(f),
 		deleteCmd.NewCmdDelete(f),
 		forkCmd.NewCmdFork(f),
 		setDefaultCmd.NewCmdSetDefault(f),

@@ -21,6 +21,7 @@ func TestNewCmdRepo_Subcommands(t *testing.T) {
 		"clone":       "General commands",
 		"create":      "General commands",
 		"view":        "Targeted commands",
+		"edit":        "Targeted commands",
 		"delete":      "Targeted commands",
 		"fork":        "Targeted commands",
 		"set-default": "Targeted commands",
