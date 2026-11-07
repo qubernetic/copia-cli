@@ -20,6 +20,7 @@ func TestNewCmdLabel_Subcommands(t *testing.T) {
 		"list":   "General commands",
 		"create": "General commands",
 		"edit":   "General commands",
+		"delete": "General commands",
 	}, groups)
 
 	var titles []string
