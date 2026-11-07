@@ -21,16 +21,18 @@ const (
 	otherToken   = "other-host-token-0123456789"
 	flagToken    = "flag-token-0123456789"
 	envToken     = "env-token-0123456789"
+	legacyToken  = "legacy-token-0123456789"
 )
 
 // allTokens lists every token of the tests; none may reach stderr or an
 // error message.
-var allTokens = []string{fileToken, keyringToken, otherToken, flagToken, envToken}
+var allTokens = []string{fileToken, keyringToken, otherToken, flagToken, envToken, legacyToken}
 
 // testConfig has app.copia.io (the default host) with the active account
 // john, whose token is in the config file, and jane, whose token is in the
-// keyring, and other.example.com with the account bob, whose token is in the
-// config file.
+// keyring, other.example.com with the account bob, whose token is in the
+// config file, and legacy.example.com in the old shape, a token without a
+// user.
 func testConfig(t *testing.T) func() (*config.Config, error) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.yml")
@@ -47,6 +49,7 @@ func testConfig(t *testing.T) func() (*config.Config, error) {
 			"empty.example.com": {User: "ann", Users: map[string]*config.UserConfig{
 				"ann": {},
 			}},
+			"legacy.example.com": {Token: legacyToken},
 		},
 	}))
 	return func() (*config.Config, error) { return config.Load(path) }
@@ -99,6 +102,9 @@ func TestNewCmdToken(t *testing.T) {
 		{name: "user ignores the token flag", args: []string{"--user", "john"}, flagToken: flagToken, want: fileToken},
 		{name: "user ignores COPIA_TOKEN", args: []string{"--user", "john"}, envHost: "app.copia.io", envToken: envToken, want: fileToken},
 		{name: "unknown user", args: []string{"--user", "bob"}, wantErr: "no token found for app.copia.io account bob"},
+		{name: "user on the host in another case", args: []string{"--user", "john"}, flagHost: "APP.copia.io", wantErr: "no token found for APP.copia.io account john"},
+		{name: "user on the host with the default port", args: []string{"--user", "john"}, flagHost: "app.copia.io:443", wantErr: "no token found for app.copia.io:443 account john"},
+		{name: "user on a host of the old shape", args: []string{"--user", "john"}, flagHost: "legacy.example.com", wantErr: "no token found for legacy.example.com account john"},
 		{name: "user on an unknown host", args: []string{"--user", "bob"}, flagHost: "new.example.com", wantErr: "no token found for new.example.com account bob"},
 		{name: "no token", flagHost: "empty.example.com", wantErr: "no token found for empty.example.com"},
 		{name: "unknown host", flagHost: "new.example.com", wantErr: "no token found for new.example.com"},
