@@ -13,6 +13,7 @@ import (
 
 	repoedit "github.com/qubernetic/copia-cli/pkg/cmd/repo/edit"
 	repolist "github.com/qubernetic/copia-cli/pkg/cmd/repo/list"
+	reporename "github.com/qubernetic/copia-cli/pkg/cmd/repo/rename"
 	repoview "github.com/qubernetic/copia-cli/pkg/cmd/repo/view"
 	"github.com/qubernetic/copia-cli/pkg/cmdutil"
 )
@@ -137,6 +138,32 @@ func TestRepoEdit(t *testing.T) {
 	desc, private = repoSettings(t, scratch)
 	assert.True(t, private, "the repository is not private")
 	assert.True(t, desc == description, "a visibility edit changed the description")
+}
+
+// TestRepoRename renames a scratch repository to another scratch name; the
+// run deletes it under the new name.
+func TestRepoRename(t *testing.T) {
+	env := loadTestEnv(t)
+	scratch := newScratchRepo(t, env, "rename")
+	renamed := scratch
+	renamed.Repo = env.Repo + "-renamed"
+
+	ios, stdout, stderr := testIO()
+	err := reporename.RenameRun(&reporename.RenameOptions{
+		IO: ios, HTTPClient: testHTTPClient(),
+		Host: scratch.Host, Token: scratch.Token, Owner: scratch.Owner, Repo: scratch.Repo,
+		NewName: renamed.Repo, Confirmed: true,
+	})
+	// Whatever RenameRun reports, the repository the server has under the
+	// new name is the one the run must delete.
+	status, _ := apiCall(t, renamed, "get renamed repository", "GET", "/repos/"+renamed.Owner+"/"+renamed.Repo, nil)
+	if status == http.StatusOK {
+		renameScratchRepo(scratch.Repo, renamed.Repo)
+	}
+	require.NoError(t, err, "rename the scratch repository")
+	assertOutputEqual(t, stdout.String(), "Renamed repository "+renamed.Owner+"/"+renamed.Repo+"\n")
+	assertOutputEmpty(t, stderr.String())
+	require.True(t, status == http.StatusOK, "the repository is not found under its new name")
 }
 
 // repoSettings returns the description and the private flag of the
