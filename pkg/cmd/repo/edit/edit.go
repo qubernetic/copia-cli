@@ -91,7 +91,16 @@ flag is used, the --accept-visibility-change-consequences flag is required.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.IO = f.IOStreams
-			if cmd.Flags().NFlag() == 0 {
+			// NFlag would also count --host, -R/--repo, --token and
+			// --accept-visibility-change-consequences, which edit nothing.
+			edited := cmd.Flags().Changed("add-topic") || cmd.Flags().Changed("remove-topic")
+			for name := range strs {
+				edited = edited || cmd.Flags().Changed(name)
+			}
+			for name := range bools {
+				edited = edited || cmd.Flags().Changed(name)
+			}
+			if !edited {
 				return errors.New("specify properties to edit")
 			}
 			if cmd.Flags().Changed("visibility") && !accept {

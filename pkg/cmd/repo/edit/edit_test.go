@@ -11,6 +11,7 @@ import (
 	"github.com/qubernetic/copia-cli/pkg/cmdutil"
 	"github.com/qubernetic/copia-cli/pkg/httpmock"
 	"github.com/qubernetic/copia-cli/pkg/iostreams"
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -402,6 +403,45 @@ func TestNewCmdEdit_RunEErrors(t *testing.T) {
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.wantErr)
 			assert.Empty(t, reg.Requests)
+		})
+	}
+}
+
+func TestNewCmdEdit_NoEditFlag(t *testing.T) {
+	t.Setenv("COPIA_TOKEN", "")
+	t.Setenv("COPIA_HOST", "")
+
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "host only", args: []string{"edit", "o/r", "--host", "example.invalid"}},
+		{name: "repo flag only", args: []string{"edit", "-R", "o/r"}},
+		{name: "token only", args: []string{"edit", "o/r", "--token", "other-token"}},
+		{name: "accept flag only", args: []string{"edit", "o/r", "--accept-visibility-change-consequences"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			httpmock.ReplaceDefaultTransport(t, reg)
+
+			ios, _, stdout, _ := iostreams.Test()
+			f := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Token: "test-token"}
+			parent := &cobra.Command{Use: "repo"}
+			parent.PersistentFlags().StringVar(&f.Host, "host", f.Host, "")
+			parent.PersistentFlags().StringVar(&f.Token, "token", f.Token, "")
+			parent.PersistentFlags().StringVarP(&f.Repo, "repo", "R", "", "")
+			parent.AddCommand(NewCmdEdit(f))
+			parent.SetArgs(tt.args)
+			parent.SetOut(io.Discard)
+			parent.SetErr(io.Discard)
+
+			err := parent.Execute()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "specify properties to edit")
+			assert.Empty(t, reg.Requests)
+			assert.Empty(t, stdout.String())
 		})
 	}
 }
