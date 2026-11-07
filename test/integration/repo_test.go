@@ -13,6 +13,7 @@ import (
 
 	repoarchive "github.com/qubernetic/copia-cli/pkg/cmd/repo/archive"
 	repoedit "github.com/qubernetic/copia-cli/pkg/cmd/repo/edit"
+	repofork "github.com/qubernetic/copia-cli/pkg/cmd/repo/fork"
 	repolist "github.com/qubernetic/copia-cli/pkg/cmd/repo/list"
 	reporename "github.com/qubernetic/copia-cli/pkg/cmd/repo/rename"
 	repoview "github.com/qubernetic/copia-cli/pkg/cmd/repo/view"
@@ -215,6 +216,30 @@ func TestRepoArchive(t *testing.T) {
 	stdout, stderr = setArchived(false)
 	assertOutputEmpty(t, stdout)
 	assertOutputEqual(t, stderr, "! Repository "+fullName+" is not archived\n")
+}
+
+// TestRepoFork checks that repo fork of the run repository reports that
+// Copia has no forks route, and that no fork appears under the test account.
+func TestRepoFork(t *testing.T) {
+	env := loadTestEnv(t)
+
+	ios, stdout, stderr := testIO()
+	err := repofork.ForkRun(&repofork.ForkOptions{
+		IO: ios, HTTPClient: testHTTPClient(),
+		Host: env.Host, Token: env.Token, Owner: env.Owner, Repo: env.Repo,
+	})
+	require.ErrorContains(t, err, "Copia does not offer forking through its API", "repo fork of the run repository")
+	assertOutputEmpty(t, stdout.String())
+	assertOutputEmpty(t, stderr.String())
+
+	status, body := apiCall(t, env, "current user", "GET", "/user", nil)
+	assertStatusCode(t, status, http.StatusOK)
+	var me struct {
+		Login string `json:"login"`
+	}
+	require.NoError(t, json.Unmarshal(body, &me), "decode current user")
+	status, _ = apiCall(t, env, "get fork", "GET", "/repos/"+me.Login+"/"+env.Repo, nil)
+	assertStatusCode(t, status, http.StatusNotFound)
 }
 
 // repoSettings returns the description and the private flag of the
