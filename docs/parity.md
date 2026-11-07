@@ -40,7 +40,7 @@ Token storage follows gh: `auth login` stores the token in the OS keyring (go-ke
 | `gh repo view` | Full | `copia-cli repo view` | [x] |
 | `gh repo create` | Full | `copia-cli repo create` | [x] |
 | `gh repo clone` | Full | `copia-cli repo clone` | [x] |
-| `gh repo fork` | Full | `copia-cli repo fork` | [x] |
+| `gh repo fork` | None | `copia-cli repo fork` fails on Copia, works on Gitea | — |
 | `gh repo delete` | Full | `copia-cli repo delete` | [x] |
 | `gh repo archive` | Partial | `copia-cli repo archive` | [x] |
 | `gh repo unarchive` | Partial | `copia-cli repo unarchive` | [x] |
@@ -59,6 +59,8 @@ Token storage follows gh: `auth login` stores the token in the OS keyring (go-ke
 `gh repo rename <new-name>`: `PATCH /repos/{owner}/{repo}` with `{"name"}` on the current repository or `-R`, then `Renamed repository <owner>/<new-name>`. A name with `/` fails with gh's message before any API call. Without `-R` the git remote that names the old repository on the configured host (host name compared without port and case; the one marked by `repo set-default` first, then `origin`, then the first in config order) gets the new name with `git remote set-url`; only the last path segment of its configured URL changes, so scheme, user, host and a `.git` suffix stay, and `Updated the "<remote>" remote` follows. When no remote matches or git fails, `! Warning: unable to update remote ...` goes to standard error and the command still exits 0, as in gh. Differences from gh: there is no prompt, so `--yes` (`-y`) is required, also with `-R` (gh asks only without it), and the name argument is required; both success lines are printed also without a terminal; gh's deprecated `--confirm` is left out.
 
 `gh repo archive [<owner/repo>]` and `gh repo unarchive [<owner/repo>]`: `GET /repos/{owner}/{repo}` reads `archived`; a repository already in the asked state gets gh's warning on standard error (`! Repository <owner>/<repo> is already archived` or `is not archived`), no PATCH and exit 0, otherwise `PATCH /repos/{owner}/{repo}` with `{"archived": true}` or `false`, then `Archived repository <owner>/<repo>` or `Unarchived repository <owner>/<repo>`. Without an argument the current repository is used, or `-R`. `repo view --json archived` shows the state. Differences from gh: there is no prompt, so `--yes` (`-y`) is always required and is checked first, with gh's non-interactive message `--yes required when not running interactively`; the argument is `owner/repo`, a bare name does not default to the user's own repository; the success line is printed also without a terminal; gh's deprecated `--confirm` is left out.
+
+`gh repo fork`: None on Copia. app.copia.io has no `/repos/{owner}/{repo}/forks` route: `GET` and `POST` answer the plain-text `404 page not found` of an unknown path, while the other repository routes answer normally (found by the `integration` job of #174, 2026-11-07). `repo fork` sends Gitea's `POST /repos/{owner}/{repo}/forks` (`organization` for `--org`) and reports a plain-text 404 as `Copia does not offer forking through its API`; against a Gitea-compatible server that serves the route it forks, and a JSON 404 there means the repository was not found. gh's `--clone`, `--remote`, `--remote-name`, `--fork-name` and `--default-branch-only` are not added (#174 was closed as not possible on Copia).
 
 `gh repo sync`: `POST /repos/{owner}/{repo}/merge-upstream` (`branch`, `ff_only`) brings a branch of a fork up to date with its upstream on the server. There is no `--force` (hard reset) and no sync of a local clone, which `gh` does with git.
 
@@ -233,10 +235,10 @@ Client side, no API call. Aliases are stored under the top-level key `aliases` o
 
 | Status | Count |
 |--------|-------|
-| Implemented | 76 |
+| Implemented | 75 |
 | Not yet implemented (Full parity) | 4 |
 | Not yet implemented (Partial) | 5 |
-| No equivalent | 12 |
-| **Total implementable** | **85** |
+| No equivalent | 13 |
+| **Total implementable** | **84** |
 
 Counted from the rows above: every `[x]` row, and every other row by its Parity value. The Parity values follow the Gitea 1.26 API (`release/v1.26` swagger); `TestAPI_Version` in `test/integration/api_test.go` logs what Copia's `GET /version` reports in the PR `integration` job. On 2026-11-04 that was `0.59.0`, Copia's own version number, not a Gitea release, so the API does not show which Gitea version Copia is built on; a command's integration test shows whether Copia serves its endpoint.
