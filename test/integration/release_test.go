@@ -3,6 +3,7 @@
 package integration
 
 import (
+	"bytes"
 	"fmt"
 	"net/http"
 	"os"
@@ -14,10 +15,12 @@ import (
 	releasecreate "github.com/qubernetic/copia-cli/pkg/cmd/release/create"
 	releasedelete "github.com/qubernetic/copia-cli/pkg/cmd/release/delete"
 	releasedeleteasset "github.com/qubernetic/copia-cli/pkg/cmd/release/deleteasset"
+	releasedownload "github.com/qubernetic/copia-cli/pkg/cmd/release/download"
 	releaseedit "github.com/qubernetic/copia-cli/pkg/cmd/release/edit"
 	releaselist "github.com/qubernetic/copia-cli/pkg/cmd/release/list"
 	releaseupload "github.com/qubernetic/copia-cli/pkg/cmd/release/upload"
 	releaseview "github.com/qubernetic/copia-cli/pkg/cmd/release/view"
+	"github.com/qubernetic/copia-cli/pkg/cmdutil"
 )
 
 func TestRelease_Lifecycle(t *testing.T) {
@@ -149,6 +152,52 @@ func TestRelease_Lifecycle(t *testing.T) {
 	})
 	require.NoError(t, err, "release view after upload")
 	assertOutputContains(t, assetViewOut.String(), "asset:\t"+assetName+"\n")
+
+	// Download the asset by pattern, then the source archive, each into an empty directory
+	downloadDir := t.TempDir()
+	downloadIO, downloadOut, _ := testIO()
+	err = releasedownload.DownloadRun(&releasedownload.DownloadOptions{
+		IO:                 downloadIO,
+		HTTPClient:         cmdutil.NewHTTPClient(),
+		DownloadHTTPClient: cmdutil.NewDownloadHTTPClient(),
+		Host:               env.Host,
+		Token:              env.Token,
+		Owner:              env.Owner,
+		Repo:               env.Repo,
+		Tag:                tag,
+		FilePatterns:       []string{"integration-*.txt"},
+		Destination:        downloadDir,
+	})
+	require.NoError(t, err, "release download by pattern")
+	assertOutputEmpty(t, downloadOut.String())
+	uploaded, err := os.ReadFile(assetPath)
+	require.NoError(t, err, "read uploaded asset")
+	downloaded, err := os.ReadFile(filepath.Join(downloadDir, assetName))
+	require.NoError(t, err, "read downloaded asset")
+	require.True(t, len(downloaded) == len(uploaded), "downloaded asset has the uploaded size")
+	require.True(t, bytes.Equal(downloaded, uploaded), "downloaded asset has the uploaded content")
+
+	archiveDir := t.TempDir()
+	archiveIO, _, _ := testIO()
+	err = releasedownload.DownloadRun(&releasedownload.DownloadOptions{
+		IO:                 archiveIO,
+		HTTPClient:         cmdutil.NewHTTPClient(),
+		DownloadHTTPClient: cmdutil.NewDownloadHTTPClient(),
+		Host:               env.Host,
+		Token:              env.Token,
+		Owner:              env.Owner,
+		Repo:               env.Repo,
+		Tag:                tag,
+		ArchiveType:        "zip",
+		Destination:        archiveDir,
+	})
+	require.NoError(t, err, "release download --archive zip")
+	archives, err := os.ReadDir(archiveDir)
+	require.NoError(t, err, "read archive directory")
+	require.True(t, len(archives) == 1, "one archive file downloaded")
+	archiveInfo, err := archives[0].Info()
+	require.NoError(t, err, "stat archive file")
+	require.Greater(t, archiveInfo.Size(), int64(0), "archive is not empty")
 
 	deleteAssetIO, deleteAssetOut, _ := testIO()
 	err = releasedeleteasset.DeleteAssetRun(&releasedeleteasset.DeleteAssetOptions{
