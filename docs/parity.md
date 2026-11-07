@@ -47,7 +47,7 @@ Token storage follows gh: `auth login` stores the token in the OS keyring (go-ke
 | `gh repo rename` | Full | `copia-cli repo rename` | [x] |
 | `gh repo edit` | Full | `copia-cli repo edit` | [x] |
 | `gh repo set-default` | n/a | `copia-cli repo set-default` | [x] |
-| `gh repo sync` | Partial | `copia-cli repo sync` | [ ] |
+| `gh repo sync` | Partial | `copia-cli repo sync` | [x] |
 | `gh repo deploy-key` | Full | `copia-cli repo deploy-key` | [ ] |
 
 `gh repo view --web/-w`: client side, no API call and no token, opened as for the issue commands: `/{owner}/{repo}` of the argument, `-R` or the git remote. gh's `--branch` does not exist in `repo view`.
@@ -62,7 +62,7 @@ Token storage follows gh: `auth login` stores the token in the OS keyring (go-ke
 
 `gh repo fork`: None on Copia. app.copia.io has no `/repos/{owner}/{repo}/forks` route: `GET` and `POST` answer the plain-text `404 page not found` of an unknown path, while the other repository routes answer normally (found by the `integration` job of #174, 2026-11-07). `repo fork` sends Gitea's `POST /repos/{owner}/{repo}/forks` (`organization` for `--org`) and reports a plain-text 404 as `Copia does not offer forking through its API`; against a Gitea-compatible server that serves the route it forks, and a JSON 404 there means the repository was not found. gh's `--clone`, `--remote`, `--remote-name`, `--fork-name` and `--default-branch-only` are not added (#174 was closed as not possible on Copia).
 
-`gh repo sync`: `POST /repos/{owner}/{repo}/merge-upstream` (`branch`, `ff_only`) brings a branch of a fork up to date with its upstream on the server. There is no `--force` (hard reset) and no sync of a local clone, which `gh` does with git.
+`gh repo sync`: Partial. Without an argument it syncs the local clone with git, as gh does: the source is `-s/--source owner/repo` or the default repository (`-R`, the remote marked by `repo set-default`, else `origin`) and must be one of the git remotes (owner and name in any case), the branch is `-b/--branch` or the source's `default_branch` from `GET /repos/{owner}/{repo}`. `git fetch` of the branch from that remote gets the token only when the remote's URL is https on the configured host (the scoped credential helper of `repo clone`), then a checked-out branch is fast-forwarded with `merge --ff-only`, another one is moved with `branch --force`, a missing one is created tracking the remote. Diverged branches fail with gh's message unless `--force`, which uses `reset --hard`; a dirty working tree on the checked-out branch is refused with gh's message. With an argument (`owner/repo`) gh syncs a fork from its parent on the server. app.copia.io has no `/repos/{owner}/{repo}/merge-upstream` route: `POST` answers the plain-text `404 page not found` of an unknown path (found by the `integration` job of #45, 2026-11-07), so the remote mode reports `Copia does not offer fork sync through its API`, as Copia has no forks either (`gh repo fork`). Against a Gitea-compatible server that serves the route it sends `{"branch", "ff_only": true}` (the branch defaults to the repository's `default_branch`), prints `Synced the "<owner>:<branch>" branch from its parent` or that it is already up to date, and reports `<owner>/<repo> is not a fork` and diverging changes (gh's message, pointing at a local `--force`); `--force` and `-s/--source` are refused with an argument, since the endpoint only fast-forwards from the parent. Differences from gh: the success line is printed also without a terminal, and gh's worktree hints on a branch checked out in another worktree are left out (git's own error is shown).
 
 `gh repo deploy-key`: `GET` and `POST /repos/{owner}/{repo}/keys`, `DELETE /repos/{owner}/{repo}/keys/{id}` for list, add and delete.
 
@@ -235,9 +235,9 @@ Client side, no API call. Aliases are stored under the top-level key `aliases` o
 
 | Status | Count |
 |--------|-------|
-| Implemented | 75 |
+| Implemented | 76 |
 | Not yet implemented (Full parity) | 4 |
-| Not yet implemented (Partial) | 5 |
+| Not yet implemented (Partial) | 4 |
 | No equivalent | 13 |
 | **Total implementable** | **84** |
 
