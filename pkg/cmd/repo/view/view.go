@@ -11,7 +11,7 @@ import (
 	"github.com/qubernetic/copia-cli/pkg/iostreams"
 )
 
-var validJSONFields = []string{"full_name", "description", "html_url", "private", "default_branch", "stars_count", "forks_count", "open_issues_count"}
+var validJSONFields = []string{"full_name", "description", "html_url", "private", "default_branch", "stars_count", "forks_count", "open_issues_count", "archived"}
 
 // ViewOptions holds all inputs for the repo view command.
 type ViewOptions struct {
@@ -34,6 +34,7 @@ type repoDetail struct {
 	StarsCount      int    `json:"stars_count"`
 	ForksCount      int    `json:"forks_count"`
 	OpenIssuesCount int    `json:"open_issues_count"`
+	Archived        bool   `json:"archived"`
 }
 
 // NewCmdView creates the `copia repo view` command.
