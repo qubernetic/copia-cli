@@ -42,7 +42,8 @@ Token storage follows gh: `auth login` stores the token in the OS keyring (go-ke
 | `gh repo clone` | Full | `copia-cli repo clone` | [x] |
 | `gh repo fork` | Full | `copia-cli repo fork` | [x] |
 | `gh repo delete` | Full | `copia-cli repo delete` | [x] |
-| `gh repo archive` | Partial | `copia-cli repo archive` | [ ] |
+| `gh repo archive` | Partial | `copia-cli repo archive` | [x] |
+| `gh repo unarchive` | Partial | `copia-cli repo unarchive` | [x] |
 | `gh repo rename` | Full | `copia-cli repo rename` | [x] |
 | `gh repo edit` | Full | `copia-cli repo edit` | [x] |
 | `gh repo set-default` | n/a | `copia-cli repo set-default` | [x] |
@@ -56,6 +57,8 @@ Token storage follows gh: `auth login` stores the token in the OS keyring (go-ke
 `gh repo edit [<owner/repo>]`: `PATCH /repos/{owner}/{repo}` with only the given settings: `-d/--description` as `description`, `--homepage` as `website`, `--default-branch` as `default_branch`, `--visibility public|private` as `private`, `--template` as `template`, `--enable-issues`, `--enable-wiki` and `--enable-projects` as `has_issues`, `has_wiki` and `has_projects`, `--enable-merge-commit`, `--enable-squash-merge` and `--enable-rebase-merge` as `allow_merge_commits`, `allow_squash_merge` and `allow_rebase`, and `--delete-branch-on-merge` as `default_delete_branch_after_merge` (every boolean flag takes `=false`). `--add-topic` and `--remove-topic` read `GET /repos/{owner}/{repo}/topics` and write the new list with `PUT /repos/{owner}/{repo}/topics` only when it changed; a topic is compared in lower case without surrounding space, as Copia stores it. `--visibility` needs `--accept-visibility-change-consequences`, with gh's message. app.copia.io (0.60.0 on 2026-11-07) refuses to make a repository public with 403, as Gitea does under its `FORCE_PRIVATE` setting, so `--visibility public` fails there with `failed to edit repository (HTTP 403): the server may not allow public repositories` and changes nothing; `--visibility private` works. Differences from gh: there is no prompt, so without a flag it fails with `specify properties to edit`; `--homepage` has no `-h` (copia-cli's help flag); `--visibility` takes no `internal`, since a Gitea repository is public or private; `--enable-discussions`, `--enable-auto-merge`, `--allow-forking`, `--allow-update-branch`, `--squash-merge-commit-message` and the security flags are left out (no Gitea repository setting matches them); `Edited repository <owner>/<repo>` is printed on standard output also without a terminal.
 
 `gh repo rename <new-name>`: `PATCH /repos/{owner}/{repo}` with `{"name"}` on the current repository or `-R`, then `Renamed repository <owner>/<new-name>`. A name with `/` fails with gh's message before any API call. Without `-R` the git remote that names the old repository on the configured host (host name compared without port and case; the one marked by `repo set-default` first, then `origin`, then the first in config order) gets the new name with `git remote set-url`; only the last path segment of its configured URL changes, so scheme, user, host and a `.git` suffix stay, and `Updated the "<remote>" remote` follows. When no remote matches or git fails, `! Warning: unable to update remote ...` goes to standard error and the command still exits 0, as in gh. Differences from gh: there is no prompt, so `--yes` (`-y`) is required, also with `-R` (gh asks only without it), and the name argument is required; both success lines are printed also without a terminal; gh's deprecated `--confirm` is left out.
+
+`gh repo archive [<owner/repo>]` and `gh repo unarchive [<owner/repo>]`: `GET /repos/{owner}/{repo}` reads `archived`; a repository already in the asked state gets gh's warning on standard error (`! Repository <owner>/<repo> is already archived` or `is not archived`), no PATCH and exit 0, otherwise `PATCH /repos/{owner}/{repo}` with `{"archived": true}` or `false`, then `Archived repository <owner>/<repo>` or `Unarchived repository <owner>/<repo>`. Without an argument the current repository is used, or `-R`. `repo view --json archived` shows the state. Differences from gh: there is no prompt, so `--yes` (`-y`) is always required and is checked first, with gh's non-interactive message `--yes required when not running interactively`; the argument is `owner/repo`, a bare name does not default to the user's own repository; the success line is printed also without a terminal; gh's deprecated `--confirm` is left out.
 
 `gh repo sync`: `POST /repos/{owner}/{repo}/merge-upstream` (`branch`, `ff_only`) brings a branch of a fork up to date with its upstream on the server. There is no `--force` (hard reset) and no sync of a local clone, which `gh` does with git.
 
@@ -230,10 +233,10 @@ Client side, no API call. Aliases are stored under the top-level key `aliases` o
 
 | Status | Count |
 |--------|-------|
-| Implemented | 74 |
+| Implemented | 76 |
 | Not yet implemented (Full parity) | 4 |
-| Not yet implemented (Partial) | 6 |
+| Not yet implemented (Partial) | 5 |
 | No equivalent | 12 |
-| **Total implementable** | **84** |
+| **Total implementable** | **85** |
 
 Counted from the rows above: every `[x]` row, and every other row by its Parity value. The Parity values follow the Gitea 1.26 API (`release/v1.26` swagger); `TestAPI_Version` in `test/integration/api_test.go` logs what Copia's `GET /version` reports in the PR `integration` job. On 2026-11-04 that was `0.59.0`, Copia's own version number, not a Gitea release, so the API does not show which Gitea version Copia is built on; a command's integration test shows whether Copia serves its endpoint.

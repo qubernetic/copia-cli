@@ -23,6 +23,8 @@ func TestNewCmdRepo_Subcommands(t *testing.T) {
 		"view":        "Targeted commands",
 		"edit":        "Targeted commands",
 		"rename":      "Targeted commands",
+		"archive":     "Targeted commands",
+		"unarchive":   "Targeted commands",
 		"delete":      "Targeted commands",
 		"fork":        "Targeted commands",
 		"set-default": "Targeted commands",

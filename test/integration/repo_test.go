@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	repoarchive "github.com/qubernetic/copia-cli/pkg/cmd/repo/archive"
 	repoedit "github.com/qubernetic/copia-cli/pkg/cmd/repo/edit"
 	repolist "github.com/qubernetic/copia-cli/pkg/cmd/repo/list"
 	reporename "github.com/qubernetic/copia-cli/pkg/cmd/repo/rename"
@@ -164,6 +165,56 @@ func TestRepoRename(t *testing.T) {
 	assertOutputEqual(t, stdout.String(), "Renamed repository "+renamed.Owner+"/"+renamed.Repo+"\n")
 	assertOutputEmpty(t, stderr.String())
 	require.True(t, status == http.StatusOK, "the repository is not found under its new name")
+}
+
+// TestRepoArchive archives and unarchives a scratch repository; repo view
+// --json archived shows the state after each, and a second run of either
+// only warns.
+func TestRepoArchive(t *testing.T) {
+	env := loadTestEnv(t)
+	scratch := newScratchRepo(t, env, "archive")
+	fullName := scratch.Owner + "/" + scratch.Repo
+
+	setArchived := func(archived bool) (string, string) {
+		t.Helper()
+		ios, stdout, stderr := testIO()
+		err := repoarchive.Run(&repoarchive.Options{
+			IO: ios, HTTPClient: testHTTPClient(),
+			Host: scratch.Host, Token: scratch.Token, Owner: scratch.Owner, Repo: scratch.Repo,
+			Confirmed: true, Archived: archived,
+		})
+		require.NoError(t, err, "set the archived state of the scratch repository")
+		return stdout.String(), stderr.String()
+	}
+	viewArchived := func() string {
+		t.Helper()
+		ios, stdout, _ := testIO()
+		err := repoview.ViewRun(&repoview.ViewOptions{
+			IO: ios, HTTPClient: testHTTPClient(),
+			Host: scratch.Host, Token: scratch.Token, Owner: scratch.Owner, Repo: scratch.Repo,
+			JSON: cmdutil.JSONFlags{Fields: []string{"archived"}},
+		})
+		require.NoError(t, err, "view the scratch repository")
+		return stdout.String()
+	}
+
+	stdout, stderr := setArchived(true)
+	assertOutputEqual(t, stdout, "Archived repository "+fullName+"\n")
+	assertOutputEmpty(t, stderr)
+	assertOutputEqual(t, viewArchived(), "{\n  \"archived\": true\n}\n")
+
+	stdout, stderr = setArchived(true)
+	assertOutputEmpty(t, stdout)
+	assertOutputEqual(t, stderr, "! Repository "+fullName+" is already archived\n")
+
+	stdout, stderr = setArchived(false)
+	assertOutputEqual(t, stdout, "Unarchived repository "+fullName+"\n")
+	assertOutputEmpty(t, stderr)
+	assertOutputEqual(t, viewArchived(), "{\n  \"archived\": false\n}\n")
+
+	stdout, stderr = setArchived(false)
+	assertOutputEmpty(t, stdout)
+	assertOutputEqual(t, stderr, "! Repository "+fullName+" is not archived\n")
 }
 
 // repoSettings returns the description and the private flag of the
