@@ -3,14 +3,15 @@
 package integration
 
 import (
-	"encoding/json"
-	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	labelcreate "github.com/qubernetic/copia-cli/pkg/cmd/label/create"
+	labeldelete "github.com/qubernetic/copia-cli/pkg/cmd/label/delete"
 	labeledit "github.com/qubernetic/copia-cli/pkg/cmd/label/edit"
 	labellist "github.com/qubernetic/copia-cli/pkg/cmd/label/list"
 )
@@ -29,34 +30,7 @@ func TestLabel_CreateAndList(t *testing.T) {
 	require.NoError(t, err)
 	assertOutputContains(t, createOut.String(), "integration-test-label")
 
-	// Cleanup: delete label via API
-	defer func() {
-		// Get label ID first
-		listURL := fmt.Sprintf("https://%s/api/v1/repos/%s/%s/labels", env.Host, env.Owner, env.Repo)
-		req, _ := http.NewRequest("GET", listURL, nil)
-		req.Header.Set("Authorization", "token "+env.Token)
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			return
-		}
-		defer func() { _ = resp.Body.Close() }()
-		var labels []struct {
-			ID   int64  `json:"id"`
-			Name string `json:"name"`
-		}
-		_ = json.NewDecoder(resp.Body).Decode(&labels)
-		for _, l := range labels {
-			if l.Name == "integration-test-label" {
-				delURL := fmt.Sprintf("%s/%d", listURL, l.ID)
-				delReq, _ := http.NewRequest("DELETE", delURL, nil)
-				delReq.Header.Set("Authorization", "token "+env.Token)
-				delResp, _ := http.DefaultClient.Do(delReq)
-				if delResp != nil {
-					_ = delResp.Body.Close()
-				}
-			}
-		}
-	}()
+	t.Cleanup(func() { deleteLabelAtCleanup(t, env, "integration-test-label") })
 
 	// List labels via CLI
 	listIO, listOut, _ := testIO()
@@ -91,6 +65,7 @@ func TestLabel_Edit(t *testing.T) {
 		Color: "#00aa55", Description: "Edited by the integration test",
 	})
 	require.NoError(t, err, "edit the label")
+	t.Cleanup(func() { deleteLabelAtCleanup(t, env, "integration-edited-label") })
 	assertOutputContains(t, editOut.String(), `Label "integration-edit-label" updated in `)
 
 	listIO, listOut, _ := testIO()
@@ -104,4 +79,50 @@ func TestLabel_Edit(t *testing.T) {
 	assertOutputContains(t, listOut.String(), "integration-edited-label")
 	assertOutputContains(t, listOut.String(), "00aa55")
 	assertOutputContains(t, listOut.String(), "Edited by the integration test")
+}
+
+// deleteLabelAtCleanup removes a label the test created with label delete.
+func deleteLabelAtCleanup(t *testing.T, env testEnv, name string) {
+	t.Helper()
+	ios, _, _ := testIO()
+	err := labeldelete.DeleteRun(&labeldelete.DeleteOptions{
+		IO: ios, HTTPClient: testHTTPClient(),
+		Host: env.Host, Token: env.Token,
+		Owner: env.Owner, Repo: env.Repo,
+		Name: name, Confirmed: true,
+	})
+	assert.NoError(t, err, "delete the test label at cleanup")
+}
+
+func TestLabel_Delete(t *testing.T) {
+	env := loadTestEnv(t)
+
+	createIO, _, _ := testIO()
+	err := labelcreate.CreateRun(&labelcreate.CreateOptions{
+		IO: createIO, HTTPClient: testHTTPClient(),
+		Host: env.Host, Token: env.Token,
+		Owner: env.Owner, Repo: env.Repo,
+		Name: "integration-delete-label", Color: "#123456",
+	})
+	require.NoError(t, err, "create the label to delete")
+
+	deleteIO, deleteOut, _ := testIO()
+	err = labeldelete.DeleteRun(&labeldelete.DeleteOptions{
+		IO: deleteIO, HTTPClient: testHTTPClient(),
+		Host: env.Host, Token: env.Token,
+		Owner: env.Owner, Repo: env.Repo,
+		Name: "integration-delete-label", Confirmed: true,
+	})
+	require.NoError(t, err, "delete the label")
+	assertOutputContains(t, deleteOut.String(), `Label "integration-delete-label" deleted from `)
+
+	listIO, listOut, _ := testIO()
+	err = labellist.ListRun(&labellist.ListOptions{
+		IO: listIO, HTTPClient: testHTTPClient(),
+		Host: env.Host, Token: env.Token,
+		Owner: env.Owner, Repo: env.Repo,
+		Limit: 100,
+	})
+	require.NoError(t, err, "list the labels")
+	assert.False(t, strings.Contains(listOut.String(), "integration-delete-label"), "label list still shows the deleted label")
 }
