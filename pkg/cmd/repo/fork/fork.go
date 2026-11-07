@@ -3,8 +3,10 @@ package fork
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 
 	"github.com/spf13/cobra"
@@ -38,7 +40,7 @@ func NewCmdFork(f *cmdutil.Factory) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "fork <owner/repo>",
 		Short: "Fork a repository",
-		Long:  "Create a fork of a Copia repository. By default the fork is created under the authenticated user. Use --org to fork into an organization.",
+		Long:  "Create a fork of a Copia repository. By default the fork is created under the authenticated user. Use --org to fork into an organization.\n\nCopia (app.copia.io) does not offer forking through its API, so there the command fails with an error; it works against a Gitea-compatible server that serves the forks endpoint.",
 		Example: `  # Fork a repository
   $ copia-cli repo fork upstream-org/project
 
@@ -91,6 +93,9 @@ func ForkRun(opts *ForkOptions) error {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	if isUnroutedNotFound(resp) {
+		return errors.New("Copia does not offer forking through its API") //nolint:staticcheck // Copia is a proper name
+	}
 	if resp.StatusCode != http.StatusAccepted && resp.StatusCode != http.StatusCreated {
 		respBody, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("failed to fork repository (HTTP %d): %s", resp.StatusCode, string(respBody))
@@ -110,3 +115,14 @@ func ForkRun(opts *ForkOptions) error {
 	return nil
 }
 
+
+// isUnroutedNotFound reports a plain-text 404, the answer of a server without
+// the forks route (app.copia.io has none). Gitea answers a missing repository
+// with a JSON 404.
+func isUnroutedNotFound(resp *http.Response) bool {
+	if resp.StatusCode != http.StatusNotFound {
+		return false
+	}
+	mediaType, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	return err == nil && mediaType == "text/plain"
+}
