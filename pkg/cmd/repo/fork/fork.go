@@ -271,6 +271,9 @@ func currentLogin(opts *ForkOptions) (string, error) {
 // keepDefaultBranch deletes every branch of a new fork but its default
 // branch, since Gitea's fork API copies all of them.
 func keepDefaultBranch(opts *ForkOptions, fork forkRepo) error {
+	if fork.DefaultBranch == "" {
+		return errors.New("the fork has no default branch")
+	}
 	repoURL := fmt.Sprintf("https://%s/api/v1/repos/%s", opts.Host, fork.FullName)
 	branches, err := cmdutil.FetchFilteredPages(opts.HTTPClient, repoURL+"/branches", opts.Token, 0,
 		func(body []byte) ([]string, error) {

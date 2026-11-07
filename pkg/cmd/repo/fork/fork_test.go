@@ -248,6 +248,15 @@ func TestForkRun_Errors(t *testing.T) {
 			wantErr: "could not delete the other branches of the fork",
 		},
 		{
+			name: "default branch unknown",
+			opts: ForkOptions{DefaultBranchOnly: true},
+			stubs: func(reg *httpmock.Registry) {
+				reg.Register(httpmock.REST("POST", forksPath), httpmock.StringResponse(http.StatusAccepted,
+					`{"name":"project","full_name":"john/project","owner":{"login":"john"}}`))
+			},
+			wantErr: "could not delete the other branches of the fork: the fork has no default branch",
+		},
+		{
 			name: "branch delete fails",
 			opts: ForkOptions{DefaultBranchOnly: true},
 			stubs: func(reg *httpmock.Registry) {
