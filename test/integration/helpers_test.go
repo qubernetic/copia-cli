@@ -58,6 +58,18 @@ func newScratchRepo(t *testing.T, env testEnv, suffix string) testEnv {
 	return env
 }
 
+// renameScratchRepo records that the scratch repository old of this run is
+// now named name, so TestMain deletes it under that name.
+func renameScratchRepo(old, name string) {
+	runRepo.mu.Lock()
+	defer runRepo.mu.Unlock()
+	for i, n := range runRepo.scratch {
+		if n == old {
+			runRepo.scratch[i] = name
+		}
+	}
+}
+
 func loadTestEnv(t *testing.T) testEnv {
 	t.Helper()
 
