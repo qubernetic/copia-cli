@@ -40,10 +40,11 @@ func NewCmdView(f *cmdutil.Factory) *cobra.Command {
 		Long: `View information about a Copia release.
 
 Without an explicit tag name argument, the latest release in the project
-is shown.
+is shown: the newest release that is neither a draft nor a pre-release.
 
-With --web, open the release page in the browser instead. No API call is made,
-so no token is needed.`,
+With --web, open the release page in the browser instead. With a tag no API
+call is made, so no token is needed; without one the latest release is
+looked up first.`,
 		Example: `  # View the latest release
   $ copia-cli release view
 
@@ -91,9 +92,13 @@ so no token is needed.`,
 	return cmd
 }
 
-// openRelease opens the web page of the release with tag, or of the latest
-// release when tag is empty. It makes no API call, so no token is needed.
+// openRelease opens the web page of the release with tag without an API
+// call. Without a tag it looks the latest release up and opens its page, as
+// gh does, so that needs a token.
 func openRelease(f *cmdutil.Factory, tag string) error {
+	if tag == "" {
+		return openLatestRelease(f)
+	}
 	host, err := f.ResolveHost()
 	if err != nil {
 		return err
@@ -102,11 +107,23 @@ func openRelease(f *cmdutil.Factory, tag string) error {
 	if err != nil {
 		return err
 	}
-	path := "releases/latest"
-	if tag != "" {
-		path = "releases/tag/" + url.PathEscape(tag)
+	return cmdutil.OpenInBrowser(f.IOStreams, f.Browser, cmdutil.RepoWebURL(host, owner, repo, "releases/tag/"+url.PathEscape(tag)))
+}
+
+func openLatestRelease(f *cmdutil.Factory) error {
+	host, token, err := f.ResolveAuth()
+	if err != nil {
+		return err
 	}
-	return cmdutil.OpenInBrowser(f.IOStreams, f.Browser, cmdutil.RepoWebURL(host, owner, repo, path))
+	owner, repo, err := f.ResolveRepo()
+	if err != nil {
+		return err
+	}
+	release, err := shared.FetchRelease(cmdutil.NewHTTPClient(), host, token, owner, repo, "")
+	if err != nil {
+		return err
+	}
+	return cmdutil.OpenInBrowser(f.IOStreams, f.Browser, release.HTMLURL)
 }
 
 func ViewRun(opts *ViewOptions) error {

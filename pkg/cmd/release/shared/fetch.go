@@ -2,10 +2,13 @@ package shared
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+
+	"github.com/qubernetic/copia-cli/pkg/cmdutil"
 )
 
 // Author is the user who created a release.
@@ -49,11 +52,10 @@ var ReleaseFields = []string{
 // FetchRelease returns the release of owner/repo with tag, or the latest
 // release when tag is empty.
 func FetchRelease(client *http.Client, host, token, owner, repo, tag string) (*Release, error) {
-	path := "latest"
-	if tag != "" {
-		path = "tags/" + url.PathEscape(tag)
+	if tag == "" {
+		return fetchLatestRelease(client, host, token, owner, repo)
 	}
-	u := fmt.Sprintf("https://%s/api/v1/repos/%s/%s/releases/%s", host, owner, repo, path)
+	u := fmt.Sprintf("https://%s/api/v1/repos/%s/%s/releases/tags/%s", host, owner, repo, url.PathEscape(tag))
 
 	req, err := http.NewRequest("GET", u, nil)
 	if err != nil {
@@ -68,9 +70,6 @@ func FetchRelease(client *http.Client, host, token, owner, repo, tag string) (*R
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusNotFound {
-		if tag == "" {
-			return nil, fmt.Errorf("release not found")
-		}
 		return nil, fmt.Errorf("release %s not found", tag)
 	}
 	if resp.StatusCode != http.StatusOK {
@@ -87,4 +86,27 @@ func FetchRelease(client *http.Client, host, token, owner, repo, tag string) (*R
 		return nil, err
 	}
 	return &release, nil
+}
+
+// fetchLatestRelease returns the newest release of owner/repo that is
+// neither a draft nor a pre-release, the release GitHub calls the latest.
+// Copia answers GET /releases/latest with 404 even then, so it comes from
+// the release list, which is newest first.
+func fetchLatestRelease(client *http.Client, host, token, owner, repo string) (*Release, error) {
+	u := fmt.Sprintf("https://%s/api/v1/repos/%s/%s/releases?draft=false&pre-release=false", host, owner, repo)
+	decode := func(body []byte) ([]Release, error) {
+		var releases []Release
+		err := json.Unmarshal(body, &releases)
+		return releases, err
+	}
+	published := func(r Release) bool { return !r.Draft && !r.Prerelease }
+
+	releases, err := cmdutil.FetchFilteredPages(client, u, token, 1, decode, published)
+	if err != nil {
+		return nil, err
+	}
+	if len(releases) == 0 {
+		return nil, errors.New("release not found")
+	}
+	return &releases[0], nil
 }

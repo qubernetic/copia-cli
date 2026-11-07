@@ -18,7 +18,7 @@ import (
 
 const (
 	tagPath    = "/api/v1/repos/my-org/my-repo/releases/tags/v1.0.0"
-	latestPath = "/api/v1/repos/my-org/my-repo/releases/latest"
+	latestPath = "/api/v1/repos/my-org/my-repo/releases"
 	releaseURL = "https://app.copia.io/my-org/my-repo/releases/tag/v1.0.0"
 )
 
@@ -86,7 +86,7 @@ func TestNewCmdView_Latest(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
 	httpmock.ReplaceDefaultTransport(t, reg)
-	reg.Register(httpmock.REST("GET", latestPath), httpmock.StringResponse(http.StatusOK, releaseJSON))
+	reg.Register(httpmock.REST("GET", latestPath), httpmock.StringResponse(http.StatusOK, "["+releaseJSON+"]"))
 
 	ios, _, stdout, _ := iostreams.Test()
 	require.NoError(t, runCmd(t, readyFactory(ios)))
@@ -98,17 +98,18 @@ func TestNewCmdView_NotFound(t *testing.T) {
 		name    string
 		args    []string
 		path    string
+		resp    httpmock.Responder
 		wantErr string
 	}{
-		{name: "tag", args: []string{"v1.0.0"}, path: tagPath, wantErr: "release v1.0.0 not found"},
-		{name: "latest", path: latestPath, wantErr: "release not found"},
+		{name: "tag", args: []string{"v1.0.0"}, path: tagPath, resp: httpmock.StringResponse(http.StatusNotFound, `{}`), wantErr: "release v1.0.0 not found"},
+		{name: "latest", path: latestPath, resp: httpmock.StringResponse(http.StatusOK, `[]`), wantErr: "release not found"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			reg := &httpmock.Registry{}
 			defer reg.Verify(t)
 			httpmock.ReplaceDefaultTransport(t, reg)
-			reg.Register(httpmock.REST("GET", tt.path), httpmock.StringResponse(http.StatusNotFound, `{}`))
+			reg.Register(httpmock.REST("GET", tt.path), tt.resp)
 
 			ios, _, stdout, _ := iostreams.Test()
 			require.EqualError(t, runCmd(t, readyFactory(ios), tt.args...), tt.wantErr)
@@ -151,7 +152,7 @@ func TestNewCmdView_JQ(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
 	httpmock.ReplaceDefaultTransport(t, reg)
-	reg.Register(httpmock.REST("GET", latestPath), httpmock.StringResponse(http.StatusOK, releaseJSON))
+	reg.Register(httpmock.REST("GET", latestPath), httpmock.StringResponse(http.StatusOK, "["+releaseJSON+"]"))
 
 	ios, _, stdout, _ := iostreams.Test()
 	require.NoError(t, runCmd(t, readyFactory(ios), "--json", "assets", "--jq", ".assets[].name"))
@@ -286,7 +287,6 @@ func TestNewCmdView_Web(t *testing.T) {
 		wantErr string
 	}{
 		{name: "tag", args: []string{"v1.0.0", "--web"}, wantURL: releaseURL},
-		{name: "latest", args: []string{"-w"}, wantURL: "https://app.copia.io/my-org/my-repo/releases/latest"},
 		{name: "escaped tag", args: []string{"release/1.0", "-w"}, wantURL: "https://app.copia.io/my-org/my-repo/releases/tag/release%2F1.0"},
 		{name: "repo flag", args: []string{"v1.0.0", "-w"}, repo: "other-org/other-repo", wantURL: "https://app.copia.io/other-org/other-repo/releases/tag/v1.0.0"},
 		{
@@ -324,16 +324,87 @@ func TestNewCmdView_WebErrors(t *testing.T) {
 	ios, _, _, _ := iostreams.Test()
 	noConfig := &cmdutil.Factory{IOStreams: ios, Repo: "my-org/my-repo", Browser: &browsertest.Browser{},
 		Config: func() (*config.Config, error) { return nil, errors.New("no config") }}
-	require.EqualError(t, runCmd(t, noConfig, "-w"), "no config")
+	require.EqualError(t, runCmd(t, noConfig, "v1.0.0", "-w"), "no config")
 
 	noRepo := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Browser: &browsertest.Browser{}}
-	err := runCmd(t, noRepo, "-w")
+	err := runCmd(t, noRepo, "v1.0.0", "-w")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "could not determine repository")
 
 	failing := &cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Repo: "my-org/my-repo",
 		Browser: &browsertest.Browser{Err: errors.New("no browser")}}
-	require.EqualError(t, runCmd(t, failing, "-w"), "no browser")
+	require.EqualError(t, runCmd(t, failing, "v1.0.0", "-w"), "no browser")
+}
+
+// Without a tag --web looks the latest release up and opens its page, as gh
+// does, so it needs a token.
+func TestNewCmdView_WebLatest(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+	reg.Register(httpmock.REST("GET", latestPath), httpmock.StringResponse(http.StatusOK, "["+releaseJSON+"]"))
+
+	ios, _, stdout, stderr := iostreams.Test()
+	ios.SetStdoutTTY(true)
+	b := &browsertest.Browser{}
+	f := readyFactory(ios)
+	f.Browser = b
+
+	require.NoError(t, runCmd(t, f, "--web"))
+	assert.Equal(t, []string{releaseURL}, b.URLs)
+	assert.Empty(t, stdout.String())
+	assert.Equal(t, "Opening app.copia.io/my-org/my-repo/releases/tag/v1.0.0 in your browser.\n", stderr.String())
+	require.Len(t, reg.Requests, 1)
+	assert.Equal(t, "token test-token", reg.Requests[0].Header.Get("Authorization"))
+}
+
+func TestNewCmdView_WebLatestErrors(t *testing.T) {
+	t.Setenv("COPIA_TOKEN", "")
+	t.Setenv("COPIA_HOST", "")
+
+	tests := []struct {
+		name    string
+		factory *cmdutil.Factory
+		stub    bool
+		wantErr string
+	}{
+		{
+			name: "auth failure",
+			factory: &cmdutil.Factory{Repo: "my-org/my-repo",
+				Config: func() (*config.Config, error) { return nil, errors.New("no config") }},
+			wantErr: "no config",
+		},
+		{
+			name:    "repo failure",
+			factory: &cmdutil.Factory{Host: "app.copia.io", Token: "test-token"},
+			wantErr: "could not determine repository",
+		},
+		{
+			name:    "no release",
+			factory: &cmdutil.Factory{Host: "app.copia.io", Token: "test-token", Repo: "my-org/my-repo"},
+			stub:    true,
+			wantErr: "release not found",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			defer reg.Verify(t)
+			httpmock.ReplaceDefaultTransport(t, reg)
+			if tt.stub {
+				reg.Register(httpmock.REST("GET", latestPath), httpmock.StringResponse(http.StatusOK, `[]`))
+			}
+
+			ios, _, _, _ := iostreams.Test()
+			b := &browsertest.Browser{}
+			tt.factory.IOStreams = ios
+			tt.factory.Browser = b
+			err := runCmd(t, tt.factory, "-w")
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+			assert.Empty(t, b.URLs)
+		})
+	}
 }
 
 func TestNewCmdView_Errors(t *testing.T) {

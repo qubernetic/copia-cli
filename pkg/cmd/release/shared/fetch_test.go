@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"testing"
 
 	"github.com/qubernetic/copia-cli/pkg/httpmock"
@@ -17,7 +18,7 @@ const releaseJSON = `{
 	"name": "First",
 	"body": "notes",
 	"draft": false,
-	"prerelease": true,
+	"prerelease": false,
 	"created_at": "2026-01-02T03:04:05Z",
 	"published_at": "2026-01-03T03:04:05Z",
 	"author": {"id": 7, "login": "alice"},
@@ -27,6 +28,8 @@ const releaseJSON = `{
 	"target_commitish": "main",
 	"assets": [{"id": 5, "name": "a.zip", "size": 2048, "download_count": 3, "browser_download_url": "https://app.copia.io/attachments/x", "uuid": "x"}]
 }`
+
+const latestPath = "/api/v1/repos/my-org/my-repo/releases"
 
 func client(reg *httpmock.Registry) *http.Client {
 	return &http.Client{Transport: reg}
@@ -47,7 +50,6 @@ func TestFetchRelease_ByTag(t *testing.T) {
 		TagName:         "v1.0.0",
 		Name:            "First",
 		Body:            "notes",
-		Prerelease:      true,
 		CreatedAt:       "2026-01-02T03:04:05Z",
 		PublishedAt:     "2026-01-03T03:04:05Z",
 		Author:          Author{Login: "alice"},
@@ -68,13 +70,30 @@ func TestFetchRelease_Latest(t *testing.T) {
 	reg := &httpmock.Registry{}
 	defer reg.Verify(t)
 	reg.Register(
-		httpmock.REST("GET", "/api/v1/repos/my-org/my-repo/releases/latest"),
-		httpmock.StringResponse(http.StatusOK, releaseJSON),
+		httpmock.QueryMatcher("GET", latestPath, url.Values{"draft": {"false"}, "pre-release": {"false"}, "page": {"1"}, "limit": {"50"}}),
+		httpmock.StringResponse(http.StatusOK, "["+releaseJSON+"]"),
 	)
 
 	rel, err := FetchRelease(client(reg), "app.copia.io", "test-token", "my-org", "my-repo", "")
 	require.NoError(t, err)
 	assert.Equal(t, "v1.0.0", rel.TagName)
+	assert.Equal(t, "a.zip", rel.Assets[0].Name)
+	require.Len(t, reg.Requests, 1)
+	assert.Equal(t, "token test-token", reg.Requests[0].Header.Get("Authorization"))
+}
+
+// The list filters are checked on the client too, in case the server ignores them.
+func TestFetchRelease_LatestSkipsDraftsAndPrereleases(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	reg.Register(
+		httpmock.REST("GET", latestPath),
+		httpmock.StringResponse(http.StatusOK, `[{"tag_name":"v3","draft":true},{"tag_name":"v2","prerelease":true},{"tag_name":"v1"}]`),
+	)
+
+	rel, err := FetchRelease(client(reg), "app.copia.io", "test-token", "my-org", "my-repo", "")
+	require.NoError(t, err)
+	assert.Equal(t, "v1", rel.TagName)
 }
 
 func TestFetchRelease_EscapesTag(t *testing.T) {
@@ -97,7 +116,6 @@ func (errReader) Read([]byte) (int, error) { return 0, errors.New("read failed")
 
 func TestFetchRelease_Errors(t *testing.T) {
 	const tagPath = "/api/v1/repos/my-org/my-repo/releases/tags/v1.0.0"
-	const latestPath = "/api/v1/repos/my-org/my-repo/releases/latest"
 
 	tests := []struct {
 		name    string
@@ -132,8 +150,20 @@ func TestFetchRelease_Errors(t *testing.T) {
 		{
 			name:    "no latest release",
 			path:    latestPath,
-			resp:    httpmock.StringResponse(http.StatusNotFound, `{}`),
+			resp:    httpmock.StringResponse(http.StatusOK, `[]`),
 			wantErr: "release not found",
+		},
+		{
+			name:    "latest server error",
+			path:    latestPath,
+			resp:    httpmock.StringResponse(http.StatusInternalServerError, `{}`),
+			wantErr: "API error (HTTP 500)",
+		},
+		{
+			name:    "latest malformed JSON",
+			path:    latestPath,
+			resp:    httpmock.StringResponse(http.StatusOK, `{`),
+			wantErr: "parsing response: ",
 		},
 		{
 			name:    "server error",
