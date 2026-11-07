@@ -3,7 +3,9 @@ package download
 import (
 	"errors"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -141,6 +143,84 @@ func TestDownloadRun_Archive(t *testing.T) {
 	}
 }
 
+func TestHostOnlyError(t *testing.T) {
+	signed := "https://storage.example/bucket/a.zip?X-Amz-Signature=secret"
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{
+			name: "refused redirect kept",
+			err:  &url.Error{Op: "Get", URL: signed, Err: refusedRedirect(t)},
+			want: "refusing redirect from https://app.copia.io to http://storage.example: a download follows https redirects only",
+		},
+		{
+			name: "dial error kept",
+			err:  &url.Error{Op: "Get", URL: signed, Err: &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}},
+			want: "dial tcp: connection refused",
+		},
+		{
+			name: "lookup error kept",
+			err:  &url.Error{Op: "Get", URL: signed, Err: &net.DNSError{Err: "no such host", Name: "storage.example"}},
+			want: "lookup storage.example: no such host",
+		},
+		{
+			name: "other cause names the last host",
+			err:  &url.Error{Op: "Get", URL: signed, Err: errors.New("unexpected EOF reading " + signed)},
+			want: "the request to storage.example failed",
+		},
+		{
+			name: "no url.Error names the configured host",
+			err:  errors.New(signed),
+			want: "the request to app.copia.io failed",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.EqualError(t, hostOnlyError(tt.err, "app.copia.io"), tt.want)
+		})
+	}
+}
+
+// refusedRedirect returns the error the download client gives for an http
+// redirect.
+func refusedRedirect(t *testing.T) error {
+	t.Helper()
+	reg := &httpmock.Registry{}
+	reg.Register(httpmock.REST("GET", "/a.zip"),
+		httpmock.WithHeader(httpmock.StringResponse(http.StatusFound, ""), "Location", "http://storage.example/a.zip"))
+	client := cmdutil.NewDownloadHTTPClient()
+	client.Transport = reg
+	_, err := client.Get("https://app.copia.io/a.zip")
+	require.Error(t, err)
+	return errors.Unwrap(err)
+}
+
+func TestDownloadRun_ArchiveUnsafeTag(t *testing.T) {
+	for _, tag := range []string{"a/../b", "a/./b", "a//b", "..", "/a", "a/"} {
+		t.Run(tag, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			defer reg.Verify(t)
+			reg.Register(httpmock.REST("GET", tagPath),
+				httpmock.StringResponse(http.StatusOK, `{"id":42,"tag_name":"`+tag+`"}`))
+
+			dir := t.TempDir()
+			ios, _, _, _ := iostreams.Test()
+			opts := newOpts(reg, ios)
+			opts.Destination = dir
+			opts.ArchiveType = "zip"
+
+			err := DownloadRun(opts)
+			require.EqualError(t, err, `refusing to download the archive of tag "`+tag+`": it has an empty, "." or ".." path segment`)
+			assert.Len(t, reg.Requests, 1, "only the release lookup")
+			entries, err := os.ReadDir(dir)
+			require.NoError(t, err)
+			assert.Empty(t, entries)
+		})
+	}
+}
+
 func TestDownloadRun_Output(t *testing.T) {
 	t.Run("to a file", func(t *testing.T) {
 		reg := &httpmock.Registry{}
@@ -237,6 +317,34 @@ func TestDownloadRun_ExistingFile(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDownloadRun_ClobberReplacesSymlink(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	reg.Register(httpmock.REST("GET", tagPath), httpmock.StringResponse(http.StatusOK, releaseJSON))
+	reg.Register(httpmock.REST("GET", "/releases/download/v1.0.0/a.zip"), assetResponder(t, "zip"))
+
+	outside := filepath.Join(t.TempDir(), "outside")
+	require.NoError(t, os.WriteFile(outside, []byte("old"), 0o600))
+	dir := t.TempDir()
+	target := filepath.Join(dir, "a.zip")
+	if err := os.Symlink(outside, target); err != nil {
+		t.Skip("symlinks not available")
+	}
+
+	ios, _, _, _ := iostreams.Test()
+	opts := newOpts(reg, ios)
+	opts.Destination = dir
+	opts.FilePatterns = []string{"a.zip"}
+	opts.OverwriteExisting = true
+
+	require.NoError(t, DownloadRun(opts))
+	assert.Equal(t, "old", readFile(t, outside), "the file outside --dir is unchanged")
+	info, err := os.Lstat(target)
+	require.NoError(t, err)
+	assert.True(t, info.Mode().IsRegular(), "the target is now a regular file")
+	assert.Equal(t, "zip", readFile(t, target))
 }
 
 func TestDownloadRun_UnsafeAssetNames(t *testing.T) {
@@ -425,7 +533,15 @@ func TestDownloadRun_Errors(t *testing.T) {
 			patterns: []string{"a.zip"},
 			release:  release,
 			asset:    func(*http.Request) (*http.Response, error) { return nil, errors.New("boom") },
-			wantErr:  "downloading a.zip: ",
+			wantErr:  "downloading a.zip: the request to app.copia.io failed",
+		},
+		{
+			name:     "unparsable redirect names no URL",
+			patterns: []string{"a.zip"},
+			release:  release,
+			asset: httpmock.WithHeader(httpmock.StringResponse(http.StatusFound, ""),
+				"Location", "https://storage.example/bucket/%zz?X-Amz-Signature=secret"),
+			wantErr: "downloading a.zip: the request to app.copia.io failed",
 		},
 	}
 	for _, tt := range tests {
@@ -455,6 +571,8 @@ func TestDownloadRun_Errors(t *testing.T) {
 			err := DownloadRun(opts)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.wantErr)
+			assert.NotContains(t, err.Error(), "secret")
+			assert.NotContains(t, err.Error(), "X-Amz")
 			assert.Empty(t, stdout.String())
 			entries, err := os.ReadDir(dir)
 			require.NoError(t, err)

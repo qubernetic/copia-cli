@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -147,9 +148,13 @@ func DownloadRun(opts *DownloadOptions) error {
 		if release.TagName == "" {
 			return fmt.Errorf("release %q has no tag, so it has no %q archive", release.Name, opts.ArchiveType)
 		}
+		ref, err := escapeRef(release.TagName)
+		if err != nil {
+			return err
+		}
 		targets = append(targets, target{
 			url: fmt.Sprintf("https://%s/api/v1/repos/%s/%s/archive/%s.%s",
-				opts.Host, opts.Owner, opts.Repo, escapeRef(release.TagName), opts.ArchiveType),
+				opts.Host, opts.Owner, opts.Repo, ref, opts.ArchiveType),
 			archive:  true,
 			fallback: opts.Repo + "-" + release.TagName + "." + opts.ArchiveType,
 		})
@@ -187,13 +192,18 @@ func DownloadRun(opts *DownloadOptions) error {
 	return nil
 }
 
-// escapeRef path-escapes every segment of a tag, keeping its slashes.
-func escapeRef(ref string) string {
+// escapeRef path-escapes every segment of a tag, keeping its slashes. A tag
+// with an empty, "." or ".." segment is refused, so the server cannot
+// resolve the archive request to another API path.
+func escapeRef(ref string) (string, error) {
 	segments := strings.Split(ref, "/")
 	for i, s := range segments {
+		if s == "" || s == "." || s == ".." {
+			return "", fmt.Errorf(`refusing to download the archive of tag %q: it has an empty, "." or ".." path segment`, ref)
+		}
 		segments[i] = url.PathEscape(s)
 	}
-	return strings.Join(segments, "/")
+	return strings.Join(segments, "/"), nil
 }
 
 func matchAny(patterns []string, name string) bool {
@@ -226,13 +236,7 @@ func download(opts *DownloadOptions, hostURL *url.URL, dest *destination, t targ
 
 	resp, err := opts.DownloadHTTPClient.Do(req)
 	if err != nil {
-		// A url.Error names the last URL, which after a redirect can be a
-		// signed storage URL; its cause names the hosts only.
-		var urlErr *url.Error
-		if errors.As(err, &urlErr) {
-			err = urlErr.Err
-		}
-		return fmt.Errorf("downloading %s: %w", displayName(t), err)
+		return fmt.Errorf("downloading %s: %w", displayName(t), hostOnlyError(err, hostURL.Host))
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -248,6 +252,33 @@ func download(opts *DownloadOptions, hostURL *url.URL, dest *destination, t targ
 		}
 	}
 	return dest.copy(name, resp.Body)
+}
+
+// hostOnlyError returns the cause of a failed download request if it names
+// hosts only. Any other cause may quote a redirect URL, which can be a signed
+// storage URL (a url.Error names the last URL, and Go quotes a Location
+// header it cannot parse), so it becomes a message naming the host of the
+// last request.
+func hostOnlyError(err error, host string) error {
+	var redirectErr *cmdutil.RedirectError
+	if errors.As(err, &redirectErr) {
+		return redirectErr
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return opErr
+	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return dnsErr
+	}
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		if u, perr := url.Parse(urlErr.URL); perr == nil && u.Host != "" {
+			host = u.Host
+		}
+	}
+	return fmt.Errorf("the request to %s failed", host)
 }
 
 func displayName(t target) string {
