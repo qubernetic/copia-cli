@@ -194,7 +194,6 @@ func TestCloneRun_SSHKeepsURL(t *testing.T) {
 	assert.Equal(t, "git@app.copia.io:my-org/my-repo.git", storedOrigin(t, filepath.Join(work, "ssh-clone")))
 }
 
-
 // TestCloneCommand_GitScopesCredential checks with the real git that the
 // helper cloneCommand configures answers for the configured host only,
 // replaces the user's helpers there and nowhere else, and stores nothing.
@@ -384,4 +383,53 @@ func TestCloneCommand_GitScopesCredentialIPv6(t *testing.T) {
 	assert.Contains(t, fill("https://[::1]:8443/o/r.git"), "password=test-token\n")
 	assert.NotContains(t, fill("https://[::1]:9443/o/r.git"), "test-token")
 	assert.NotContains(t, fill("https://[::1]/o/r.git"), "test-token")
+}
+
+func TestRunGit_FetchSendsTokenToConfiguredHost(t *testing.T) {
+	isolateGit(t)
+	backend := gitBackend(t, newBareRepo(t))
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != testBasicAuth {
+			unauthorized(w)
+			return
+		}
+		backend.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+	trustTestCert(t, srv)
+	dir := t.TempDir()
+	runGit(t, "init", "-q", dir)
+	remoteURL := srv.URL + "/my-org/my-repo.git"
+	runGit(t, "-C", dir, "remote", "add", "upstream", remoteURL)
+	ios, _, _, stderr := iostreams.Test()
+
+	host := strings.TrimPrefix(srv.URL, "https://")
+	err := RunGit(ios, host, "test-token", remoteURL, "-C", dir, "fetch", "upstream")
+	require.NoError(t, err, stderr.String())
+	assert.Equal(t, "init", runGit(t, "-C", dir, "log", "-1", "--format=%s", "upstream/HEAD"))
+	assert.NotContains(t, runGit(t, "-C", dir, "config", "--list"), "test-token")
+}
+
+func TestRunGit_Errors(t *testing.T) {
+	isolateGit(t)
+	tests := []struct {
+		name        string
+		host        string
+		token       string
+		configCount string
+		wantErr     string
+	}{
+		{name: "invalid config count", host: "app.copia.io", token: "test-token", configCount: "bogus", wantErr: `GIT_CONFIG_COUNT "bogus"`},
+		{name: "invalid token", host: "app.copia.io", token: "bad\ntoken", wantErr: "invalid token"},
+		{name: "invalid host", host: "bad host", token: "test-token", wantErr: "bad host"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("GIT_CONFIG_COUNT", tt.configCount)
+			ios, _, _, _ := iostreams.Test()
+			err := RunGit(ios, tt.host, tt.token, "https://app.copia.io/o/r.git", "version")
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
 }

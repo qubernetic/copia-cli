@@ -9,9 +9,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/spf13/cobra"
 	"github.com/qubernetic/copia-cli/pkg/cmdutil"
 	"github.com/qubernetic/copia-cli/pkg/iostreams"
+	"github.com/spf13/cobra"
 )
 
 // CloneOptions holds all inputs for the repo clone command.
@@ -78,10 +78,28 @@ func CloneRun(opts *CloneOptions) error {
 	if err != nil {
 		return err
 	}
+	return execGit(opts.IO, args, env)
+}
 
+// RunGit runs git with args for a command that contacts remoteURL, such as
+// a fetch, with the token offered as CloneRun offers it: only when
+// remoteURL points at the configured host over https.
+func RunGit(io *iostreams.IOStreams, host, token, remoteURL string, args ...string) error {
+	existing, err := configCount(os.Getenv("GIT_CONFIG_COUNT"))
+	if err != nil {
+		return err
+	}
+	env, err := credentialEnv(host, token, remoteURL, existing)
+	if err != nil {
+		return err
+	}
+	return execGit(io, args, env)
+}
+
+func execGit(io *iostreams.IOStreams, args, env []string) error {
 	gitCmd := exec.Command("git", args...)
-	gitCmd.Stdout = opts.IO.Out
-	gitCmd.Stderr = opts.IO.ErrOut
+	gitCmd.Stdout = io.Out
+	gitCmd.Stderr = io.ErrOut
 	gitCmd.Stdin = os.Stdin
 	gitCmd.Env = append(os.Environ(), env...)
 
@@ -94,43 +112,52 @@ func CloneRun(opts *CloneOptions) error {
 const credentialHelper = `!f() { test "$1" = get || return 0; printf 'username=token\npassword=%s\n' "$COPIA_CLONE_TOKEN"; }; f`
 
 // cloneCommand returns the git arguments and the environment entries to add
-// for a clone. The token never goes into the arguments: when the URL points
-// at the configured host over https, git gets it from credentialHelper,
-// which git's config scopes to that host. The first, empty helper entry
-// drops the user's helpers for that host only. git asks for the credential
-// per origin, so after a redirect to another origin it has none to send.
-// existing is the number of GIT_CONFIG_* entries already in the
-// environment, which are kept.
+// for a clone (see credentialEnv). The token never goes into the arguments.
 func cloneCommand(opts *CloneOptions, existing int) (args, env []string, err error) {
-	configured, err := cmdutil.ParseHost(opts.Host)
+	cloneURL := buildCloneURL(opts.Host, opts.Repo)
+	env, err = credentialEnv(opts.Host, opts.Token, cloneURL, existing)
 	if err != nil {
 		return nil, nil, err
 	}
-	if !cmdutil.IsPrintableASCII(opts.Token) {
-		return nil, nil, fmt.Errorf("invalid token: it may contain only printable ASCII characters")
-	}
-	cloneURL := buildCloneURL(opts.Host, opts.Repo)
 
 	args = []string{"clone", "--", cloneURL}
 	if opts.Dir != "" {
 		args = append(args, opts.Dir)
 	}
+	return args, env, nil
+}
 
-	env = []string{"GIT_TERMINAL_PROMPT=0"}
-	if opts.Token == "" || !cmdutil.MatchesHost(configured, cloneURL) {
-		return args, env, nil
+// credentialEnv returns the environment entries to add for a git command
+// that contacts remoteURL. The token is offered only when remoteURL points
+// at the configured host over https, through credentialHelper, which git's
+// config scopes to that host. The first, empty helper entry drops the
+// user's helpers for that host only. git asks for the credential per
+// origin, so after a redirect to another origin it has none to send.
+// existing is the number of GIT_CONFIG_* entries already in the
+// environment, which are kept.
+func credentialEnv(host, token, remoteURL string, existing int) ([]string, error) {
+	configured, err := cmdutil.ParseHost(host)
+	if err != nil {
+		return nil, err
+	}
+	if !cmdutil.IsPrintableASCII(token) {
+		return nil, fmt.Errorf("invalid token: it may contain only printable ASCII characters")
+	}
+
+	env := []string{"GIT_TERMINAL_PROMPT=0"}
+	if token == "" || !cmdutil.MatchesHost(configured, remoteURL) {
+		return env, nil
 	}
 
 	key := credentialKey(configured)
-	env = append(env,
-		"COPIA_CLONE_TOKEN="+opts.Token,
+	return append(env,
+		"COPIA_CLONE_TOKEN="+token,
 		fmt.Sprintf("GIT_CONFIG_COUNT=%d", existing+2),
 		fmt.Sprintf("GIT_CONFIG_KEY_%d=%s", existing, key),
 		fmt.Sprintf("GIT_CONFIG_VALUE_%d=", existing),
 		fmt.Sprintf("GIT_CONFIG_KEY_%d=%s", existing+1, key),
 		fmt.Sprintf("GIT_CONFIG_VALUE_%d=%s", existing+1, credentialHelper),
-	)
-	return args, env, nil
+	), nil
 }
 
 // credentialKey returns the git config key that scopes a credential helper
