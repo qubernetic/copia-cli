@@ -125,6 +125,18 @@ copia-cli auth status --host app.copia.io --show-token
 
 **The output then contains the secret.** Do not run it where the terminal is recorded or shared, or in a CI log. The flag changes the output only; neither the config file nor the keyring is touched. When standard output is not a terminal (a pipe, a redirect or a CI log), `auth status --show-token` still prints the token and writes one warning line to standard error.
 
+### Print the Token
+
+`copia-cli auth token` prints the token the other commands would use, followed by a newline, on standard output, as `gh auth token` does: the host comes from `--host`, then `COPIA_HOST`, then the default host, and the token from `--token`, then `COPIA_TOKEN`, then the stored token of the host's active account (config file, then OS keyring), all as in [Auth Precedence](#auth-precedence), including the warning on standard error when `COPIA_TOKEN` is ignored. `--user/-u <login>` prints the stored token of that account of the host instead and reads neither `--token` nor `COPIA_TOKEN`. gh's `-h/--hostname` is the global `--host` here, since `-h` is the help flag.
+
+```bash
+copia-cli auth token
+copia-cli auth token --host app.copia.io --user jane
+curl -H "Authorization: token $(copia-cli auth token)" https://app.copia.io/api/v1/user
+```
+
+When there is no token, it fails with `no token found for <host>` (with `--user`, `no token found for <host> account <login>`), exits 1 and prints nothing on standard output. A keyring that fails gives an error starting with `reading the token for <host>`. **The output is the secret:** use it in a pipe or a variable, not where the terminal is recorded or shared. The token appears in no warning or error.
+
 ### Use the Token with git
 
 `copia-cli auth git-credential` is a hidden command that git runs as a [credential helper](https://git-scm.com/docs/gitcredentials), as `gh auth git-credential` does. `auth setup-git` configures it, as `gh auth setup-git` does:
