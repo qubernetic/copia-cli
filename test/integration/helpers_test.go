@@ -82,7 +82,11 @@ func loadTestEnv(t *testing.T) testEnv {
 	}
 
 	runRepo.once.Do(func() {
-		runRepo.name, runRepo.err = setUpRunRepo(newAPI(host, token), owner, time.Now())
+		api, now := newAPI(host, token), time.Now()
+		if runRepo.err = deleteStaleRunKeys(api, now); runRepo.err != nil {
+			return
+		}
+		runRepo.name, runRepo.err = setUpRunRepo(api, owner, now)
 	})
 	if runRepo.err != nil {
 		t.Fatalf("set up the run repository: %v", runRepo.err)
@@ -94,6 +98,35 @@ func loadTestEnv(t *testing.T) testEnv {
 		Owner: owner,
 		Repo:  runRepo.name,
 	}
+}
+
+// runKey is an SSH key a test adds to the test account: a generated public
+// key without a comment and its title.
+type runKey struct {
+	Public string
+	Title  string
+}
+
+// newRunKey generates an ed25519 key for the test account, titled with
+// suffix (0-9 and a-z, unique in the run) after the run repository, and
+// deletes the key of that title on cleanup, so a test can add it with the
+// command under test. The private half is never kept.
+func newRunKey(t *testing.T, env testEnv, suffix string) runKey {
+	t.Helper()
+	title, err := runKeyTitle(runRepo.name, suffix)
+	if err != nil {
+		t.Fatalf("set up a run SSH key: %v", err)
+	}
+	public, err := newPublicKey()
+	if err != nil {
+		t.Fatalf("set up a run SSH key: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := deleteRunKeyByTitle(newAPI(env.Host, env.Token), title); err != nil {
+			t.Errorf("delete the run SSH key: %v", err)
+		}
+	})
+	return runKey{Public: public, Title: title}
 }
 
 // testIO returns IOStreams and stdout buffer for asserting CLI output.
@@ -307,6 +340,18 @@ func assertOutputContains(t *testing.T, out, want string) bool {
 		return true
 	}
 	t.Errorf("output (%d bytes) does not contain %q", len(out), want)
+	return false
+}
+
+// assertOutputContainsSecret fails the test when out does not contain want,
+// account data such as a key or its title: its message names the lengths
+// only, never want.
+func assertOutputContainsSecret(t *testing.T, out, want string) bool {
+	t.Helper()
+	if strings.Contains(out, want) {
+		return true
+	}
+	t.Errorf("output (%d bytes) does not contain the expected value (%d bytes)", len(out), len(want))
 	return false
 }
 
