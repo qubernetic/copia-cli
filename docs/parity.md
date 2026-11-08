@@ -48,7 +48,7 @@ Token storage follows gh: `auth login` stores the token in the OS keyring (go-ke
 | `gh repo edit` | Full | `copia-cli repo edit` | [x] |
 | `gh repo set-default` | n/a | `copia-cli repo set-default` | [x] |
 | `gh repo sync` | Partial | `copia-cli repo sync` | [x] |
-| `gh repo deploy-key` | Full | `copia-cli repo deploy-key` | [ ] |
+| `gh repo deploy-key` | None | n/a, app.copia.io has SSH disabled | — |
 
 `gh repo view --web/-w`: client side, no API call and no token, opened as for the issue commands: `/{owner}/{repo}` of the argument, `-R` or the git remote. gh's `--branch` does not exist in `repo view`.
 
@@ -64,7 +64,7 @@ Token storage follows gh: `auth login` stores the token in the OS keyring (go-ke
 
 `gh repo sync`: Partial. Without an argument it syncs the local clone with git, as gh does: the source is `-s/--source owner/repo` or the default repository (`-R`, the remote marked by `repo set-default`, else `origin`) and must be one of the git remotes (owner and name in any case), the branch is `-b/--branch` or the source's `default_branch` from `GET /repos/{owner}/{repo}`. `git fetch` of the branch from that remote gets the token only when the remote's URL is https on the configured host (the scoped credential helper of `repo clone`), then a checked-out branch is fast-forwarded with `merge --ff-only`, another one is moved with `branch --force`, a missing one is created tracking the remote. Diverged branches fail with gh's message unless `--force`, which uses `reset --hard`; a dirty working tree on the checked-out branch is refused with gh's message. With an argument (`owner/repo`) gh syncs a fork from its parent on the server. app.copia.io has no `/repos/{owner}/{repo}/merge-upstream` route: `POST` answers the plain-text `404 page not found` of an unknown path (found by the `integration` job of #45, 2026-11-07), so the remote mode reports `Copia does not offer fork sync through its API`, as Copia has no forks either (`gh repo fork`). Against a Gitea-compatible server that serves the route it sends `{"branch", "ff_only": true}` (the branch defaults to the repository's `default_branch`), prints `Synced the "<owner>:<branch>" branch from its parent` or that it is already up to date, and reports `<owner>/<repo> is not a fork` and diverging changes (gh's message, pointing at a local `--force`); `--force` and `-s/--source` are refused with an argument, since the endpoint only fast-forwards from the parent. Differences from gh: the success line is printed also without a terminal, and gh's worktree hints on a branch checked out in another worktree are left out (git's own error is shown).
 
-`gh repo deploy-key`: `GET` and `POST /repos/{owner}/{repo}/keys`, `DELETE /repos/{owner}/{repo}/keys/{id}` for list, add and delete.
+`gh repo deploy-key`: None on Copia. Gitea serves deploy keys at `/repos/{owner}/{repo}/keys`, but a deploy key only grants access over SSH, and app.copia.io has SSH disabled: it answers `POST /user/keys` with 422 `SSH is disabled` (found by the `integration` job of #487, 2026-11-08), see `gh ssh-key`.
 
 ## issue
 
@@ -194,6 +194,29 @@ Client side, no API call. The keys are `output` (`table` or `json`, default `tab
 
 Client side, no API call. Aliases are stored under the top-level key `aliases` of `config.yml` and expanded before the command runs when the alias is the first argument, as in gh: `$1`, `$2` and so on take the arguments after the alias, otherwise they are appended, and an expansion that starts with `!` (or was set with `--shell/-s`) runs through `sh -c` with the arguments as `$1`, `$2`. Differences from gh: an argument fills a placeholder after the expansion is split into words, so it is never split again (gh replaces the placeholders in the text and splits afterwards); an alias name may not be empty, start with `-` or contain blanks, and the expansion of an alias that is no shell alias must start with a copia-cli command (gh also accepts an extension or another alias, which copia-cli does not have or expand); a built-in command also wins over an alias of the same name that was written into the config file by hand; `alias list` and `alias set`, `delete` and `import` print their messages whether or not the output is a terminal, and `alias import` exits with an error when it refused an alias, after it imported the others (gh exits 0).
 
+## gpg-key
+
+| gh command | Parity | Copia CLI | Status |
+|-----------|--------|-----------|--------|
+| `gh gpg-key list` | Full | `copia-cli gpg-key list` | [x] |
+| `gh gpg-key add` | Full | `copia-cli gpg-key add` | [x] |
+| `gh gpg-key delete` | Full | `copia-cli gpg-key delete` | [ ] |
+
+The keys are those of the authenticated Copia account (`/user/gpg_keys`).
+
+`gh gpg-key list`: every page of `GET /user/gpg_keys`. On a terminal the columns are gh's EMAIL (the key's emails joined with `, `; Gitea lists only the emails that are verified emails of the account), KEY ID, PUBLIC KEY (cut in the middle to fit the terminal width), ADDED (the time in words) and EXPIRES (`Never` or the date); without a terminal the same columns tab-separated without a header, the times in RFC 3339 as Gitea gives them. Gitea's `public_key` is its base64 encoding of the primary key packet, not the armored key. `--json` takes `id`, `key_id`, `primary_key_id`, `emails`, `public_key`, `created_at`, `expires_at`, `verified` and `can_sign` (gh has no `--json` here), with `--jq` and `--template`. No keys prints `no GPG keys present in the Copia account` on standard error and exits 0; with `--json` it prints `[]`.
+
+`gh gpg-key add [<key-file>]`: reads the file, or standard input with `-` or without an argument when standard input is not a terminal (on a terminal it fails with gh's `GPG key file missing`), and sends it as `armored_public_key` with `POST /user/gpg_keys`, then `GPG key added to your account`, printed on standard output also without a terminal (gh prints it on a terminal only). Content without `-----BEGIN ` fails before any request with gh's hint that the key might not be ASCII-armored (`gpg --armor --export <ID> | copia-cli gpg-key add -`), and an armored private key (`PRIVATE KEY BLOCK`) is refused before any request; gh sends both and reads the server's 422. Gitea's 422 `A key with the same id already exists` becomes gh's `the key already exists in your account`, exit 1. gh's `-t/--title` is left out: Gitea's GPG keys have no title.
+
+Gitea adds a key without a signature only when one of its emails is a verified email of the account; otherwise it answers 404 `None of the emails attached to the GPG key could be found. It may still be added if you provide a valid signature for the token: <token>`, which copia-cli shows with the HTTP status and a hint to sign the token. `-s/--signature <file>` (not in gh) sends a detached armored signature over that token as `armored_signature`; Gitea checks it against the key and marks the key verified. The token comes from `GET /user/gpg_key_token` and is valid for a few minutes:
+
+```
+copia-cli api user/gpg_key_token | gpg -a --detach-sig > sig.asc
+copia-cli gpg-key add key.asc --signature sig.asc
+```
+
+The key file and the signature file cannot both be `-`, and a signature without `-----BEGIN ` is refused before any request. Gitea's other refusals are shown with the HTTP status and Gitea's words (for a signature that does not match, `The provided GPG key, signature and token do not match or token is out of date. ...`); a line of the key or signature file in such a message is replaced by `[key content]`.
+
 ## Other implemented commands
 
 | Command | Status |
@@ -214,8 +237,7 @@ Client side, no API call. Aliases are stored under the top-level key `aliases` o
 
 | gh command group | Parity | Notes |
 |-----------------|--------|-------|
-| `gh ssh-key` | Full | `GET/POST /user/keys` |
-| `gh gpg-key` | Full | `GET/POST /user/gpg_keys` |
+| `gh ssh-key` | None | app.copia.io has SSH disabled: it answers `POST /user/keys` with 422 `SSH is disabled` (found by the `integration` job of #487, 2026-11-08), so an SSH key cannot be added and would grant nothing; Copia is reached over https only |
 | `gh gist` | None | No Gitea equivalent |
 | `gh workflow` | Full | `/repos/{owner}/{repo}/actions/workflows`: list, view, `run` (`/{workflow_id}/dispatches`), `enable`, `disable`. Whether Copia enables Actions is unknown |
 | `gh run` | Partial | `/repos/{owner}/{repo}/actions/runs`: list, view, delete, `rerun` (`/rerun`, `/rerun-failed-jobs`, `/jobs/{job_id}/rerun`), job logs (`/actions/jobs/{job_id}/logs`), `download` (`/actions/artifacts`), `watch` by polling. No `cancel`: Gitea 1.26 has no endpoint for it. Whether Copia enables Actions is unknown |
@@ -235,10 +257,10 @@ Client side, no API call. Aliases are stored under the top-level key `aliases` o
 
 | Status | Count |
 |--------|-------|
-| Implemented | 76 |
-| Not yet implemented (Full parity) | 4 |
+| Implemented | 78 |
+| Not yet implemented (Full parity) | 2 |
 | Not yet implemented (Partial) | 4 |
-| No equivalent | 13 |
+| No equivalent | 15 |
 | **Total implementable** | **84** |
 
 Counted from the rows above: every `[x]` row, and every other row by its Parity value. The Parity values follow the Gitea 1.26 API (`release/v1.26` swagger); `TestAPI_Version` in `test/integration/api_test.go` logs what Copia's `GET /version` reports in the PR `integration` job. On 2026-11-04 that was `0.59.0`, Copia's own version number, not a Gitea release, so the API does not show which Gitea version Copia is built on; a command's integration test shows whether Copia serves its endpoint.

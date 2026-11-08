@@ -85,7 +85,7 @@ copia-cli/
 Phase 1 (MVP): auth, repo list/view/clone, issue CRUD, pr CRUD, label list/create — **DONE**
 Phase 2: release CRUD, repo create/delete/fork, pr review/diff/checkout, issue edit, Homebrew tap — **DONE**
 Phase 3: `copia-cli api` escape hatch, search, orgs, notifications, `-R` flag, completion, Jekyll manual, AGPL license — **DONE**
-Phase 4: ~~winget~~, ~~COPR~~, ~~AUR~~, ~~Snap~~, ~~OS keyring~~, ~~aliases~~, ~~browse~~, ~~status dashboard~~, ssh-key, pr checks, changelog, collaborators
+Phase 4: ~~winget~~, ~~COPR~~, ~~AUR~~, ~~Snap~~, ~~OS keyring~~, ~~aliases~~, ~~browse~~, ~~status dashboard~~, gpg-key (list and add done; ssh-key dropped, Copia has SSH disabled), pr checks, changelog, collaborators
 
 **Out of scope:** workflow/run, codespace, copilot, project, cache, GUI
 
@@ -93,4 +93,4 @@ Phase 4: ~~winget~~, ~~COPR~~, ~~AUR~~, ~~Snap~~, ~~OS keyring~~, ~~aliases~~, ~
 
 - `docs/api-reference.md` — Full Gitea API endpoint mapping with request/response examples
 - `docs/authentication.md` — Auth methods, token generation, config file format, multi-instance setup
-- `docs/parity.md` — Feature parity tracker against the Gitea 1.26 API (84 implementable: 76 implemented, 4 full, 4 partial; 13 impossible)
+- `docs/parity.md` — Feature parity tracker against the Gitea 1.26 API (84 implementable: 78 implemented, 2 full, 4 partial; 15 impossible)
