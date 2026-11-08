@@ -1,6 +1,7 @@
 package cmdutil
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,9 +16,11 @@ import (
 const MaxPageSize = 50
 
 // HTTPError is returned by FetchPages when the API answers with a status
-// other than 200.
+// other than 200. Message is the message field of a JSON error body, or
+// empty; Error leaves it out, so a caller decides whether to show it.
 type HTTPError struct {
 	StatusCode int
+	Message    string
 }
 
 func (e *HTTPError) Error() string {
@@ -172,7 +175,14 @@ func getPage(client *http.Client, pageURL, token string) ([]byte, http.Header, e
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, nil, &HTTPError{StatusCode: resp.StatusCode}
+		httpErr := &HTTPError{StatusCode: resp.StatusCode}
+		var apiErr struct {
+			Message string `json:"message"`
+		}
+		if data, err := io.ReadAll(resp.Body); err == nil && json.Unmarshal(data, &apiErr) == nil {
+			httpErr.Message = apiErr.Message
+		}
+		return nil, nil, httpErr
 	}
 
 	body, err := io.ReadAll(resp.Body)
