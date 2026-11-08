@@ -46,7 +46,8 @@ func newCmdAdd(f *cmdutil.Factory, runF func(*AddOptions) error) *cobra.Command 
 		Long: `Add an SSH public key to your Copia account.
 
 The key file is a public key in the OpenSSH format, such as ~/.ssh/id_ed25519.pub.
-Without a file, or with "-", the key is read from standard input.
+With "-", or without a file when standard input is not a terminal, the key
+is read from standard input.
 
 The title defaults to the key's comment, the third field of the key line.
 A key without a comment needs --title, since Copia requires a title.
