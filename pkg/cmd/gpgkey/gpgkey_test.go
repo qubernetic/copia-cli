@@ -19,5 +19,6 @@ func TestNewCmdGPGKey_Subcommands(t *testing.T) {
 	}
 	assert.Equal(t, map[string]string{
 		"list": "General commands",
+		"add":  "General commands",
 	}, groups)
 }
