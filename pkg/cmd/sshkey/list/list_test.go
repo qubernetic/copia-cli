@@ -165,3 +165,23 @@ func TestNewCmdList(t *testing.T) {
 	cmd.SetErr(&strings.Builder{})
 	assert.Error(t, cmd.Execute())
 }
+
+func TestNewCmdList_Runs(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+	reg.Register(httpmock.REST("GET", "/api/v1/user/keys"), httpmock.StringResponse(http.StatusOK, twoKeys))
+
+	ios, _, stdout, _ := iostreams.Test()
+	cmd := NewCmdList(&cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Token: "flag-token"})
+	cmd.SetArgs([]string{"--json", "id"})
+	cmd.SetOut(&strings.Builder{})
+	cmd.SetErr(&strings.Builder{})
+	require.NoError(t, cmd.Execute())
+	assert.JSONEq(t, `[{"id":7},{"id":9}]`, stdout.String())
+	assert.Equal(t, "token flag-token", reg.Requests[0].Header.Get("Authorization"))
+}
+
+func TestTimeAgo_KeepsAnUnparsableTime(t *testing.T) {
+	assert.Equal(t, "yesterday", timeAgo(time.Now(), "yesterday"))
+}

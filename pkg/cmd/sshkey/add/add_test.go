@@ -245,3 +245,20 @@ func TestNewCmdAdd_Flags(t *testing.T) {
 	assert.Equal(t, "t", cmd.Flags().Lookup("title").Shorthand)
 	assert.Nil(t, cmd.Flags().Lookup("type"))
 }
+
+func TestNewCmdAdd_Runs(t *testing.T) {
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+	httpmock.ReplaceDefaultTransport(t, reg)
+	reg.Register(httpmock.REST("GET", "/api/v1/user/keys"), httpmock.StringResponse(http.StatusOK, `[]`))
+	reg.Register(httpmock.REST("POST", "/api/v1/user/keys"), httpmock.StringResponse(http.StatusCreated, `{"id":4}`))
+
+	ios, _, stdout, _ := iostreams.Test()
+	cmd := NewCmdAdd(&cmdutil.Factory{IOStreams: ios, Host: "app.copia.io", Token: "flag-token"})
+	cmd.SetArgs([]string{writeKeyFile(t, pubKey+" dev@laptop\n")})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	require.NoError(t, cmd.Execute())
+	assert.Equal(t, "Public key added to your account\n", stdout.String())
+	assert.Equal(t, "token flag-token", reg.Requests[1].Header.Get("Authorization"))
+}
