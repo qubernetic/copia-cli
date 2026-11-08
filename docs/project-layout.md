@@ -35,6 +35,7 @@ graph TB
         search[search: issues/repos]
         org[org: list/view]
         notification[notification: list/read]
+        sshkey[ssh-key: list/add]
         browse[browse: open repo/issue/PR URL]
         status[status: dashboard across repositories]
         configcmd[config: get/set/list]
@@ -55,15 +56,15 @@ graph TB
     copiacmd --> build
     copiacmd --> config
     factory --> iostreams
-    copiacmd --> auth & repo & issue & pr & label & release & apicmd & search & org & notification & browse & status & configcmd & aliascmd & completion
-    auth & repo & issue & pr & label & release & apicmd & search & org & notification & status --> factory
+    copiacmd --> auth & repo & issue & pr & label & release & apicmd & search & org & notification & sshkey & browse & status & configcmd & aliascmd & completion
+    auth & repo & issue & pr & label & release & apicmd & search & org & notification & sshkey & status --> factory
     browse --> factory
     configcmd --> factory
     aliascmd --> factory
     completion --> iostreams
     auth & repo & issue & pr & label & release & apicmd & search & org & notification -.-> client
     client --> gitea
-    httpmock -.-> auth & repo & issue & pr & label & release & apicmd & search & org & notification
+    httpmock -.-> auth & repo & issue & pr & label & release & apicmd & search & org & notification & sshkey
     integration --> gitea
 ```
 
@@ -90,6 +91,7 @@ copia-cli/
 │   │   ├── search/                # issues, repos
 │   │   ├── org/                   # list, view
 │   │   ├── notification/          # list, read
+│   │   ├── sshkey/                # list, add (the ssh-key group)
 │   │   ├── browse/                # single command: browse [<number> | <path> | <commit-sha>]
 │   │   ├── status/                # single command: status (gh's dashboard)
 │   │   ├── config/                # get, set, list
@@ -196,6 +198,7 @@ func xxxRun(opts *XxxOptions) error { ... }  // unexported, testable
 | `search` | issues, repos | Raw HTTP |
 | `org` | list, view | Raw HTTP |
 | `notification` | list, read | Raw HTTP (read: PATCH one thread, PUT with `--all`) |
+| `ssh-key` | list, add | Raw HTTP: `GET` and `POST /user/keys` |
 | `browse` | none (single command `browse [<number> \| <path> \| <commit-sha>]`) | URL built client-side, opened with `cmdutil.Browser`; raw HTTP only for the default branch of a path and the last commit of `--commit` |
 | `status` | none (single command `status`) | Raw HTTP: the issue search and the notifications |
 | `config` | get, set, list | No API call; reads and writes the settings of `config.yml`, `set` validates before it saves |

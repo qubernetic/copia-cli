@@ -194,6 +194,20 @@ Client side, no API call. The keys are `output` (`table` or `json`, default `tab
 
 Client side, no API call. Aliases are stored under the top-level key `aliases` of `config.yml` and expanded before the command runs when the alias is the first argument, as in gh: `$1`, `$2` and so on take the arguments after the alias, otherwise they are appended, and an expansion that starts with `!` (or was set with `--shell/-s`) runs through `sh -c` with the arguments as `$1`, `$2`. Differences from gh: an argument fills a placeholder after the expansion is split into words, so it is never split again (gh replaces the placeholders in the text and splits afterwards); an alias name may not be empty, start with `-` or contain blanks, and the expansion of an alias that is no shell alias must start with a copia-cli command (gh also accepts an extension or another alias, which copia-cli does not have or expand); a built-in command also wins over an alias of the same name that was written into the config file by hand; `alias list` and `alias set`, `delete` and `import` print their messages whether or not the output is a terminal, and `alias import` exits with an error when it refused an alias, after it imported the others (gh exits 0).
 
+## ssh-key
+
+| gh command | Parity | Copia CLI | Status |
+|-----------|--------|-----------|--------|
+| `gh ssh-key list` | Full | `copia-cli ssh-key list` | [x] |
+| `gh ssh-key add` | Full | `copia-cli ssh-key add` | [x] |
+| `gh ssh-key delete` | Full | `copia-cli ssh-key delete` | [ ] |
+
+The keys are those of the authenticated Copia account (`/user/keys`). Gitea has no SSH signing keys, so gh's `/user/ssh_signing_keys` listing and `ssh-key add --type signing` have no counterpart: `--type` is left out and every key has the type `authentication`.
+
+`gh ssh-key list`: every page of `GET /user/keys`. On a terminal the columns are gh's TITLE, ID, KEY, TYPE and ADDED (the time in words), the key cut in the middle to fit the terminal width; without a terminal gh's tab-separated order title, key, `created_at` (RFC 3339), id, type, without a header. `--json` takes `id`, `title`, `key`, `fingerprint`, `created_at` and `last_used_at` (gh has no `--json` here), with `--jq` and `--template`. No keys prints `no SSH keys present in the Copia account` on standard error and exits 0, as gh does on a terminal; copia-cli prints it also without one, and with `--json` prints `[]` instead.
+
+`gh ssh-key add [<key-file>]`: reads the file, or standard input with `-` or without an argument when standard input is not a terminal (on a terminal it fails with gh's `public key file missing`). A key line with fewer than two fields fails with gh's `provided key is not in a valid format`. gh sends an empty title when `--title/-t` is not given; Gitea requires one, so the title defaults to the key's comment (the third field) and a key without one fails with `a title is required: use --title`. Content with `PRIVATE KEY` is refused with `the key file holds a private key; add the public key (the .pub file)`, so a private key is never sent; gh sends it and lets the server refuse it. Before the upload every page of `GET /user/keys` is compared with the key's first two fields; an identical key prints gh's `Public key already exists on your account` and exits 0 without a request. Otherwise `POST /user/keys` with the title and the file's content, then `Public key added to your account`. gh prints both lines with a check mark on standard error; copia-cli prints them on standard output always. Gitea's refusals are shown with the HTTP status and Gitea's words (`Invalid key content: ...` for a weak or broken key, `Key content has been used as non-deploy key` for a key on another account or a deploy key, `Key title has been used`); a part of the key file in such a message is replaced by `[key content]`.
+
 ## Other implemented commands
 
 | Command | Status |
@@ -214,7 +228,6 @@ Client side, no API call. Aliases are stored under the top-level key `aliases` o
 
 | gh command group | Parity | Notes |
 |-----------------|--------|-------|
-| `gh ssh-key` | Full | `GET/POST /user/keys` |
 | `gh gpg-key` | Full | `GET/POST /user/gpg_keys` |
 | `gh gist` | None | No Gitea equivalent |
 | `gh workflow` | Full | `/repos/{owner}/{repo}/actions/workflows`: list, view, `run` (`/{workflow_id}/dispatches`), `enable`, `disable`. Whether Copia enables Actions is unknown |
@@ -235,10 +248,10 @@ Client side, no API call. Aliases are stored under the top-level key `aliases` o
 
 | Status | Count |
 |--------|-------|
-| Implemented | 76 |
+| Implemented | 78 |
 | Not yet implemented (Full parity) | 4 |
 | Not yet implemented (Partial) | 4 |
 | No equivalent | 13 |
-| **Total implementable** | **84** |
+| **Total implementable** | **86** |
 
 Counted from the rows above: every `[x]` row, and every other row by its Parity value. The Parity values follow the Gitea 1.26 API (`release/v1.26` swagger); `TestAPI_Version` in `test/integration/api_test.go` logs what Copia's `GET /version` reports in the PR `integration` job. On 2026-11-04 that was `0.59.0`, Copia's own version number, not a Gitea release, so the API does not show which Gitea version Copia is built on; a command's integration test shows whether Copia serves its endpoint.
