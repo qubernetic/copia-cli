@@ -26,6 +26,7 @@ import (
 	prCmd "github.com/qubernetic/copia-cli/pkg/cmd/pr"
 	releaseCmd "github.com/qubernetic/copia-cli/pkg/cmd/release"
 	searchCmd "github.com/qubernetic/copia-cli/pkg/cmd/search"
+	sshkeyCmd "github.com/qubernetic/copia-cli/pkg/cmd/sshkey"
 	repoCmd "github.com/qubernetic/copia-cli/pkg/cmd/repo"
 	statusCmd "github.com/qubernetic/copia-cli/pkg/cmd/status"
 	"github.com/qubernetic/copia-cli/pkg/cmdutil"
@@ -60,6 +61,7 @@ func NewRootCmd(f *cmdutil.Factory) *cobra.Command {
 	cmd.AddCommand(searchCmd.NewCmdSearch(f))
 	cmd.AddCommand(orgCmd.NewCmdOrg(f))
 	cmd.AddCommand(notificationCmd.NewCmdNotification(f))
+	cmd.AddCommand(sshkeyCmd.NewCmdSSHKey(f))
 	cmd.AddCommand(browseCmd.NewCmdBrowse(f))
 	cmd.AddCommand(statusCmd.NewCmdStatus(f))
 	cmd.AddCommand(configCmd.NewCmdConfig(f))
