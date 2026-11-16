@@ -91,37 +91,46 @@ const runRepoMaxAge = 2 * time.Hour
 // created more than runRepoMaxAge before now. It reads all pages before the
 // first delete, so no deletion shifts a page it has yet to read.
 func deleteStaleRunRepos(api apiFunc, owner string, now time.Time) error {
+	names, err := listOrgRepos(api, owner)
+	if err != nil {
+		return err
+	}
+	for _, name := range names {
+		if created, ok := runRepoTime(name); ok && now.Sub(created) > runRepoMaxAge {
+			if err := deleteRunRepo(api, owner, name); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// listOrgRepos returns the names of every repository of the organization
+// owner, read from all pages. Its errors give the status only.
+func listOrgRepos(api apiFunc, owner string) ([]string, error) {
 	const limit = 50
-	var stale []string
+	var names []string
 	for page := 1; ; page++ {
 		status, data, err := api(http.MethodGet, fmt.Sprintf("/orgs/%s/repos?page=%d&limit=%d", url.PathEscape(owner), page, limit), nil)
 		if err != nil {
-			return fmt.Errorf("list repositories: %w", err)
+			return nil, fmt.Errorf("list repositories: %w", err)
 		}
 		if status != http.StatusOK {
-			return fmt.Errorf("list repositories: status %d, want %d", status, http.StatusOK)
+			return nil, fmt.Errorf("list repositories: status %d, want %d", status, http.StatusOK)
 		}
 		var repos []struct {
 			Name string `json:"name"`
 		}
 		if err := json.Unmarshal(data, &repos); err != nil {
-			return fmt.Errorf("list repositories: undecodable response")
+			return nil, fmt.Errorf("list repositories: undecodable response")
 		}
 		for _, r := range repos {
-			if created, ok := runRepoTime(r.Name); ok && now.Sub(created) > runRepoMaxAge {
-				stale = append(stale, r.Name)
-			}
+			names = append(names, r.Name)
 		}
 		if len(repos) < limit {
-			break
+			return names, nil
 		}
 	}
-	for _, name := range stale {
-		if err := deleteRunRepo(api, owner, name); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // setUpRunRepo deletes the stale run repositories of the organization owner
