@@ -1,7 +1,8 @@
 // Package docs_test keeps the documentation site honest: the generated
-// command reference links only to its own pages, its navigation lists each
-// page once, and the hand-written pages under docs/site/docs link only to
-// command pages that exist and name only commands that exist.
+// command reference links only to its own pages, shows no escaped "<" in
+// code, and its navigation lists each page once, and the hand-written pages
+// under docs/site/docs link only to command pages that exist (inline links
+// and reference definitions) and name only commands that exist.
 //
 // The tests generate the reference into a temporary directory, so they run
 // from a clean checkout where the generated pages are absent and the brand
@@ -102,6 +103,24 @@ func generate(tmp string) error {
 // linkRE matches an inline Markdown link target, without its #fragment.
 var linkRE = regexp.MustCompile(`\]\(\s*<?([^)\s#>]*)[^)]*\)`)
 
+// refDefRE matches a reference-style link definition, "[label]: target",
+// indented by at most three spaces, and captures the target without its
+// #fragment. A footnote, "[^label]:", is no link.
+var refDefRE = regexp.MustCompile(`^ {0,3}\[[^\]^][^\]]*\]:\s*<?([^\s#>]*)`)
+
+// linkTargets returns the targets of a line's inline links and of a
+// reference definition on it, without #fragments.
+func linkTargets(line string) []string {
+	var targets []string
+	for _, m := range linkRE.FindAllStringSubmatch(line, -1) {
+		targets = append(targets, m[1])
+	}
+	if m := refDefRE.FindStringSubmatch(line); m != nil {
+		targets = append(targets, m[1])
+	}
+	return targets
+}
+
 func generatedPages(t *testing.T) []string {
 	t.Helper()
 	names := make([]string, 0, len(generated))
@@ -119,8 +138,7 @@ func TestGeneratedPagesLinkToEachOther(t *testing.T) {
 			t.Fatal(err)
 		}
 		for i, line := range strings.Split(string(data), "\n") {
-			for _, m := range linkRE.FindAllStringSubmatch(line, -1) {
-				target := m[1]
+			for _, target := range linkTargets(line) {
 				if !strings.HasSuffix(target, ".md") {
 					continue
 				}
@@ -202,6 +220,153 @@ func TestGeneratedPagesHaveNoJekyll(t *testing.T) {
 	}
 }
 
+// lineKind is the Markdown block a line of a generated page belongs to.
+type lineKind int
+
+const (
+	blankLine      lineKind = iota
+	proseLine               // a paragraph, heading, list or definition term
+	definitionLine          // a continuation line of a definition (":   ")
+	fencedLine              // a ``` fence or a line inside one
+	indentedCode            // a line of an indented code block
+)
+
+// classifyLines sorts the lines of a generated page into blocks the way
+// MkDocs reads them. An indented code block starts after a blank line with
+// a line indented by four or more spaces, or by eight or more inside a
+// definition, whose own lines printFlags indents by four; it ends at the
+// first non-blank line indented less. A definition starts at a line
+// beginning ":   " and ends at the first non-blank line indented by less
+// than four spaces.
+func classifyLines(lines []string) []lineKind {
+	kinds := make([]lineKind, len(lines))
+	inFence, inDef, inCode, prevBlank := false, false, false, true
+	for i, l := range lines {
+		t := strings.TrimSpace(l)
+		indent := len(l) - len(strings.TrimLeft(l, " "))
+		switch {
+		case inFence:
+			kinds[i] = fencedLine
+			inFence = !strings.HasPrefix(t, "```")
+			continue
+		case t == "":
+			kinds[i] = blankLine
+			prevBlank = true
+			continue
+		}
+		codeIndent := 4
+		if inDef {
+			codeIndent = 8
+		}
+		switch {
+		case indent >= codeIndent && (prevBlank || inCode):
+			kinds[i], inCode = indentedCode, true
+		case indent < 4 && strings.HasPrefix(t, "```"):
+			kinds[i], inFence, inCode, inDef = fencedLine, true, false, false
+		case strings.HasPrefix(l, ":   "):
+			kinds[i], inCode, inDef = proseLine, false, true
+		case inDef && indent >= 4:
+			kinds[i], inCode = definitionLine, false
+		default:
+			kinds[i], inCode = proseLine, false
+			if indent < 4 {
+				inDef = false
+			}
+		}
+		prevBlank = false
+	}
+	return kinds
+}
+
+// escapedInCode returns the numbers, from 1, of the lines of a generated
+// page that show "&lt;" literally: in a fenced or indented code block, or
+// inside a code span, also one that a line break splits. A span runs from a
+// backtick to the next one in the same paragraph or definition. "&lt;" in
+// prose and in definitions is what escapeAngles writes for "<" and is
+// rendered as "<".
+func escapedInCode(lines []string) []int {
+	var bad []int
+	inSpan := false
+	for i, kind := range classifyLines(lines) {
+		line := lines[i]
+		switch kind {
+		case fencedLine, indentedCode:
+			inSpan = false
+			if strings.Contains(line, "&lt;") {
+				bad = append(bad, i+1)
+			}
+			continue
+		case blankLine:
+			inSpan = false
+			continue
+		}
+		found := false
+		for j, seg := range strings.Split(line, "`") {
+			if (j%2 == 1) != inSpan && strings.Contains(seg, "&lt;") {
+				found = true
+			}
+		}
+		if found {
+			bad = append(bad, i+1)
+		}
+		if strings.Count(line, "`")%2 == 1 {
+			inSpan = !inSpan
+		}
+	}
+	return bad
+}
+
+func TestEscapedInCode(t *testing.T) {
+	cases := []struct {
+		name string
+		page string
+		want []int
+	}{
+		{"prose", "Close &lt;number>.", nil},
+		{"definition", "`--x`\n:   First &lt;a>\n    then &lt;b>\n\n    and &lt;c>", nil},
+		{"paragraph continuation", "Text\n    more &lt;a>", nil},
+		{"indented code block", "Text\n\n    run &lt;a>\n\n    more &lt;b>\nText &lt;c>", []int{3, 5}},
+		{"indented code block in a definition", "`--x`\n:   Text\n\n        run &lt;a>", []int{4}},
+		{"fenced block", "```bash\necho &lt;a>\n```\n&lt;b>", []int{2}},
+		{"code span", "Use `--x &lt;a>` with &lt;b>.", []int{1}},
+		{"code span split by a line break", "Use `--x\n&lt;a>` with &lt;b>.\n\n&lt;c>", []int{2}},
+		{"span ends with its paragraph", "Use `x\n\n&lt;a>", nil},
+	}
+	for _, c := range cases {
+		if got := escapedInCode(strings.Split(c.page, "\n")); fmt.Sprint(got) != fmt.Sprint(c.want) {
+			t.Errorf("%s: escapedInCode(%q) = %v, want %v", c.name, c.page, got, c.want)
+		}
+	}
+}
+
+// TestGeneratedPagesShowNoEscapeInCode catches what escapeAngles cannot
+// see: it skips ``` fences and code spans within one line only, so "<" in an
+// indented code block or in a span a line break splits would be shown as
+// "&lt;".
+func TestGeneratedPagesShowNoEscapeInCode(t *testing.T) {
+	codeLines := 0
+	for _, name := range generatedPages(t) {
+		data, err := os.ReadFile(filepath.Join(genDir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := strings.Split(string(data), "\n")
+		for _, n := range escapedInCode(lines) {
+			t.Errorf("%s:%d: \"&lt;\" in code, shown literally: %q", name, n, lines[n-1])
+		}
+		for _, k := range classifyLines(lines) {
+			if k == indentedCode {
+				codeLines++
+			}
+		}
+	}
+	// The pages of alias import and completion hold indented code blocks; a
+	// classifier that finds none checks nothing.
+	if codeLines == 0 {
+		t.Error("found no indented code block in the generated pages")
+	}
+}
+
 // isGeneratedPath reports whether p, relative to docs_dir with slashes, is
 // where the generator writes a command page.
 func isGeneratedPath(p string) bool {
@@ -247,22 +412,53 @@ func handWrittenPages(t *testing.T) []sitePage {
 	return pages
 }
 
+// brokenCommandLinks returns, as "line: target", the links of a hand-written
+// page that point at a command page the generator does not write.
+func brokenCommandLinks(page sitePage) []string {
+	var broken []string
+	for i, line := range page.lines {
+		for _, target := range linkTargets(line) {
+			if target == "" || strings.Contains(target, "://") {
+				continue
+			}
+			resolved := path.Clean(path.Join(path.Dir(page.rel), target))
+			if !isGeneratedPath(resolved) {
+				continue
+			}
+			if !generated[path.Base(resolved)] {
+				broken = append(broken, fmt.Sprintf("%d: %s", i+1, target))
+			}
+		}
+	}
+	return broken
+}
+
+func TestBrokenCommandLinks(t *testing.T) {
+	cases := []struct {
+		name string
+		line string
+		want []string
+	}{
+		{"inline link to a missing page", "See [x](../manual/copia-cli_gone.md).", []string{"1: ../manual/copia-cli_gone.md"}},
+		{"inline link to a page", "See [x](../manual/copia-cli_issue.md#options).", nil},
+		{"reference definition to a missing page", "[x]: ../manual/copia-cli_gone.md", []string{"1: ../manual/copia-cli_gone.md"}},
+		{"reference definition with a title", "  [x]: <../manual/copia-cli_gone.md#top> \"Gone\"", []string{"1: ../manual/copia-cli_gone.md"}},
+		{"reference definition to a page", "[x]: ../manual/copia-cli_issue.md", nil},
+		{"reference definition to another site", "[x]: https://example.com/manual/copia-cli_gone.md", nil},
+		{"footnote", "[^x]: ../manual/copia-cli_gone.md", nil},
+	}
+	for _, c := range cases {
+		page := sitePage{rel: "getting-started/page.md", lines: []string{c.line}}
+		if got := brokenCommandLinks(page); fmt.Sprint(got) != fmt.Sprint(c.want) {
+			t.Errorf("%s: brokenCommandLinks(%q) = %q, want %q", c.name, c.line, got, c.want)
+		}
+	}
+}
+
 func TestSitePagesLinkToRealCommandPages(t *testing.T) {
 	for _, page := range handWrittenPages(t) {
-		for i, line := range page.lines {
-			for _, m := range linkRE.FindAllStringSubmatch(line, -1) {
-				target := m[1]
-				if target == "" || strings.Contains(target, "://") {
-					continue
-				}
-				resolved := path.Clean(path.Join(path.Dir(page.rel), target))
-				if !isGeneratedPath(resolved) {
-					continue
-				}
-				if !generated[path.Base(resolved)] {
-					t.Errorf("docs/site/docs/%s:%d: link to %s, which is not a generated command page", page.rel, i+1, target)
-				}
-			}
+		for _, b := range brokenCommandLinks(page) {
+			t.Errorf("docs/site/docs/%s:%s, which is not a generated command page", page.rel, b)
 		}
 	}
 }
