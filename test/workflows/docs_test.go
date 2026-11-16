@@ -365,3 +365,16 @@ func TestBrandSubmoduleSkipsRecursiveClones(t *testing.T) {
 	}
 }
 
+// TestDocsInstallNeedsNoApt installs MkDocs Material with the pip3 the
+// ubuntu-24.04 runner already has: an apt-get update would make the deploy on
+// main depend on the apt mirrors as well.
+func TestDocsInstallNeedsNoApt(t *testing.T) {
+	wf, _ := loadDocsWorkflow(t)
+	for name, job := range wf.Jobs {
+		for i, s := range job.Steps {
+			if strings.Contains(s.Run, "apt-get") || strings.Contains(s.Run, "apt install") {
+				t.Errorf("docs.yml: job %q step %d runs apt: %q", name, i+1, strings.TrimSpace(s.Run))
+			}
+		}
+	}
+}

@@ -55,10 +55,7 @@ jobs:
           persist-credentials: false
 
       - name: Install MkDocs Material
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y python3-pip
-          pip3 install --require-hashes -r docs/site/requirements.txt
+        run: pip3 install --require-hashes -r docs/site/requirements.txt
 
       - name: Build
         run: python3 -m mkdocs build --strict -f docs/site/mkdocs.yml -d "$GITHUB_WORKSPACE/_site"
