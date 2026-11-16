@@ -181,8 +181,8 @@ charset-normalizer==3.5.2 \
 copr==2.7 \
     --hash=sha256:43aaa884003425cc456f5f6e650b1389ca6ab12aeaa6fc09e510a1cca7c1f122
     # via copr-cli
-copr-cli==2.6 \
-    --hash=sha256:b26351d6483c21c374a7689515994d3291f2d46aa111024402fd38a9dbe104b3
+copr-cli==2.9 \
+    --hash=sha256:53fd1a5f909a0097214210443f60d98d73d5cdf914801db6bd6093edf5ebe7df
     # via -r requirements.in
 filelock==4.2.4 \
     --hash=sha256:301241438c57936ef93f4243a94f2559022268bfcf9b375a9a72eb0f8db8358e \
@@ -383,12 +383,6 @@ rich==15.0.0 \
     --hash=sha256:33bd4ef74232fb73fe9279a257718407f169c09b78a87ad3d296f548e27de0bb \
     --hash=sha256:edd07a4824c6b40189fb7ac9bc4c52536e9780fbbfbddf6f1e2502c31b068c36
     # via copr-cli
-setuptools==84.0.0 \
-    --hash=sha256:51a52592b3b99e102b609654876bd65f19f999935166d1352678931132b0c670 \
-    --hash=sha256:f4695c21257f0d9b537ec2692c941d02ee143b7cc1276941349a546573b2ef73
-    # via
-    #   copr
-    #   copr-cli
 urllib3==2.8.0 \
     --hash=sha256:0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3 \
     --hash=sha256:63bf2ead4c879426ebf22ef2a781eeb4aa3b4ae798a0435506f8687fd5bb9b63
