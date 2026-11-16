@@ -24,7 +24,7 @@
     $ copia-cli --version
     ```
 
-Alternatively, if you have Go 1.27.3 or newer installed locally (the version `go.mod` names):
+Alternatively, if you have Go 1.27.4 or newer installed locally (the version `go.mod` names):
 
 ```bash
 $ go build -o bin/copia-cli ./cmd/copia-cli
