@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -16,13 +17,14 @@ const mainRef = "github.ref == 'refs/heads/main'"
 
 // docsStep is the part of a docs.yml step the docs tests read.
 type docsStep struct {
-	ID   string         `yaml:"id"`
-	Name string         `yaml:"name"`
-	If   string         `yaml:"if"`
-	Uses string         `yaml:"uses"`
-	Run  string         `yaml:"run"`
-	With map[string]any `yaml:"with"`
-	Env  map[string]any `yaml:"env"`
+	ID              string         `yaml:"id"`
+	Name            string         `yaml:"name"`
+	If              string         `yaml:"if"`
+	Uses            string         `yaml:"uses"`
+	Run             string         `yaml:"run"`
+	With            map[string]any `yaml:"with"`
+	Env             map[string]any `yaml:"env"`
+	ContinueOnError any            `yaml:"continue-on-error"`
 }
 
 // docsWorkflow is the part of docs.yml the docs tests read.
@@ -30,10 +32,11 @@ type docsWorkflow struct {
 	On          map[string]any `yaml:"on"`
 	Concurrency any            `yaml:"concurrency"`
 	Jobs        map[string]struct {
-		If    string     `yaml:"if"`
-		Needs any        `yaml:"needs"`
-		Env   any        `yaml:"env"`
-		Steps []docsStep `yaml:"steps"`
+		If              string     `yaml:"if"`
+		Needs           any        `yaml:"needs"`
+		Env             any        `yaml:"env"`
+		ContinueOnError any        `yaml:"continue-on-error"`
+		Steps           []docsStep `yaml:"steps"`
 	} `yaml:"jobs"`
 }
 
@@ -138,29 +141,44 @@ func TestDocsDeploysFromMainOnly(t *testing.T) {
 	}
 }
 
+// secretsRE matches the secrets context as a word, so secrets.X,
+// secrets['X'] and toJSON(secrets) all count.
+var secretsRE = regexp.MustCompile(`\bsecrets\b`)
+
+// withoutComments drops the comment lines of a workflow, which run nothing.
+func withoutComments(raw string) string {
+	var lines []string
+	for _, l := range strings.Split(raw, "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(l), "#") {
+			lines = append(lines, l)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 // TestDocsBrandKeyStaysInOneStep keeps the brand repository's deploy key in
 // the one checkout that fetches the theme: actions/checkout fetches the main
 // repository with its ssh-key too, so the first checkout carries no key and
 // no submodules, and neither checkout leaves credentials behind.
 func TestDocsBrandKeyStaysInOneStep(t *testing.T) {
 	wf, raw := loadDocsWorkflow(t)
-	if n := strings.Count(raw, "secrets."); n != 1 {
-		t.Errorf("docs.yml names secrets. %d times, want once", n)
+	if n := len(secretsRE.FindAllString(withoutComments(raw), -1)); n != 1 {
+		t.Errorf("docs.yml names the secrets context %d times, want once", n)
 	}
 	for name, job := range wf.Jobs {
-		if strings.Contains(fmt.Sprint(job.Env), "secrets.") {
+		if secretsRE.MatchString(fmt.Sprint(job.Env)) {
 			t.Errorf("docs.yml: job %q env references a secret", name)
 		}
 	}
 	steps := wf.Jobs["build"].Steps
 	var keyed []int
 	for i, s := range steps {
-		if strings.Contains(fmt.Sprint(s.With, s.Env, s.Run), "secrets.") {
+		if secretsRE.MatchString(fmt.Sprint(s.With, s.Env, s.Run, s.If)) {
 			keyed = append(keyed, i)
 		}
 	}
 	if len(keyed) != 1 {
-		t.Fatalf("docs.yml: build steps %v reference secrets., want exactly one", keyed)
+		t.Fatalf("docs.yml: build steps %v reference the secrets context, want exactly one", keyed)
 	}
 	brand := steps[keyed[0]]
 	if !usesAction(brand, "actions/checkout") {
@@ -208,13 +226,26 @@ func TestDocsBrandKeyStaysInOneStep(t *testing.T) {
 }
 
 // TestDocsBuildIsStrict fails the build on any MkDocs warning, a broken link
-// or a page missing from the navigation among them.
+// or a page missing from the navigation among them. The build step runs that
+// one command, so nothing such as "|| true" swallows its exit code, and
+// neither the step nor the job may continue on error.
 func TestDocsBuildIsStrict(t *testing.T) {
 	wf, _ := loadDocsWorkflow(t)
+	build := wf.Jobs["build"]
+	if build.ContinueOnError != nil {
+		t.Errorf("docs.yml: job build sets continue-on-error: %v", build.ContinueOnError)
+	}
 	found := 0
-	for _, s := range wf.Jobs["build"].Steps {
-		if strings.Contains(s.Run, "mkdocs build --strict") {
-			found++
+	for i, s := range build.Steps {
+		if s.ContinueOnError != nil {
+			t.Errorf("docs.yml: build step %d sets continue-on-error: %v", i+1, s.ContinueOnError)
+		}
+		if !strings.Contains(s.Run, "mkdocs build --strict") {
+			continue
+		}
+		found++
+		if run := strings.TrimSpace(s.Run); strings.ContainsAny(run, "|;&\n") {
+			t.Errorf("docs.yml: build step %d runs %q, want the mkdocs build alone, without |, ;, & or a second line", i+1, run)
 		}
 	}
 	if found != 1 {
@@ -292,7 +323,7 @@ func TestDocsRehearsalCannotCancelADeploy(t *testing.T) {
 	case map[string]any:
 		group = fmt.Sprint(c["group"])
 	}
-	if !strings.Contains(group, "github.ref") {
-		t.Errorf("docs.yml: concurrency group %q does not contain github.ref, so two refs share it", group)
+	if want := "pages-${{ github.ref }}"; group != want {
+		t.Errorf("docs.yml: concurrency group %q, want %q, one group per ref", group, want)
 	}
 }
