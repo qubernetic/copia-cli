@@ -1,7 +1,6 @@
 package cmdutil
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -175,14 +174,7 @@ func getPage(client *http.Client, pageURL, token string) ([]byte, http.Header, e
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		httpErr := &HTTPError{StatusCode: resp.StatusCode}
-		var apiErr struct {
-			Message string `json:"message"`
-		}
-		if data, err := io.ReadAll(resp.Body); err == nil && json.Unmarshal(data, &apiErr) == nil {
-			httpErr.Message = apiErr.Message
-		}
-		return nil, nil, httpErr
+		return nil, nil, &HTTPError{StatusCode: resp.StatusCode, Message: ReadAPIMessage(resp.Body)}
 	}
 
 	body, err := io.ReadAll(resp.Body)

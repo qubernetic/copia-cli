@@ -192,6 +192,27 @@ func TestFetchPages_HTTPErrorKeepsTheAPIMessage(t *testing.T) {
 	assert.Equal(t, "token does not have at least one of required scope(s)", httpErr.Message)
 }
 
+func TestFetchPages_HTTPErrorBoundsTheAPIMessage(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "a 1 MiB body with a 100 KiB message", body: `{"message":"` + strings.Repeat("m", 100<<10) + `","pad":"` + strings.Repeat("p", 1<<20) + `"}`},
+		{name: "a 10 KiB message", body: `{"message":"` + strings.Repeat("m", 10<<10) + `"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			reg.Register(httpmock.REST("GET", "/issues"), httpmock.StringResponse(http.StatusInternalServerError, tt.body))
+
+			_, err := FetchPages(&http.Client{Transport: reg}, pageURL, "test-token", 0, decodeItems)
+			var httpErr *HTTPError
+			require.ErrorAs(t, err, &httpErr)
+			assert.LessOrEqual(t, len(httpErr.Message), MaxAPIMessage)
+		})
+	}
+}
+
 func TestFetchPages_DecodeError(t *testing.T) {
 	reg := &httpmock.Registry{}
 	reg.Register(httpmock.REST("GET", "/issues"), httpmock.StringResponse(http.StatusOK, `not json`))
