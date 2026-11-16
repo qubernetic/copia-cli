@@ -109,7 +109,7 @@ copia-cli/
 │   │   └── pager.go               # Pager (COPIA_PAGER, config pager, PAGER), run without a shell
 │   └── httpmock/registry.go       # HTTP transport mock for testing
 ├── test/integration/              # Live API integration tests
-├── docs/site/                     # Documentation site: mkdocs.yml, docs/ (pages; manual/ generated), hooks/, brand/ (private theme submodule), requirements.txt
+├── docs/site/                     # Documentation site: mkdocs.yml, docs/ (pages; the manual/copia-cli*.md command pages are generated, manual/index.md is hand-written), hooks/, brand/ (private theme submodule), requirements.txt
 ├── .github/workflows/             # CI, CodeQL, release, govulncheck, bump-go, docs (MkDocs build and Pages deploy)
 ├── .devcontainer/                 # Docker Compose-based dev environment
 │   ├── compose.yaml               # Sandbox dev service for horde-dev (runs as 1000:100)
