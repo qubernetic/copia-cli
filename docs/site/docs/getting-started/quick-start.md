@@ -83,10 +83,10 @@ https://app.copia.io/my-org/my-repo/issues/13
 
 ## 5. Open a pull request
 
-Push a branch with your change, then open a pull request from it into `main` (use your repository's default branch):
+Push a branch with your change, then open a pull request from it. The command takes the branch you are on as the head and `main` as the base; pass `--base` to target another branch:
 
 ```bash
-copia-cli pr create --title "Fix sensor mapping" --base main --head fix/sensor-mapping
+copia-cli pr create --title "Fix sensor mapping"
 ```
 
 It prints the pull request's number, title and address:

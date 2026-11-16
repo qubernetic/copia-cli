@@ -84,7 +84,7 @@ copia-cli auth status
 `auth setup-git` makes copia-cli git's credential helper for the hosts you are logged in to, so `git clone`, `git fetch` and `git push` over https use the active account's token:
 
 ```bash
-copia-cli auth setup-git                       # every host you are logged in to
+copia-cli auth setup-git                       # all hosts
 copia-cli auth setup-git --host app.copia.io   # one host
 ```
 

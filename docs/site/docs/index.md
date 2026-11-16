@@ -15,7 +15,7 @@ copia-cli auth login
 copia-cli repo clone my-org/my-repo
 cd my-repo
 copia-cli issue list
-copia-cli pr create --title "Fix sensor mapping" --base main --head fix/sensor-mapping
+copia-cli pr create --title "Fix sensor mapping"
 ```
 
 The [quick start](getting-started/quick-start.md) walks through these commands one by one.
