@@ -28,7 +28,8 @@ func TestNewCmdRepo_Subcommands(t *testing.T) {
 		"delete":      "Targeted commands",
 		"fork":        "Targeted commands",
 		"set-default": "Targeted commands",
-		"sync":        "Targeted commands",
+		"sync":         "Targeted commands",
+		"collaborator": "Targeted commands",
 	}, groups)
 
 	var titles []string
