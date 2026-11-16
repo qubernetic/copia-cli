@@ -26,7 +26,7 @@ copia-cli auth login --host copia.example.com --token <your-token>
 
 ## Where the token is kept
 
-`auth login` stores the token in the OS keyring: the macOS Keychain, the Windows Credential Manager, or the Secret Service on Linux (GNOME Keyring, KWallet). The config file `~/.config/copia/config.yml` (on Windows `%USERPROFILE%\.config\copia\config.yml`) then holds the host and the account, but no token.
+`auth login` stores the token in the OS keyring: the macOS Keychain, the Windows Credential Manager, or the Secret Service on Linux (GNOME Keyring, KWallet). The config file then holds the host and the account, but no token. It is `~/.config/copia/config.yml` on Linux, macOS and Windows (on Windows, `%USERPROFILE%\.config\copia\config.yml`). When `XDG_CONFIG_HOME` is set, it is `$XDG_CONFIG_HOME/copia/config.yml` instead.
 
 Sometimes there is no keyring to use: a headless server, a container or a CI runner without a Secret Service, or a locked keyring that does not answer within three seconds. Then `auth login` stores the token in plain text in the config file and prints a warning on standard error that names the file. The warning never contains the token. To store the token in the config file on purpose, without trying the keyring, add `--insecure-storage`:
 
@@ -63,7 +63,7 @@ copia-cli auth switch
 copia-cli auth switch --host app.copia.io --user john
 ```
 
-Without flags, it switches to the other account when exactly two accounts are stored in total. `--host` alone is enough when that host has one or two accounts. Otherwise it fails and lists the stored accounts, one `<host> <login>` per line, so you can name one with `--host` and `--user`. It does not prompt.
+`auth switch` picks from the stored accounts that match `--host` and `--user`, or from all of them without flags. With one match it switches to that account; with two, to the one not in use. When it cannot decide, it fails and lists the matching accounts, one `<host> <login>` per line, so you can name one with `--host` and `--user`. It does not prompt.
 
 `auth logout --user <login>` removes one account. When the active account goes, the alphabetically first remaining account of that host becomes active.
 
