@@ -7,6 +7,9 @@ on:
       - "docs/site/**"
       - "pkg/cmd/**"
       - "internal/docs/**"
+      - "internal/copiacmd/**"
+      - "script/gen-docs.go"
+      - ".gitmodules"
       - ".github/workflows/docs.yml"
   workflow_dispatch:
 
@@ -21,7 +24,11 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     steps:
+      # No ssh-key and no submodules here: actions/checkout would fetch this
+      # repository with the brand deploy key too, which is not valid for it.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -31,17 +38,44 @@ jobs:
       - name: Generate command docs
         run: go run script/gen-docs.go
 
-      - name: Build Jekyll site
-        uses: actions/jekyll-build-pages@44a6e6beabd48582f863aeeb6cb2151cc1716697 # v1.0.13
+      - name: Read the brand pin
+        id: brand
+        run: echo "sha=$(git rev-parse HEAD:docs/site/brand)" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch the brand theme
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          source: docs/site
-          destination: ./_site
+          repository: qubernetic/brand
+          ref: ${{ steps.brand.outputs.sha }}
+          path: docs/site/brand
+          ssh-key: ${{ secrets.BRAND_DEPLOY_KEY }}
+          persist-credentials: false
+
+      - name: Install MkDocs Material
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-pip
+          pip3 install --require-hashes -r docs/site/requirements.txt
+
+      - name: Build
+        run: python3 -m mkdocs build --strict -f docs/site/mkdocs.yml -d "$GITHUB_WORKSPACE/_site"
 
       - name: Upload Pages artifact
+        if: github.ref == 'refs/heads/main'
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: _site
+
+      - name: Upload the rehearsal build
+        if: github.ref != 'refs/heads/main'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: docs-site
+          path: _site
 
   deploy:
     needs: build
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     permissions:
       pages: write
