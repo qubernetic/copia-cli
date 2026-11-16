@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/qubernetic/copia-cli/internal/config"
 	"github.com/qubernetic/copia-cli/internal/copiacmd"
@@ -34,15 +33,7 @@ func main() {
 	rootCmd := copiacmd.NewRootCmd(f)
 	rootCmd.DisableAutoGenTag = true
 
-	linkHandler := func(name string) string {
-		return "./" + strings.TrimSuffix(name, ".md")
-	}
-
-	filePrepender := func(_ string) string {
-		return "---\nlayout: manual\npermalink: /:path/:basename\n---\n\n"
-	}
-
-	if err := docs.GenMarkdownTreeCustom(rootCmd, outDir, filePrepender, linkHandler); err != nil {
+	if err := docs.GenMarkdownTree(rootCmd, outDir); err != nil {
 		fmt.Fprintf(os.Stderr, "Error generating docs: %v\n", err)
 		os.Exit(1)
 	}
