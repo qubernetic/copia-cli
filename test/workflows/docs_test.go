@@ -27,8 +27,9 @@ type docsStep struct {
 
 // docsWorkflow is the part of docs.yml the docs tests read.
 type docsWorkflow struct {
-	On   map[string]any `yaml:"on"`
-	Jobs map[string]struct {
+	On          map[string]any `yaml:"on"`
+	Concurrency any            `yaml:"concurrency"`
+	Jobs        map[string]struct {
 		If    string     `yaml:"if"`
 		Needs any        `yaml:"needs"`
 		Env   any        `yaml:"env"`
@@ -273,5 +274,22 @@ func TestDocsPathsCoverTheGenerator(t *testing.T) {
 		if !slices.Contains(paths, want) {
 			t.Errorf("docs.yml: push.paths has no %q", want)
 		}
+	}
+}
+
+// TestDocsRehearsalCannotCancelADeploy gives each ref its own concurrency
+// group: with cancel-in-progress, a rehearsal dispatched from a branch would
+// otherwise cancel a main run that is building or deploying the live site.
+func TestDocsRehearsalCannotCancelADeploy(t *testing.T) {
+	wf, _ := loadDocsWorkflow(t)
+	var group string
+	switch c := wf.Concurrency.(type) {
+	case string:
+		group = c
+	case map[string]any:
+		group = fmt.Sprint(c["group"])
+	}
+	if !strings.Contains(group, "github.ref") {
+		t.Errorf("docs.yml: concurrency group %q does not contain github.ref, so two refs share it", group)
 	}
 }
