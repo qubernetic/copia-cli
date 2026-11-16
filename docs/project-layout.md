@@ -207,7 +207,7 @@ func xxxRun(opts *XxxOptions) error { ... }  // unexported, testable
 
 ### `test/integration/`
 **Purpose:** Live API tests against Copia instance
-**Pattern:** `//go:build integration`, env vars for credentials, every run in its own `it-run-*` repository that `TestMain` deletes (`runrepo_test.go`, no build tag); a GPG key test adds a generated key that its marker repository `it-run-<time>-gk<key ID>` names, the only proof the delete path accepts (`keys_test.go`, no build tag)
+**Pattern:** `//go:build integration`, env vars for credentials, every run in its own `it-run-*` repository that `TestMain` deletes (`runrepo_test.go`, no build tag)
 **Files:** auth, repo, issue, label, PR tests + shared `helpers_test.go`
 
 ## Data Flow

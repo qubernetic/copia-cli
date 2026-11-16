@@ -11,7 +11,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -83,13 +82,7 @@ func loadTestEnv(t *testing.T) testEnv {
 	}
 
 	runRepo.once.Do(func() {
-		// The stale GPG keys go first: the stale repository sweep deletes
-		// the markers that name them.
-		api, now := newAPI(host, token), time.Now()
-		if runRepo.err = deleteStaleRunGPGKeys(api, owner, now); runRepo.err != nil {
-			return
-		}
-		runRepo.name, runRepo.err = setUpRunRepo(api, owner, now)
+		runRepo.name, runRepo.err = setUpRunRepo(newAPI(host, token), owner, time.Now())
 	})
 	if runRepo.err != nil {
 		t.Fatalf("set up the run repository: %v", runRepo.err)
@@ -101,121 +94,6 @@ func loadTestEnv(t *testing.T) testEnv {
 		Owner: owner,
 		Repo:  runRepo.name,
 	}
-}
-
-// runGPGKey is a GPG key a test adds to the test account, generated in a
-// key ring of its own.
-type runGPGKey struct {
-	// KeyID is the key ID as Gitea returns it.
-	KeyID string
-	// Armored is the armored public key.
-	Armored string
-	home    string
-}
-
-// newRunGPGKey generates a GPG key for the test account with the user ID
-// it-run-<time>-<suffix> (suffix 0-9 and a-z, unique in the run) in a
-// temporary key ring and creates its marker, the scratch repository that
-// lets the delete path delete it. On cleanup it deletes the key and then
-// the marker; a marker whose key could not be deleted stays for the stale
-// sweep of a later run. The secret half never leaves the key ring.
-func newRunGPGKey(t *testing.T, env testEnv, suffix string) runGPGKey {
-	t.Helper()
-	uid, err := runKeyUserID(runRepo.name, suffix)
-	if err != nil {
-		t.Fatalf("set up a run GPG key: %v", err)
-	}
-	home := t.TempDir()
-	// Registered after the key ring, so it runs before its removal.
-	t.Cleanup(func() {
-		cmd := exec.Command("gpgconf", "--kill", "gpg-agent")
-		cmd.Env = append(os.Environ(), "GNUPGHOME="+home)
-		_ = cmd.Run()
-	})
-	keyID, armored, err := generateGPGKey(home, uid)
-	if err != nil {
-		t.Fatalf("set up a run GPG key: %v", err)
-	}
-	marker, err := gpgKeyMarker(runRepo.name, keyID)
-	if err != nil {
-		t.Fatalf("set up a run GPG key: %v", err)
-	}
-	api := newAPI(env.Host, env.Token)
-	if _, err := createScratchRepo(api, env.Owner, runRepo.name, marker[len(runRepo.name)+1:]); err != nil {
-		t.Fatalf("set up the marker of a run GPG key: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := deleteRunGPGKeyByKeyID(api, keyID, marker); err != nil {
-			t.Errorf("delete the run GPG key: %v", err)
-			return
-		}
-		if err := tearDownRunRepo(api, env.Owner, marker); err != nil {
-			t.Errorf("delete the marker of the run GPG key: %v", err)
-		}
-	})
-	return runGPGKey{KeyID: keyID, Armored: armored, home: home}
-}
-
-// sign returns the detached armored signature of token by the key.
-func (k runGPGKey) sign(t *testing.T, token string) string {
-	t.Helper()
-	sig, err := signGPGToken(k.home, k.KeyID, token)
-	if err != nil {
-		t.Fatalf("sign with the run GPG key: %v", err)
-	}
-	return sig
-}
-
-// gpg runs gpg in batch mode with the key ring of home and stdin, and
-// returns its stdout. Its error names the step only: gpg's messages name the
-// key's user ID.
-func gpg(home, step string, stdin []byte, args ...string) ([]byte, error) {
-	cmd := exec.Command("gpg", append([]string{"--batch", "--no-tty", "--pinentry-mode", "loopback", "--passphrase", ""}, args...)...)
-	cmd.Env = append(os.Environ(), "GNUPGHOME="+home)
-	cmd.Stdin = bytes.NewReader(stdin)
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("gpg: %s failed", step)
-	}
-	return out, nil
-}
-
-// generateGPGKey generates an ed25519 signing key with uid in the key ring
-// of home, valid for one day, and returns its key ID and armored public key.
-// The secret half stays in home.
-func generateGPGKey(home, uid string) (string, string, error) {
-	if _, err := gpg(home, "generate a key", nil, "--quick-gen-key", uid, "ed25519", "sign", "1d"); err != nil {
-		return "", "", err
-	}
-	out, err := gpg(home, "list the key", nil, "--with-colons", "--list-keys", uid)
-	if err != nil {
-		return "", "", err
-	}
-	var keyID string
-	for _, line := range strings.Split(string(out), "\n") {
-		if fields := strings.Split(line, ":"); fields[0] == "pub" && len(fields) > 4 {
-			keyID = fields[4]
-			break
-		}
-	}
-	if !isKeyID(keyID) {
-		return "", "", errors.New("gpg: no key ID of the generated key")
-	}
-	armored, err := gpg(home, "export the key", nil, "--armor", "--export", keyID)
-	if err != nil {
-		return "", "", err
-	}
-	return keyID, string(armored), nil
-}
-
-// signGPGToken returns the detached armored signature of token by keyID
-// from the key ring of home.
-func signGPGToken(home, keyID, token string) (string, error) {
-	sig, err := gpg(home, "sign the token", []byte(token), "--local-user", keyID, "--armor", "--detach-sign")
-	if err != nil {
-		return "", err
-	}
-	return string(sig), nil
 }
 
 // testIO returns IOStreams and stdout buffer for asserting CLI output.
