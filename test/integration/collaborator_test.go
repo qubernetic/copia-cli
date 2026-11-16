@@ -3,8 +3,11 @@
 package integration
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -34,11 +37,25 @@ func TestRepoCollaborator_AddAndList(t *testing.T) {
 		Host: env.Host, Token: env.Token, Owner: env.Owner, Repo: env.Repo,
 		Login: me.Login, Permission: "read",
 	})
-	require.NoError(t, err, "repo collaborator add with read permission")
+	require.True(t, err == nil, "repo collaborator add with read permission failed")
 	assertOutputContains(t, out.String(), " with read permission\n")
 
+	// The add took effect: Gitea answers 204 for a collaborator.
+	repoPath := "/repos/" + env.Owner + "/" + env.Repo
+	status, _ = apiCall(t, env, "is collaborator", "GET", repoPath+"/collaborators/"+me.Login, nil)
+	assertStatusCode(t, status, http.StatusNoContent)
+
+	// The permission route repo collaborator list reads for each
+	// collaborator. Its answer is checked here first, by status and body
+	// shape only, so a refusal says why without the login.
+	status, body = apiCall(t, env, "collaborator permission", "GET", repoPath+"/collaborators/"+me.Login+"/permission", nil)
+	require.False(t, status == http.StatusNotFound && strings.HasPrefix(string(body), "404 page not found"), "Copia does not register GET /repos/{owner}/{repo}/collaborators/{login}/permission (plain-text 404)")
+	require.False(t, status == http.StatusNotFound && json.Valid(body), "GET /repos/{owner}/{repo}/collaborators/{login}/permission answers a Gitea JSON 404")
+	assertStatusCode(t, status, http.StatusOK)
+
 	// The permission of the account, selected by its login in jq, so the
-	// output never holds the login.
+	// output never holds the login. The error names the login, so only
+	// whether there is one is checked.
 	ios, out, _ = testIO()
 	err = collaboratorlist.ListRun(&collaboratorlist.ListOptions{
 		IO: ios, HTTPClient: testHTTPClient(),
@@ -49,7 +66,7 @@ func TestRepoCollaborator_AddAndList(t *testing.T) {
 			JQ:     `[.[] | select(.login == ` + jqString(me.Login) + `) | .permission] | join(",")`,
 		},
 	})
-	require.NoError(t, err, "repo collaborator list --json failed")
+	require.True(t, err == nil, "repo collaborator list --json failed")
 	permission := out.String()
 	require.False(t, permission == "\n", "repo collaborator list does not show the account")
 	require.False(t, permission == "owner\n", "repo collaborator list shows owner permission, not read")
@@ -64,7 +81,7 @@ func TestRepoCollaborator_AddAndList(t *testing.T) {
 		Host: env.Host, Token: env.Token, Owner: env.Owner, Repo: env.Repo,
 		Limit: 100,
 	})
-	require.NoError(t, err, "repo collaborator list failed")
+	require.True(t, err == nil, "repo collaborator list failed")
 	assertOutputContains(t, out.String(), "\tread\n")
 }
 
@@ -72,13 +89,19 @@ func TestRepoCollaborator_AddAndList(t *testing.T) {
 func TestRepoCollaboratorAdd_UnknownUser(t *testing.T) {
 	env := loadTestEnv(t)
 
+	// A random login, which no account has.
+	b := make([]byte, 8)
+	_, err := rand.Read(b)
+	require.NoError(t, err, "random login")
+	login := "it-nobody-" + hex.EncodeToString(b)
+
 	ios, out, _ := testIO()
-	err := collaboratoradd.AddRun(&collaboratoradd.AddOptions{
+	err = collaboratoradd.AddRun(&collaboratoradd.AddOptions{
 		IO: ios, HTTPClient: testHTTPClient(),
 		Host: env.Host, Token: env.Token, Owner: env.Owner, Repo: env.Repo,
-		Login: runRepo.name + "-nobody", Permission: "read",
+		Login: login, Permission: "read",
 	})
-	require.ErrorContains(t, err, "-nobody not found", "repo collaborator add of an unknown user")
+	require.ErrorContains(t, err, "user "+login+" not found", "repo collaborator add of an unknown user")
 	assertOutputEmpty(t, out.String())
 }
 
