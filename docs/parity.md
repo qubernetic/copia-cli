@@ -208,14 +208,7 @@ The keys are those of the authenticated Copia account (`/user/gpg_keys`).
 
 `gh gpg-key add [<key-file>]`: reads the file, or standard input with `-` or without an argument when standard input is not a terminal (on a terminal it fails with gh's `GPG key file missing`), and sends it as `armored_public_key` with `POST /user/gpg_keys`, then `GPG key added to your account`, printed on standard output also without a terminal (gh prints it on a terminal only). Content without `-----BEGIN ` fails before any request with gh's hint that the key might not be ASCII-armored (`gpg --armor --export <ID> | copia-cli gpg-key add -`), and an armored private key (`PRIVATE KEY BLOCK`) is refused before any request; gh sends both and reads the server's 422. Gitea's 422 `A key with the same id already exists` becomes gh's `the key already exists in your account`, exit 1. gh's `-t/--title` is left out: Gitea's GPG keys have no title.
 
-Gitea adds a key without a signature only when one of its emails is a verified email of the account; otherwise it answers 404 `None of the emails attached to the GPG key could be found. It may still be added if you provide a valid signature for the token: <token>`, which copia-cli shows with the HTTP status and a hint to sign the token. `-s/--signature <file>` (not in gh) sends a detached armored signature over that token as `armored_signature`; Gitea checks it against the key and marks the key verified. The token comes from `GET /user/gpg_key_token` and is valid for a few minutes:
-
-```
-copia-cli api user/gpg_key_token | gpg -a --detach-sig > sig.asc
-copia-cli gpg-key add key.asc --signature sig.asc
-```
-
-The key file and the signature file cannot both be `-`, and a signature without `-----BEGIN ` is refused before any request. Gitea's other refusals are shown with the HTTP status and Gitea's words (for a signature that does not match, `The provided GPG key, signature and token do not match or token is out of date. ...`); a line of the key or signature file in such a message is replaced by `[key content]`.
+Copia adds only a key whose email is a verified email of the account. For any other key Gitea answers 404 `None of the emails attached to the GPG key could be found. It may still be added if you provide a valid signature for the token: <token>`; copia-cli shows the first sentence with the HTTP status and a hint to add and verify the key's email in the Copia settings, never the token. Gitea's other route, a detached signature over the token of `GET /user/gpg_key_token` sent as `armored_signature`, does not exist on Copia: app.copia.io answers that route with Go's plain-text `404 page not found` (the route is not registered), so copia-cli has no `--signature` flag, like gh. Gitea's other refusals are shown with the HTTP status and Gitea's words; a line of the key file in such a message is replaced by `[key content]`.
 
 ## Other implemented commands
 

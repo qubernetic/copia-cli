@@ -16,10 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const (
-	armoredKey = "-----BEGIN PGP PUBLIC KEY BLOCK-----\n\nmDMEaS0ZRhYJKwYBBAHaRw8BAQdAc29tZWtleW1hdGVyaWFsZm9ydGVzdHM\n=AbCd\n-----END PGP PUBLIC KEY BLOCK-----\n"
-	armoredSig = "-----BEGIN PGP SIGNATURE-----\n\niHUEABYKAB0WIQRzaWduYXR1cmVtYXRlcmlhbGZvcnRlc3Rz\n=EfGh\n-----END PGP SIGNATURE-----\n"
-)
+const armoredKey = "-----BEGIN PGP PUBLIC KEY BLOCK-----\n\nmDMEaS0ZRhYJKwYBBAHaRw8BAQdAc29tZWtleW1hdGVyaWFsZm9ydGVzdHM\n=AbCd\n-----END PGP PUBLIC KEY BLOCK-----\n"
 
 func writeFile(t *testing.T, name, content string) string {
 	t.Helper()
@@ -53,23 +50,9 @@ func TestAddRun_Adds(t *testing.T) {
 	tests := []struct {
 		name     string
 		keyStdin bool
-		sig      string
-		sigStdin bool
-		wantBody map[string]any
 	}{
-		{name: "a key file", wantBody: map[string]any{"armored_public_key": armoredKey}},
-		{name: "the key from standard input", keyStdin: true, wantBody: map[string]any{"armored_public_key": armoredKey}},
-		{
-			name:     "with --signature",
-			sig:      armoredSig,
-			wantBody: map[string]any{"armored_public_key": armoredKey, "armored_signature": armoredSig},
-		},
-		{
-			name:     "with the signature from standard input",
-			sig:      armoredSig,
-			sigStdin: true,
-			wantBody: map[string]any{"armored_public_key": armoredKey, "armored_signature": armoredSig},
-		},
+		{name: "a key file"},
+		{name: "the key from standard input", keyStdin: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -85,17 +68,11 @@ func TestAddRun_Adds(t *testing.T) {
 				keyFile = writeFile(t, "key.asc", armoredKey)
 			}
 			opts := newOpts(reg, ios, keyFile)
-			if tt.sigStdin {
-				stdin.WriteString(tt.sig)
-				opts.SignatureFile = "-"
-			} else if tt.sig != "" {
-				opts.SignatureFile = writeFile(t, "sig.asc", tt.sig)
-			}
 
 			require.NoError(t, AddRun(opts))
 			assert.Equal(t, "GPG key added to your account\n", stdout.String())
 			assert.Empty(t, stderr.String())
-			assert.Equal(t, tt.wantBody, postedBody(t, reg))
+			assert.Equal(t, map[string]any{"armored_public_key": armoredKey}, postedBody(t, reg))
 			assert.Equal(t, "token test-token", reg.Requests[0].Header.Get("Authorization"))
 			assert.Equal(t, "application/json", reg.Requests[0].Header.Get("Content-Type"))
 		})
@@ -104,17 +81,10 @@ func TestAddRun_Adds(t *testing.T) {
 
 func TestAddRun_RefusedBeforeAnyRequest(t *testing.T) {
 	tests := []struct {
-		name      string
-		key       string
-		sig       string
-		bothStdin bool
-		wantErr   string
+		name    string
+		key     string
+		wantErr string
 	}{
-		{
-			name:      "the key and the signature both from standard input",
-			bothStdin: true,
-			wantErr:   "the key file and the signature file cannot both be standard input",
-		},
 		{
 			name: "a key that is not armored",
 			key:  "mDMEaS0ZRhYJKwYBBAHaRw8BAQdAbinarykey\n",
@@ -127,28 +97,12 @@ func TestAddRun_RefusedBeforeAnyRequest(t *testing.T) {
 			key:     "-----BEGIN PGP PRIVATE KEY BLOCK-----\n\nlFgEaS0ZRhYJKwYBBAHaRw8BAQdAsecret\n-----END PGP PRIVATE KEY BLOCK-----\n",
 			wantErr: "the key file holds a private key; add the public key (gpg --armor --export <ID>)",
 		},
-		{
-			name:    "a signature that is not armored",
-			key:     armoredKey,
-			sig:     "iHUEABYKAB0binarysignature",
-			wantErr: "the signature is not ASCII-armored; create it with gpg -a --detach-sig",
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			reg := &httpmock.Registry{}
-			ios, stdin, stdout, _ := iostreams.Test()
-			opts := newOpts(reg, ios, "-")
-			if tt.bothStdin {
-				stdin.WriteString(armoredKey)
-				opts.SignatureFile = "-"
-			} else {
-				opts.KeyFile = writeFile(t, "key.asc", tt.key)
-				if tt.sig != "" {
-					opts.SignatureFile = writeFile(t, "sig.asc", tt.sig)
-				}
-			}
-			err := AddRun(opts)
+			ios, _, stdout, _ := iostreams.Test()
+			err := AddRun(newOpts(reg, ios, writeFile(t, "key.asc", tt.key)))
 			require.EqualError(t, err, tt.wantErr)
 			assert.Empty(t, reg.Requests)
 			assert.Empty(t, stdout.String())
@@ -161,7 +115,6 @@ func TestAddRun_GiteaError(t *testing.T) {
 	keyLine := strings.Split(armoredKey, "\n")[2]
 	tests := []struct {
 		name    string
-		sig     bool
 		status  int
 		body    string
 		wantErr string
@@ -176,17 +129,11 @@ func TestAddRun_GiteaError(t *testing.T) {
 			name:   "a key without a verified email",
 			status: http.StatusNotFound,
 			body:   `{"message":"None of the emails attached to the GPG key could be found. It may still be added if you provide a valid signature for the token: ` + token + `"}`,
-			wantErr: "failed to add GPG key (HTTP 404): None of the emails attached to the GPG key could be found. It may still be added if you provide a valid signature for the token: " + token + "\n" +
-				"Sign the token with the key and add the key with the signature:\n" +
-				"  copia-cli api user/gpg_key_token | gpg -a --detach-sig > sig.asc\n" +
-				"  copia-cli gpg-key add <key-file> --signature sig.asc",
-		},
-		{
-			name:    "a signature that does not match",
-			sig:     true,
-			status:  http.StatusUnprocessableEntity,
-			body:    `{"message":"The provided GPG key, signature and token do not match or token is out of date. Provide a valid signature for the token: ` + token + `"}`,
-			wantErr: "failed to add GPG key (HTTP 422): The provided GPG key, signature and token do not match or token is out of date. Provide a valid signature for the token: " + token,
+			// Gitea's advice to sign the token cannot be followed on
+			// Copia, which has no token route, so it is left out.
+			wantErr: "failed to add GPG key (HTTP 404): None of the emails attached to the GPG key could be found.\n" +
+				"Copia adds a GPG key only when one of its emails is a verified email of your account;\n" +
+				"add and verify that email in your Copia settings, then add the key again",
 		},
 		{
 			name:    "the GPG key feature turned off",
@@ -214,12 +161,9 @@ func TestAddRun_GiteaError(t *testing.T) {
 			reg.Register(httpmock.REST("POST", "/api/v1/user/gpg_keys"), httpmock.StringResponse(tt.status, tt.body))
 
 			ios, _, stdout, _ := iostreams.Test()
-			opts := newOpts(reg, ios, writeFile(t, "key.asc", armoredKey))
-			if tt.sig {
-				opts.SignatureFile = writeFile(t, "sig.asc", armoredSig)
-			}
-			err := AddRun(opts)
+			err := AddRun(newOpts(reg, ios, writeFile(t, "key.asc", armoredKey)))
 			require.EqualError(t, err, tt.wantErr)
+			assert.NotContains(t, err.Error(), token)
 			assert.Empty(t, stdout.String())
 		})
 	}
@@ -230,11 +174,6 @@ func TestAddRun_MissingFile(t *testing.T) {
 	ios, _, _, _ := iostreams.Test()
 	err := AddRun(newOpts(reg, ios, filepath.Join(t.TempDir(), "missing.asc")))
 	require.Error(t, err)
-	assert.Empty(t, reg.Requests)
-
-	opts := newOpts(reg, ios, writeFile(t, "key.asc", armoredKey))
-	opts.SignatureFile = filepath.Join(t.TempDir(), "missing.asc")
-	require.Error(t, AddRun(opts))
 	assert.Empty(t, reg.Requests)
 }
 
@@ -250,12 +189,10 @@ func TestNewCmdAdd_Args(t *testing.T) {
 		args     []string
 		stdinTTY bool
 		wantFile string
-		wantSig  string
 		wantErr  string
 	}{
 		{name: "a file", args: []string{"key.asc"}, wantFile: "key.asc"},
-		{name: "a file and a signature", args: []string{"key.asc", "-s", "sig.asc"}, wantFile: "key.asc", wantSig: "sig.asc"},
-		{name: "--signature", args: []string{"key.asc", "--signature", "-"}, wantFile: "key.asc", wantSig: "-"},
+		{name: "no --signature", args: []string{"key.asc", "--signature", "sig.asc"}, wantErr: "unknown flag: --signature"},
 		{name: "a dash", args: []string{"-"}, stdinTTY: true, wantFile: "-"},
 		{name: "no argument with piped stdin", wantFile: "-"},
 		{name: "no argument on a terminal", stdinTTY: true, wantErr: "GPG key file missing"},
@@ -283,7 +220,6 @@ func TestNewCmdAdd_Args(t *testing.T) {
 			}
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantFile, got.KeyFile)
-			assert.Equal(t, tt.wantSig, got.SignatureFile)
 		})
 	}
 }
@@ -291,10 +227,11 @@ func TestNewCmdAdd_Args(t *testing.T) {
 func TestNewCmdAdd_Flags(t *testing.T) {
 	ios, _, _, _ := iostreams.Test()
 	cmd := NewCmdAdd(&cmdutil.Factory{IOStreams: ios})
-	assert.Equal(t, "s", cmd.Flags().Lookup("signature").Shorthand)
+	assert.Nil(t, cmd.Flags().Lookup("signature"))
 	assert.Nil(t, cmd.Flags().Lookup("title"))
-	assert.Contains(t, cmd.Long, "copia-cli api user/gpg_key_token | gpg -a --detach-sig > sig.asc")
-	assert.Contains(t, cmd.Example, "copia-cli gpg-key add key.asc --signature sig.asc")
+	assert.Equal(t, "add [<key-file>]", cmd.Use)
+	assert.Contains(t, cmd.Long, "only when one of its emails is a verified email of your\naccount")
+	assert.NotContains(t, cmd.Long, "gpg_key_token")
 }
 
 func TestNewCmdAdd_Runs(t *testing.T) {

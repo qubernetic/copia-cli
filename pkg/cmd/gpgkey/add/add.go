@@ -16,17 +16,17 @@ import (
 
 // AddOptions holds all inputs for the gpg-key add command.
 type AddOptions struct {
-	IO            *iostreams.IOStreams
-	HTTPClient    *http.Client
-	Host          string
-	Token         string
-	KeyFile       string
-	SignatureFile string
+	IO         *iostreams.IOStreams
+	HTTPClient *http.Client
+	Host       string
+	Token      string
+	KeyFile    string
 }
 
+// addRequest leaves out Gitea's armored_signature: the signature is made
+// over the token of GET /user/gpg_key_token, a route Copia does not have.
 type addRequest struct {
 	ArmoredPublicKey string `json:"armored_public_key"`
-	ArmoredSignature string `json:"armored_signature,omitempty"`
 }
 
 // Gitea's messages for the refusals add turns into its own.
@@ -46,26 +46,17 @@ func newCmdAdd(f *cmdutil.Factory, runF func(*AddOptions) error) *cobra.Command 
 	opts := &AddOptions{}
 
 	cmd := &cobra.Command{
-		Use:   "add [<key-file>] [-s/--signature <file>]",
+		Use:   "add [<key-file>]",
 		Short: "Add a GPG key to your Copia account",
 		Long: `Add an ASCII-armored GPG public key to your Copia account.
 
 With "-", or without a file when standard input is not a terminal, the key
 is read from standard input.
 
-Copia adds a key without a signature when one of its emails is a verified
-email of your account. Any other key needs --signature: a detached
-ASCII-armored signature, made with the key, over the token Copia gives for
-your account. The token is valid for a few minutes:
-
-  copia-cli api user/gpg_key_token | gpg -a --detach-sig > sig.asc
-  copia-cli gpg-key add key.asc --signature sig.asc
-
-Add -u <key ID> to the gpg command when gpg holds more than one secret key.
-The key file and the signature file cannot both be standard input.`,
+Copia adds a key only when one of its emails is a verified email of your
+account.`,
 		Example: `  $ gpg --armor --export <ID> | copia-cli gpg-key add -
-  $ copia-cli gpg-key add key.asc
-  $ copia-cli gpg-key add key.asc --signature sig.asc`,
+  $ copia-cli gpg-key add key.asc`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.IO = f.IOStreams
@@ -92,16 +83,10 @@ The key file and the signature file cannot both be standard input.`,
 		},
 	}
 
-	cmd.Flags().StringVarP(&opts.SignatureFile, "signature", "s", "", "Detached armored signature `file` over the GPG key token")
-
 	return cmd
 }
 
 func AddRun(opts *AddOptions) error {
-	if opts.KeyFile == "-" && opts.SignatureFile == "-" {
-		return errors.New("the key file and the signature file cannot both be standard input")
-	}
-
 	data, err := cmdutil.ReadFile(opts.KeyFile, opts.IO.In)
 	if err != nil {
 		return err
@@ -119,19 +104,7 @@ func AddRun(opts *AddOptions) error {
 			"Then add it to your account:  gpg --armor --export <ID> | copia-cli gpg-key add -")
 	}
 
-	var signature string
-	if opts.SignatureFile != "" {
-		data, err := cmdutil.ReadFile(opts.SignatureFile, opts.IO.In)
-		if err != nil {
-			return err
-		}
-		signature = string(data)
-		if !strings.Contains(signature, "-----BEGIN ") {
-			return errors.New("the signature is not ASCII-armored; create it with gpg -a --detach-sig")
-		}
-	}
-
-	body, err := json.Marshal(addRequest{ArmoredPublicKey: key, ArmoredSignature: signature})
+	body, err := json.Marshal(addRequest{ArmoredPublicKey: key})
 	if err != nil {
 		return err
 	}
@@ -159,23 +132,22 @@ func AddRun(opts *AddOptions) error {
 		case resp.StatusCode == http.StatusUnprocessableEntity && apiErr.Message == duplicateKeyMessage:
 			return errors.New("the key already exists in your account")
 		case resp.StatusCode == http.StatusNotFound && strings.HasPrefix(apiErr.Message, noEmailMessage):
-			// The token in Gitea's message is no secret: it only proves
-			// a signature fresh and expires within minutes.
+			// The rest of Gitea's message offers to sign a token, which
+			// Copia gives no route for, so only its first sentence is shown.
 			return fmt.Errorf("failed to add GPG key (HTTP %d): %s\n"+
-				"Sign the token with the key and add the key with the signature:\n"+
-				"  copia-cli api user/gpg_key_token | gpg -a --detach-sig > sig.asc\n"+
-				"  copia-cli gpg-key add <key-file> --signature sig.asc", resp.StatusCode, redact(apiErr.Message, key+"\n"+signature))
+				"Copia adds a GPG key only when one of its emails is a verified email of your account;\n"+
+				"add and verify that email in your Copia settings, then add the key again", resp.StatusCode, noEmailMessage)
 		}
-		return fmt.Errorf("failed to add GPG key (HTTP %d): %s", resp.StatusCode, redact(apiErr.Message, key+"\n"+signature))
+		return fmt.Errorf("failed to add GPG key (HTTP %d): %s", resp.StatusCode, redact(apiErr.Message, key))
 	}
 
 	_, _ = fmt.Fprintln(opts.IO.Out, "GPG key added to your account")
 	return nil
 }
 
-// redact replaces every line of content that is long enough to be key or
-// signature material in a server message, so an error never shows the
-// content of the key file or the signature file.
+// redact replaces every line of content that is long enough to be key
+// material in a server message, so an error never shows the content of the
+// key file.
 func redact(message, content string) string {
 	for _, line := range strings.Split(content, "\n") {
 		if line = strings.TrimSpace(line); len(line) >= 16 {
