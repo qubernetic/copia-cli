@@ -122,6 +122,15 @@ func TestGenMarkdown_AngleBracketsStayVisible(t *testing.T) {
 	assert.Contains(t, out, ":   Take &lt;file>")
 }
 
+func TestGenMarkdown_AngleBracketsInADefaultStayVisible(t *testing.T) {
+	cmd := &cobra.Command{Use: "list", Short: "List items", RunE: noop}
+	cmd.Flags().String("sort", "<none>", "Sort by <field>")
+
+	out := render(t, cmd)
+
+	assert.Contains(t, out, ":   Sort by &lt;field> (default \"&lt;none>\")\n")
+}
+
 func TestEscapeAngles(t *testing.T) {
 	assert.Equal(t, "a &lt;b> `<c>` d", escapeAngles("a <b> `<c>` d"))
 	assert.Equal(t, "```\n<x>\n```\n&lt;y>", escapeAngles("```\n<x>\n```\n<y>"))

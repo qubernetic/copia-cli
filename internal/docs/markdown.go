@@ -174,7 +174,7 @@ func printFlags(fs *pflag.FlagSet) string {
 		term.WriteString("`")
 
 		// Continuation lines are indented to stay inside the definition.
-		def := escapeAngles(usage) + getDefaultValueDisplayString(f)
+		def := escapeAngles(usage + getDefaultValueDisplayString(f))
 		lines := strings.Split(def, "\n")
 		for i := 1; i < len(lines); i++ {
 			if lines[i] != "" {
