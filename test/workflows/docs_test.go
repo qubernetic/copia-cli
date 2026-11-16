@@ -327,3 +327,41 @@ func TestDocsRehearsalCannotCancelADeploy(t *testing.T) {
 		t.Errorf("docs.yml: concurrency group %q, want %q, one group per ref", group, want)
 	}
 }
+
+// TestBrandSubmoduleSkipsRecursiveClones keeps `git clone --recursive` and a
+// bare `git submodule update --init` working for anyone without access to the
+// private theme: the submodule is fetched over HTTPS, so SSH is not required
+// of those who do have access, and `update = none` skips it unless a build
+// asks for it with `git submodule update --init --checkout docs/site/brand`.
+func TestBrandSubmoduleSkipsRecursiveClones(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", ".gitmodules"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	section := ""
+	got := map[string]string{}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "[") {
+			section = line
+			continue
+		}
+		if section != `[submodule "docs/site/brand"]` {
+			continue
+		}
+		if key, value, ok := strings.Cut(line, "="); ok {
+			got[strings.TrimSpace(key)] = strings.TrimSpace(value)
+		}
+	}
+	want := map[string]string{
+		"path":   "docs/site/brand",
+		"url":    "https://github.com/qubernetic/brand.git",
+		"update": "none",
+	}
+	for key, value := range want {
+		if got[key] != value {
+			t.Errorf(".gitmodules: docs/site/brand %s = %q, want %q", key, got[key], value)
+		}
+	}
+}
+
