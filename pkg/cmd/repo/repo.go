@@ -4,6 +4,7 @@ import (
 	"github.com/spf13/cobra"
 	archiveCmd "github.com/qubernetic/copia-cli/pkg/cmd/repo/archive"
 	cloneCmd "github.com/qubernetic/copia-cli/pkg/cmd/repo/clone"
+	collaboratorCmd "github.com/qubernetic/copia-cli/pkg/cmd/repo/collaborator"
 	createCmd "github.com/qubernetic/copia-cli/pkg/cmd/repo/create"
 	deleteCmd "github.com/qubernetic/copia-cli/pkg/cmd/repo/delete"
 	editCmd "github.com/qubernetic/copia-cli/pkg/cmd/repo/edit"
@@ -41,6 +42,7 @@ func NewCmdRepo(f *cmdutil.Factory) *cobra.Command {
 		forkCmd.NewCmdFork(f),
 		setDefaultCmd.NewCmdSetDefault(f),
 		syncCmd.NewCmdSync(f),
+		collaboratorCmd.NewCmdCollaborator(f),
 	)
 
 	return cmd
