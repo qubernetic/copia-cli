@@ -75,7 +75,7 @@ copia-cli/
 ├── internal/
 │   ├── build/build.go             # Version/Date injection (ldflags)
 │   ├── config/config.go           # YAML config (~/.config/copia/config.yml)
-│   ├── docs/markdown.go           # Markdown manual generation (Jekyll)
+│   ├── docs/                      # Manual generation: markdown.go (MkDocs pages), nav.go (commands-nav.json)
 │   └── copiacmd/root.go           # Root command wiring, Main()
 ├── pkg/
 │   ├── api/client.go              # Gitea SDK wrapper
@@ -109,7 +109,8 @@ copia-cli/
 │   │   └── pager.go               # Pager (COPIA_PAGER, config pager, PAGER), run without a shell
 │   └── httpmock/registry.go       # HTTP transport mock for testing
 ├── test/integration/              # Live API integration tests
-├── .github/workflows/             # CI, CodeQL, release, govulncheck, bump-go
+├── docs/site/                     # Documentation site: mkdocs.yml, docs/ (pages; manual/ generated), hooks/, brand/ (private theme submodule), requirements.txt
+├── .github/workflows/             # CI, CodeQL, release, govulncheck, bump-go, docs (MkDocs build and Pages deploy)
 ├── .devcontainer/                 # Docker Compose-based dev environment
 │   ├── compose.yaml               # Sandbox dev service for horde-dev (runs as 1000:100)
 │   └── Dockerfile                 # Sandbox dev image with pinned golangci-lint
@@ -139,10 +140,10 @@ copia-cli/
 **Pattern:** XDG Base Dir, 0600 permissions, graceful empty-config on missing file
 
 ### `internal/docs/`
-**Purpose:** Jekyll-compatible markdown generation for the Cobra command tree
-**Entry point:** `markdown.go`
-**Exports:** `GenMarkdownTreeCustom()`
-**Pattern:** Adapted from `github.com/cli/cli/v2/internal/docs`, driven by `script/gen-docs.go`
+**Purpose:** MkDocs Material pages and the "Commands" navigation for the Cobra command tree
+**Entry point:** `markdown.go`, `nav.go`
+**Exports:** `GenMarkdownTree()`, `CommandsNav()`, `WriteNav()`
+**Pattern:** Adapted from `github.com/cli/cli/v2/internal/docs`, driven by `script/gen-docs.go`, which writes `docs/site/docs/manual` and `docs/site/commands-nav.json`; the hook `docs/site/hooks/commands_nav.py` splices the navigation into `mkdocs.yml`'s nav
 
 ### `internal/copiacmd/`
 **Purpose:** Root command construction and `Main()` entrypoint

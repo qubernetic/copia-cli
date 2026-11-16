@@ -18,6 +18,8 @@ Copia CLI is supported for users on [Copia Cloud](https://app.copia.io), with su
 
 For [installation options see below](#installation), for usage instructions [see the manual](https://qubernetic.github.io/copia-cli/manual/).
 
+The manual and the installation guides are on the [documentation site](https://qubernetic.github.io/copia-cli/). CI builds it with MkDocs Material and the Qubernetic docs theme, which is a private submodule (`docs/site/brand`). Without access to the theme a local build of the site fails; the CLI, the tests and the generated command pages (`just docs`) build as usual.
+
 ## Contributing
 
 If anything feels off, or if you feel that some functionality is missing, please check out the [contributing page](CONTRIBUTING.md). There you will find instructions for sharing your feedback, building the tool locally, and submitting pull requests to the project.
@@ -25,28 +27,28 @@ If anything feels off, or if you feel that some functionality is missing, please
 <!-- this anchor is linked to from elsewhere, so avoid renaming it -->
 ## Installation
 
-### [macOS](docs/install_macos.md)
+### [macOS](https://qubernetic.github.io/copia-cli/install/macos/)
 
-- [Homebrew](docs/install_macos.md#homebrew)
-- [Precompiled binaries](docs/install_macos.md#precompiled-binaries) on [releases page][]
+- [Homebrew](https://qubernetic.github.io/copia-cli/install/macos/#homebrew)
+- [Precompiled binaries](https://qubernetic.github.io/copia-cli/install/macos/#precompiled-binaries) on [releases page][]
 
-### [Linux](docs/install_linux.md)
+### [Linux](https://qubernetic.github.io/copia-cli/install/linux/)
 
-- [Homebrew](docs/install_linux.md#homebrew)
-- [Fedora/RHEL (COPR)](docs/install_linux.md#fedorarhel-copr)
-- [Debian/Ubuntu (.deb)](docs/install_linux.md#debianubuntu-deb)
-- [Snap](docs/install_linux.md#snap)
-- [AUR (Arch Linux)](docs/install_linux.md#aur-arch-linux)
-- [Precompiled binaries](docs/install_linux.md#precompiled-binaries) on [releases page][]
+- [Homebrew](https://qubernetic.github.io/copia-cli/install/linux/#homebrew)
+- [Fedora/RHEL (COPR)](https://qubernetic.github.io/copia-cli/install/linux/#fedorarhel-copr)
+- [Debian/Ubuntu (.deb)](https://qubernetic.github.io/copia-cli/install/linux/#debianubuntu-deb)
+- [Snap](https://qubernetic.github.io/copia-cli/install/linux/#snap)
+- [AUR (Arch Linux)](https://qubernetic.github.io/copia-cli/install/linux/#aur-arch-linux)
+- [Precompiled binaries](https://qubernetic.github.io/copia-cli/install/linux/#precompiled-binaries) on [releases page][]
 
-### [Windows](docs/install_windows.md)
+### [Windows](https://qubernetic.github.io/copia-cli/install/windows/)
 
-- [WinGet](docs/install_windows.md#winget)
-- [Precompiled binaries](docs/install_windows.md#precompiled-binaries) on [releases page][]
+- [WinGet](https://qubernetic.github.io/copia-cli/install/windows/#winget)
+- [Precompiled binaries](https://qubernetic.github.io/copia-cli/install/windows/#precompiled-binaries) on [releases page][]
 
 ### Build from source
 
-See here on how to [build Copia CLI from source](docs/install_source.md).
+See here on how to [build Copia CLI from source](https://qubernetic.github.io/copia-cli/install/source/).
 
 ## Quick Start
 
@@ -141,7 +143,7 @@ Shell completion is available for Bash, Zsh, Fish, and PowerShell. See `copia-cl
 
 - **Phase 1 (MVP):** auth, repo list/view/clone, issue CRUD, pr CRUD, label list/create — **Done**
 - **Phase 2 (Workflow):** release CRUD, repo create/delete/fork, pr review/diff/checkout, issue edit, Homebrew tap — **Done**
-- **Phase 3 (Power Features):** `api` escape hatch, search, orgs, notifications, `-R`/`--repo` flag, completion, Jekyll manual, AGPL license — **Done**
+- **Phase 3 (Power Features):** `api` escape hatch, search, orgs, notifications, `-R`/`--repo` flag, completion, manual, AGPL license — **Done**
 - **Phase 4 (Nice to Have):** ~~winget~~, ~~COPR~~, ~~AUR~~, ~~Snap~~, ~~OS keyring~~, ~~aliases~~, ~~browse~~, ~~status dashboard~~, ssh-key, pr checks, scheduled integration tests
 
 ## License
