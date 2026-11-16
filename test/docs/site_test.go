@@ -302,8 +302,10 @@ func commandWords(rest string) []string {
 }
 
 // namesCommand reports whether a line that starts with "copia-cli " names a
-// command. Positional arguments make the check approximate: the longest
-// prefix of the words that is a command must hold at least one word.
+// command. The longest prefix of the words that is a command must hold at
+// least one word. Words left over count as positional arguments only when
+// that command runs; after a group such as "issue" they name a subcommand
+// that does not exist, for example one since renamed or removed.
 func namesCommand(line string) bool {
 	if line == "copia-cli --help" || line == "copia-cli --version" {
 		return true
@@ -312,8 +314,33 @@ func namesCommand(line string) bool {
 	if len(words) == 0 {
 		return false
 	}
-	cmd, _, err := rootCmd.Find(words)
-	return err == nil && cmd != nil && cmd != rootCmd
+	cmd, rest, err := rootCmd.Find(words)
+	if err != nil || cmd == nil || cmd == rootCmd {
+		return false
+	}
+	return cmd.Runnable() || len(rest) == 0
+}
+
+func TestNamesCommand(t *testing.T) {
+	cases := []struct {
+		line string
+		want bool
+	}{
+		{"copia-cli issue nope", false},
+		{"copia-cli nope list", false},
+		{"copia-cli -R my-org/my-repo", false},
+		{"copia-cli issue list", true},
+		{"copia-cli issue", true},
+		{"copia-cli issue ls --state open", true},
+		{"copia-cli repo clone owner/repo", true},
+		{"copia-cli --version", true},
+		{"copia-cli --help", true},
+	}
+	for _, c := range cases {
+		if got := namesCommand(c.line); got != c.want {
+			t.Errorf("namesCommand(%q) = %v, want %v", c.line, got, c.want)
+		}
+	}
 }
 
 func TestSitePagesNameRealCommands(t *testing.T) {
