@@ -74,11 +74,11 @@ docs:
 
 # Serve docs site locally
 docs-serve: docs
-    cd docs/site && uv run -q --with mkdocs-material==9.7.6 mkdocs serve -a 127.0.0.1:8021 --watch-theme
+    cd docs/site && uv run -q --with-requirements requirements.txt mkdocs serve -a 127.0.0.1:8021 --watch-theme
 
 # Build the docs site (strict)
 docs-build:
-    cd docs/site && uv run -q --with mkdocs-material==9.7.6 mkdocs build --strict
+    cd docs/site && uv run -q --with-requirements requirements.txt mkdocs build --strict
 
 # Clean docs build artifacts
 docs-clean:
