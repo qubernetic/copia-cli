@@ -30,3 +30,4 @@ coverage.out
 unit.junit.xml
 AUDIT.md
 docs/superpowers/
+__pycache__/
