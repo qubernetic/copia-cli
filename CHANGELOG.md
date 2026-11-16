@@ -162,6 +162,21 @@ Three changes can break existing scripts. The details are in the entries below.
 - The workflow expression check also fails on a `${{` in the `script:` input of an `actions/github-script` step, and scans the steps of composite actions under `.github/actions/*/action.yml` (#270)
 - Only a repository admin can create a `v*` release tag (new `Release tag creation` ruleset); pushed `v*` tags stay undeletable and immovable for everyone. `docs/releasing.md` and `CONTRIBUTING.md` state the rule (#272)
 
+## [1.1.2] - 2026-04-16
+
+### Fixed
+
+- COPR builds the RPM from the pre-built binaries of the GitHub release instead of from source, since Fedora had no Go 1.26. The spec carries both architectures as two sources (`Source0` amd64, `Source1` arm64, chosen with `%ifarch` in `%prep`) and disables the debug package, which failed on the stripped binaries with an empty `debugsourcefiles.list` (#203)
+- The snap uses strict confinement with the `network` and `home` plugs instead of classic, which needs a manual Snap Store review, and builds with `CGO_ENABLED=0` from the `go/latest/stable` channel (`go/1.26/stable` does not exist). The Linux install guide notes the limits of strict confinement (#203)
+- The WinGet release needs a token with the `workflow` scope to sync the winget-pkgs fork
+
+## [1.1.1] - 2026-04-16
+
+### Fixed
+
+- COPR writes the release version into the spec file instead of passing it with `--define`, which COPR drops when it rebuilds the SRPM; the spec in the repository holds a placeholder version (#201)
+- AUR pushes `PKGBUILD` and a generated `.SRCINFO` over SSH with git instead of a third-party action (#201)
+
 ## [1.1.0] - 2026-04-16
 
 ### Added
