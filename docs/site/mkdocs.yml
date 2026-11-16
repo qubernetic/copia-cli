@@ -1,0 +1,61 @@
+site_name: copia-cli
+site_url: https://qubernetic.github.io/copia-cli/
+site_description: CLI for Copia — source control for industrial automation
+copyright: "© 2026 Qubernetic"
+repo_url: https://github.com/qubernetic/copia-cli
+repo_name: qubernetic/copia-cli
+docs_dir: docs
+strict: true
+hooks: [hooks/commands_nav.py]
+not_in_nav: /manual/index.md
+validation:
+  nav: { omitted_files: warn, not_found: warn }
+  links: { not_found: warn, anchors: warn }
+theme:
+  name: material
+  custom_dir: brand/mkdocs/material
+  font: false
+  logo: assets/qubernetic/lockup-light.svg
+  favicon: assets/qubernetic/favicon.svg
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - navigation.footer
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+  palette:
+    - media: "(prefers-color-scheme)"
+      toggle: { icon: material/brightness-auto, name: Switch to light mode }
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle: { icon: material/brightness-7, name: Switch to dark mode }
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle: { icon: material/brightness-4, name: Switch to system preference }
+extra:
+  qubernetic:
+    product: copia-cli
+    cta: { label: Install, url: https://qubernetic.github.io/copia-cli/install/ }
+plugins: [search]
+markdown_extensions: [admonition, attr_list, def_list, md_in_html, tables,
+  pymdownx.highlight, pymdownx.superfences, pymdownx.details,
+  {pymdownx.tabbed: {alternate_style: true}}, {toc: {permalink: true}}]
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Quick start: getting-started/quick-start.md
+      - Authentication: getting-started/authentication.md
+  - Installation:
+      - Overview: install/index.md
+      - Linux: install/linux.md
+      - macOS: install/macos.md
+      - Windows: install/windows.md
+      - Build from source: install/source.md
+  - Commands: []

@@ -1,4 +1,4 @@
-// Package docs generates Jekyll-compatible markdown documentation for Cobra commands.
+// Package docs generates MkDocs-compatible Markdown documentation for Cobra commands.
 // Adapted from github.com/cli/cli/v2/internal/docs with GitHub-specific content removed.
 //
 //nolint:errcheck // fmt.Fprint write errors are intentionally ignored, matching gh CLI upstream style.
@@ -6,12 +6,10 @@ package docs
 
 import (
 	"fmt"
-	"html/template"
 	"io"
 	"os"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -92,52 +90,35 @@ func groupedCommands(cmd *cobra.Command) []CommandGroup {
 	return res
 }
 
-func printJSONFields(w io.Writer, cmd *cobra.Command) {
+// section is one block of a page. Blocks are joined by a blank line, and an
+// empty block is left out.
+type section string
+
+func jsonFieldsSection(cmd *cobra.Command) section {
 	raw, ok := cmd.Annotations["help:json-fields"]
 	if !ok {
-		return
+		return ""
 	}
-
-	fmt.Fprint(w, "### JSON Fields\n\n")
-	fmt.Fprint(w, formatSlice(strings.Split(raw, ","), "`", "`", true))
-	fmt.Fprint(w, "\n\n")
+	return section("### JSON Fields\n\n" + formatSlice(strings.Split(raw, ","), "`", "`", true) + "\n")
 }
 
-func printAliases(w io.Writer, cmd *cobra.Command) {
+func aliasesSection(cmd *cobra.Command) section {
 	if len(cmd.Aliases) == 0 {
-		return
+		return ""
 	}
-
-	fmt.Fprint(w, "### Aliases\n\n")
 	aliases := buildAliasList(cmd, cmd.Aliases)
-	sort.Strings(aliases)
-	for _, a := range aliases {
-		fmt.Fprintf(w, "  %s\n", a)
-	}
-	fmt.Fprint(w, "\n\n")
+	return section("### Aliases\n\n" + formatSlice(aliases, "`", "`", true) + "\n")
 }
 
-func printOptions(w io.Writer, cmd *cobra.Command) error {
-	flags := cmd.NonInheritedFlags()
-	flags.SetOutput(w)
-	if flags.HasAvailableFlags() {
-		fmt.Fprint(w, "### Options\n\n")
-		if err := printFlagsHTML(w, flags); err != nil {
-			return err
-		}
-		fmt.Fprint(w, "\n\n")
+func optionsSections(cmd *cobra.Command) []section {
+	var res []section
+	if flags := cmd.NonInheritedFlags(); flags.HasAvailableFlags() {
+		res = append(res, section("### Options\n\n"+printFlags(flags)))
 	}
-
-	parentFlags := cmd.InheritedFlags()
-	parentFlags.SetOutput(w)
-	if hasNonHelpFlags(parentFlags) {
-		fmt.Fprint(w, "### Options inherited from parent commands\n\n")
-		if err := printFlagsHTML(w, parentFlags); err != nil {
-			return err
-		}
-		fmt.Fprint(w, "\n\n")
+	if parentFlags := cmd.InheritedFlags(); hasNonHelpFlags(parentFlags) {
+		res = append(res, section("### Options inherited from parent commands\n\n"+printFlags(parentFlags)))
 	}
-	return nil
+	return res
 }
 
 func hasNonHelpFlags(fs *pflag.FlagSet) (found bool) {
@@ -172,116 +153,162 @@ func getDefaultValueDisplayString(f *pflag.Flag) string {
 	return fmt.Sprintf(" (default %s)", f.Value)
 }
 
-type flagView struct {
-	Name      string
-	Varname   string
-	Shorthand string
-	DefValue  string
-	Usage     string
-}
-
-var flagsTemplate = `
-<dl class="flags">{{ range . }}
-	<dt>{{ if .Shorthand }}<code>-{{.Shorthand}}</code>, {{ end }}
-		<code>--{{.Name}}{{ if .Varname }} &lt;{{.Varname}}&gt;{{ end }}{{.DefValue}}</code></dt>
-	<dd>{{.Usage}}</dd>
-{{ end }}</dl>
-`
-
-var tpl = template.Must(template.New("flags").Parse(flagsTemplate))
-
-func printFlagsHTML(w io.Writer, fs *pflag.FlagSet) error {
-	var flags []flagView
+// printFlags renders flags as a definition list: the term line holds the
+// names, the definition holds the usage text and the default.
+func printFlags(fs *pflag.FlagSet) string {
+	var entries []string
 	fs.VisitAll(func(f *pflag.Flag) {
 		if f.Hidden || f.Name == "help" {
 			return
 		}
 		varname, usage := pflag.UnquoteUsage(f)
 
-		flags = append(flags, flagView{
-			Name:      f.Name,
-			Varname:   varname,
-			Shorthand: f.Shorthand,
-			DefValue:  getDefaultValueDisplayString(f),
-			Usage:     usage,
-		})
+		var term strings.Builder
+		if f.Shorthand != "" {
+			fmt.Fprintf(&term, "`-%s`, ", f.Shorthand)
+		}
+		term.WriteString("`--" + f.Name)
+		if varname != "" {
+			term.WriteString(" <" + varname + ">")
+		}
+		term.WriteString("`")
+
+		// Continuation lines are indented to stay inside the definition.
+		def := escapeAngles(usage + getDefaultValueDisplayString(f))
+		lines := strings.Split(def, "\n")
+		for i := 1; i < len(lines); i++ {
+			if lines[i] != "" {
+				lines[i] = "    " + lines[i]
+			}
+		}
+		entries = append(entries, term.String()+"\n:   "+strings.Join(lines, "\n")+"\n")
 	})
-	return tpl.Execute(w, flags)
+	return strings.Join(entries, "\n")
 }
 
-// genMarkdownCustom creates custom markdown output for a single command.
-func genMarkdownCustom(cmd *cobra.Command, w io.Writer, linkHandler func(string) string) error {
-	fmt.Fprint(w, "{% raw %}")
-	fmt.Fprintf(w, "## %s\n\n", cmd.CommandPath())
+// escapeAngles writes "<" as "&lt;" so that Markdown does not read prose such
+// as <number> as an HTML tag. Inline code spans and fenced blocks are left as
+// they are, since MkDocs shows their content literally.
+func escapeAngles(s string) string {
+	lines := strings.Split(s, "\n")
+	inFence := false
+	for i, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "```") {
+			inFence = !inFence
+			continue
+		}
+		if inFence {
+			continue
+		}
+		var b strings.Builder
+		inCode := false
+		for _, r := range line {
+			switch {
+			case r == '`':
+				inCode = !inCode
+			case r == '<' && !inCode:
+				b.WriteString("&lt;")
+				continue
+			}
+			b.WriteRune(r)
+		}
+		lines[i] = b.String()
+	}
+	return strings.Join(lines, "\n")
+}
 
-	hasLong := cmd.Long != ""
-	if !hasLong {
-		fmt.Fprintf(w, "%s\n\n", cmd.Short)
+// dedent removes the blank lines around text and the leading whitespace its
+// lines have in common.
+func dedent(s string) string {
+	lines := strings.Split(strings.Trim(s, "\n"), "\n")
+	indent := -1
+	for _, l := range lines {
+		if strings.TrimSpace(l) == "" {
+			continue
+		}
+		n := len(l) - len(strings.TrimLeft(l, " \t"))
+		if indent < 0 || n < indent {
+			indent = n
+		}
 	}
+	for i, l := range lines {
+		if len(l) >= indent && indent > 0 {
+			lines[i] = l[indent:]
+		} else if strings.TrimSpace(l) == "" {
+			lines[i] = ""
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// genMarkdown writes the page of a single command.
+func genMarkdown(cmd *cobra.Command, w io.Writer) error {
+	sections := []section{section("# " + cmd.CommandPath() + "\n")}
+
 	if cmd.Runnable() {
-		fmt.Fprintf(w, "```\n%s\n```\n\n", cmd.UseLine())
+		sections = append(sections, section("```text\n"+cmd.UseLine()+"\n```\n"))
 	}
-	if hasLong {
-		fmt.Fprintf(w, "%s\n\n", cmd.Long)
+
+	desc := cmd.Long
+	if desc == "" {
+		desc = cmd.Short
+	}
+	if desc = strings.TrimSpace(desc); desc != "" {
+		sections = append(sections, section(escapeAngles(desc)+"\n"))
 	}
 
 	for _, g := range groupedCommands(cmd) {
-		fmt.Fprintf(w, "### %s\n\n", g.Title)
+		var b strings.Builder
+		fmt.Fprintf(&b, "### %s\n\n", g.Title)
 		for _, subcmd := range g.Commands {
-			fmt.Fprintf(w, "* [%s](%s)\n", subcmd.CommandPath(), linkHandler(cmdManualPath(subcmd)))
+			fmt.Fprintf(&b, "* [%s](%s)\n", subcmd.CommandPath(), cmdManualPath(subcmd))
 		}
-		fmt.Fprint(w, "\n\n")
+		sections = append(sections, section(b.String()))
 	}
 
-	if err := printOptions(w, cmd); err != nil {
-		return err
-	}
-	printAliases(w, cmd)
-	printJSONFields(w, cmd)
-	fmt.Fprint(w, "{% endraw %}\n")
+	sections = append(sections, optionsSections(cmd)...)
+	sections = append(sections, aliasesSection(cmd), jsonFieldsSection(cmd))
 
-	if len(cmd.Example) > 0 {
-		fmt.Fprint(w, "### Examples\n\n{% highlight bash %}{% raw %}\n")
-		fmt.Fprint(w, cmd.Example)
-		fmt.Fprint(w, "{% endraw %}{% endhighlight %}\n\n")
+	if example := dedent(cmd.Example); strings.TrimSpace(example) != "" {
+		sections = append(sections, section("### Examples\n\n```bash\n"+example+"\n```\n"))
 	}
 
 	if cmd.HasParent() {
 		p := cmd.Parent()
-		fmt.Fprint(w, "### See also\n\n")
-		fmt.Fprintf(w, "* [%s](%s)\n", p.CommandPath(), linkHandler(cmdManualPath(p)))
+		sections = append(sections, section(fmt.Sprintf("### See also\n\n* [%s](%s)\n", p.CommandPath(), cmdManualPath(p))))
 	}
 
-	return nil
+	var parts []string
+	for _, s := range sections {
+		if s != "" {
+			parts = append(parts, string(s))
+		}
+	}
+	_, err := io.WriteString(w, strings.Join(parts, "\n"))
+	return err
 }
 
-// GenMarkdownTreeCustom generates markdown for the entire command tree.
-func GenMarkdownTreeCustom(cmd *cobra.Command, dir string, filePrepender, linkHandler func(string) string) error {
+// GenMarkdownTree generates one Markdown page per visible command of the tree
+// into dir. A hidden command gets a page only with the markdown:generate
+// annotation.
+func GenMarkdownTree(cmd *cobra.Command, dir string) error {
 	for _, c := range cmd.Commands() {
-		_, forceGeneration := c.Annotations["markdown:generate"]
-		if c.Hidden && !forceGeneration {
+		if !visible(c) {
 			continue
 		}
 
-		if err := GenMarkdownTreeCustom(c, dir, filePrepender, linkHandler); err != nil {
+		if err := GenMarkdownTree(c, dir); err != nil {
 			return err
 		}
 	}
 
-	filename := filepath.Join(dir, cmdManualPath(cmd))
-	f, err := os.Create(filename)
+	f, err := os.Create(filepath.Join(dir, cmdManualPath(cmd)))
 	if err != nil {
 		return err
 	}
 	defer func() { _ = f.Close() }()
 
-	if _, err := io.WriteString(f, filePrepender(filename)); err != nil {
-		return err
-	}
-	if err := genMarkdownCustom(cmd, f, linkHandler); err != nil {
-		return err
-	}
-	return nil
+	return genMarkdown(cmd, f)
 }
 
 func cmdManualPath(c *cobra.Command) string {

@@ -72,10 +72,12 @@ blank line, prefilled with --title. Empty text aborts without an issue.
   $ copia-cli issue create --title "Fix sensor mapping" --label bug
 
   # Create an issue with a body
-  $ copia-cli issue create --title "Add feature" --body "Description here"
+  $ copia-cli issue create --title "Add feature" \
+      --body "Description here"
 
   # Assign yourself and set a milestone by name
-  $ copia-cli issue create --title "Fix sensor mapping" --assignee @me --milestone v1.0
+  $ copia-cli issue create --title "Fix sensor mapping" \
+      --assignee @me --milestone v1.0
 
   # Write the title and body in the editor
   $ copia-cli issue create --editor --label bug

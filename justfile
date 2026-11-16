@@ -74,11 +74,15 @@ docs:
 
 # Serve docs site locally
 docs-serve: docs
-    cd docs/site && bundle exec jekyll serve --baseurl /copia-cli
+    cd docs/site && uv run -q --with-requirements requirements.txt mkdocs serve -a 127.0.0.1:8021 --watch-theme
+
+# Build the docs site (strict)
+docs-build:
+    cd docs/site && uv run -q --with-requirements requirements.txt mkdocs build --strict
 
 # Clean docs build artifacts
 docs-clean:
-    rm -rf docs/site/_site docs/site/.jekyll-cache docs/site/manual/copia-cli_*.md docs/site/_includes/sidebar.html
+    rm -rf docs/site/site docs/site/commands-nav.json docs/site/docs/manual/copia-cli*.md
 
 # ─── Release ──────────
 

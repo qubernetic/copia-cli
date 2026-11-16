@@ -87,7 +87,8 @@ flag is used, the --accept-visibility-change-consequences flag is required.`,
   $ copia-cli repo edit --enable-projects=false
 
   # Add and remove topics
-  $ copia-cli repo edit my-org/my-repo --add-topic plc,scada --remove-topic old`,
+  $ copia-cli repo edit my-org/my-repo --add-topic plc,scada \
+      --remove-topic old`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.IO = f.IOStreams

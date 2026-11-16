@@ -1,0 +1,4 @@
+[submodule "docs/site/brand"]
+	path = docs/site/brand
+	url = https://github.com/qubernetic/brand.git
+	update = none

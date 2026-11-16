@@ -63,7 +63,8 @@ repository will not be deleted or modified.
 Labels from the source repository that already exist in the destination
 repository will be skipped. You can overwrite existing labels in the
 destination repository using the --force flag.`,
-		Example: `  # Clone and overwrite labels from my-org/plc-template into the current repository
+		Example: `  # Clone and overwrite labels from my-org/plc-template
+  # into the current repository
   $ copia-cli label clone my-org/plc-template --force
 
   # Clone labels from my-org/plc-template into my-org/line-3

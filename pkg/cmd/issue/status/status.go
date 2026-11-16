@@ -77,7 +77,8 @@ With --json, the output is one object with the keys assigned, mentioned and
 createdBy, each a list of issues with the requested fields.`,
 		Example: `  $ copia-cli issue status
   $ copia-cli issue status -R my-org/my-repo
-  $ copia-cli issue status --json number,title --jq '.assigned[].number'`,
+  $ copia-cli issue status --json number,title \
+      --jq '.assigned[].number'`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.IO = f.IOStreams

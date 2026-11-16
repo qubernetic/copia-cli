@@ -54,10 +54,12 @@ server that serves the merge-upstream endpoint.`,
 		Example: `  # Sync local repository from the default repository
   $ copia-cli repo sync
 
-  # Sync local repository from the default repository on a specific branch
+  # Sync local repository from the default repository
+  # on a specific branch
   $ copia-cli repo sync --branch v1
 
-  # Sync local repository from another remote, overwriting local commits
+  # Sync local repository from another remote,
+  # overwriting local commits
   $ copia-cli repo sync --source upstream-org/project --force
 
   # Sync remote fork from its parent

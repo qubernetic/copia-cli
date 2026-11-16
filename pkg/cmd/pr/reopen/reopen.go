@@ -39,7 +39,8 @@ func NewCmdReopen(f *cmdutil.Factory) *cobra.Command {
   $ copia-cli pr reopen 7
 
   # Reopen by URL with a comment
-  $ copia-cli pr reopen https://app.copia.io/my-org/my-repo/pulls/7 --comment "Back on track"`,
+  $ copia-cli pr reopen --comment "Back on track" \
+      https://app.copia.io/my-org/my-repo/pulls/7`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ref, err := shared.ParsePRArg(args[0])

@@ -69,17 +69,21 @@ fails before the pull request is changed. --remove-milestone clears it.
 Adding and removing the same value, or --milestone with --remove-milestone,
 fails before any request. On success the URL of the pull request is printed.`,
 		Example: `  # Change the title and the base branch
-  $ copia-cli pr edit 7 --title "Add conveyor interlock" --base develop
+  $ copia-cli pr edit 7 --title "Add conveyor interlock" \
+      --base develop
 
   # Replace the body from a file, or from standard input with -
   $ copia-cli pr edit 7 --body-file description.md
 
   # Change labels, assignees and reviewers
-  $ copia-cli pr edit 7 --add-label plc --remove-label wip --add-assignee @me
-  $ copia-cli pr edit 7 --add-reviewer jane --remove-reviewer my-org/controls
+  $ copia-cli pr edit 7 --add-label plc --remove-label wip \
+      --add-assignee @me
+  $ copia-cli pr edit 7 --add-reviewer jane \
+      --remove-reviewer my-org/controls
 
   # Set or clear the milestone
-  $ copia-cli pr edit https://app.copia.io/my-org/my-repo/pulls/7 --milestone v1.0
+  $ copia-cli pr edit https://app.copia.io/my-org/my-repo/pulls/7 \
+      --milestone v1.0
   $ copia-cli pr edit 7 --remove-milestone`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {

@@ -72,7 +72,8 @@ notes, so an empty value is refused. On success the release URL is printed.`,
   $ copia-cli release edit v1.0 --draft=false
 
   # Update the release notes from the content of a file
-  $ copia-cli release edit v1.0 --notes-file /path/to/release_notes.md`,
+  $ copia-cli release edit v1.0 \
+      --notes-file /path/to/release_notes.md`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.IO = f.IOStreams

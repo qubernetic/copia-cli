@@ -38,7 +38,8 @@ func NewCmdReopen(f *cmdutil.Factory) *cobra.Command {
   $ copia-cli issue reopen 12
 
   # Reopen by URL with a comment
-  $ copia-cli issue reopen https://app.copia.io/my-org/my-repo/issues/12 --comment "Still failing"`,
+  $ copia-cli issue reopen --comment "Still failing" \
+      https://app.copia.io/my-org/my-repo/issues/12`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ref, err := shared.ParseIssueArg(args[0])

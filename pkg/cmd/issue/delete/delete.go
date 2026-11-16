@@ -36,7 +36,8 @@ func NewCmdDelete(f *cmdutil.Factory) *cobra.Command {
   $ copia-cli issue delete 12 --yes
 
   # Delete by URL
-  $ copia-cli issue delete https://app.copia.io/my-org/my-repo/issues/12 --yes`,
+  $ copia-cli issue delete --yes \
+      https://app.copia.io/my-org/my-repo/issues/12`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ref, err := shared.ParseIssueArg(args[0])

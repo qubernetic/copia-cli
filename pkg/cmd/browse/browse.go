@@ -92,7 +92,8 @@ system's default opener.`,
   $ copia-cli browse main.st --branch bug-fix
 
   # Open main.st at a commit
-  $ copia-cli browse main.st --commit=77507cd94ccafcf568f8560cfecde965fcfa63
+  $ copia-cli browse main.st \
+      --commit=77507cd94ccafcf568f8560cfecde965fcfa63
 
   # Open the repository settings
   $ copia-cli browse --settings

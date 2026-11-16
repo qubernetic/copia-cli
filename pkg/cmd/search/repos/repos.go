@@ -49,7 +49,8 @@ Use --web to open the explore page of Copia with the query and --sort and
 --order instead; no API call is made, so no token is needed.`,
 		Example: `  $ copia-cli search repos plc
   $ copia-cli search repos plc --sort stars
-  $ copia-cli search repos "automation controller" --json fullName,description
+  $ copia-cli search repos "automation controller" \
+      --json fullName,description
   $ copia-cli search repos plc --sort stars --web`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {

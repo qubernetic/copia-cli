@@ -108,24 +108,31 @@ No API call is made, so no token is needed; --label, --assignee and
 --milestone are not applied there, and --draft and --reviewer are not
 supported.`,
 		Example: `  # Create a pull request
-  $ copia-cli pr create --title "feat: add wrapper" --base main --head feature/wrapper
+  $ copia-cli pr create --title "feat: add wrapper" --base main \
+      --head feature/wrapper
 
   # Create a pull request with a body
-  $ copia-cli pr create --title "fix: timeout" --base develop --head fix/timeout --body "Fixes #12"
+  $ copia-cli pr create --title "fix: timeout" --base develop \
+      --head fix/timeout --body "Fixes #12"
 
-  # Open a work-in-progress PR from the current branch, filled from its commits
+  # Open a work-in-progress PR from the current branch,
+  # filled from its commits
   $ copia-cli pr create --fill --draft --base develop
 
   # Read the body from a file, or from standard input with -
-  $ copia-cli pr create --title "docs: add manual" --head docs/manual --body-file notes.md
-  $ git log -1 --format=%b | copia-cli pr create --title "fix: timeout" --head fix/timeout -F -
+  $ copia-cli pr create --title "docs: add manual" \
+      --head docs/manual --body-file notes.md
+  $ git log -1 --format=%b | copia-cli pr create \
+      --title "fix: timeout" --head fix/timeout -F -
 
   # Edit the filled title and body in the editor
   $ copia-cli pr create --fill --editor --base develop
 
-  # Assign yourself, add labels and a milestone, and request reviewers
-  $ copia-cli pr create --title "feat: add wrapper" --head feature/wrapper \
-      --assignee @me --label plc --label review --milestone v1.0 \
+  # Assign yourself, add labels and a milestone,
+  # and request reviewers
+  $ copia-cli pr create --title "feat: add wrapper" \
+      --head feature/wrapper --assignee @me --label plc \
+      --label review --milestone v1.0 \
       --reviewer jane --reviewer my-org/controls
 
   # Finish the pull request of the current branch in the browser

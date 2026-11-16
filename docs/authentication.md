@@ -1,16 +1,10 @@
 # Authentication
 
+> To sign in as a user, read the [Authentication guide](https://qubernetic.github.io/copia-cli/getting-started/authentication/) on the documentation site. It covers creating a token, `auth login`, where the token is kept, several accounts, `auth status` and `auth setup-git`. This page holds the developer details behind it.
+
 Copia requires authentication for **all** API calls. There is no anonymous access.
 
 ## Token-Based Auth (Recommended)
-
-### Generate a Token
-
-1. Log in to Copia web UI
-2. Go to **Settings > Applications**
-3. Under "Manage Access Tokens", enter a name (e.g., `copia-cli`)
-4. Click **Generate Token**
-5. Copy the token immediately — it is shown only once
 
 ### Use the Token
 
@@ -51,14 +45,14 @@ The commands read the stored token from the config file first, then from the key
 copia-cli auth logout --host app.copia.io --user john
 ```
 
-`auth switch` makes another stored account active and its host the default host, then prints `Switched active account for <host> to <login>`. `--host` and `--user` (`-u`) name the account. `--host` alone is enough when the host has one account (the host becomes the default host) or two (the other one becomes active). Without flags it switches to the other account when exactly two accounts are stored in total, on one host or on two. Otherwise it fails and lists the stored accounts, one `<host> <login>` per line, so you can pick one with `--host` and `--user`; there is no prompt. An unknown host or login fails and leaves the config file as it was. No token is read or moved. `COPIA_TOKEN` applies only with `COPIA_HOST` (or `--host`), so a switch never sends it to the new default host; when it is set, a warning says so. A host entry of the old shape with a token but no login cannot be switched on; run `auth login` for that host first.
+`auth switch` makes another stored account active and its host the default host, then prints `Switched active account for <host> to <login>`. `--host` and `--user` (`-u`) name the account. It picks from the stored accounts that match the flags, or from all of them without flags. A single match is switched to (with `--host` alone and one account, that host becomes the default host). Of two, it picks the one not in use: the other account when one of them is the default host's active account, or else when exactly one of them is its host's active account. When it cannot decide, it fails and lists the matching accounts, one `<host> <login>` per line, so you can pick one with `--host` and `--user`; there is no prompt. An unknown host or login fails and leaves the config file as it was. No token is read or moved. `COPIA_TOKEN` applies only with `COPIA_HOST` (or `--host`), so a switch never sends it to the new default host; when it is set, a warning says so. A host entry of the old shape with a token but no login cannot be switched on; run `auth login` for that host first.
 
 ```bash
 copia-cli auth switch
 copia-cli auth switch --host app.copia.io --user john
 ```
 
-The config file is `~/.config/copia/config.yml`:
+`config.DefaultPath()` names the config file: `$XDG_CONFIG_HOME/copia/config.yml` when `XDG_CONFIG_HOME` is set, otherwise `.config/copia/config.yml` in the home directory from `os.UserHomeDir`, on macOS and Windows as well. Its format:
 
 ```yaml
 default_host: app.copia.io
@@ -93,7 +87,7 @@ The other top-level keys beside `hosts` are the settings of `copia-cli config` (
 
 **Security considerations:**
 - File permissions are `600` (owner read/write only): every save writes a new `600` file to a temporary file beside it and renames it over the old one, so a failed save leaves the old file as it was. A save refuses a config path that is not a regular file (a symlink, for example) and a file the user cannot write; a config directory that group or others can write is set to `700`, and the save fails if that is not possible
-- On Windows, stored in `%USERPROFILE%\.config\copia\config.yml`
+- On Windows, stored in `%USERPROFILE%\.config\copia\config.yml` (or under `XDG_CONFIG_HOME` when that is set)
 - Token can also be set via `COPIA_TOKEN` environment variable, together with `COPIA_HOST` (or `--host`) naming the host it belongs to; without them, or with `--host` naming another host than `COPIA_HOST`, it is ignored with a warning (see [Auth Precedence](#auth-precedence))
 - Token can also be passed per-command via `--token` flag (takes highest precedence)
 
@@ -163,11 +157,7 @@ For `get` it reads git's `key=value` lines from standard input. When `protocol` 
 
 ## Auth Precedence
 
-The host comes from `--host`, then `COPIA_HOST`, then the config's default host (`default_host`, or the alphabetically first host). The token comes from:
-
-1. `--token` flag (per-command)
-2. `COPIA_TOKEN` environment variable, only when the host came from `COPIA_HOST`, or from `--host` with `COPIA_HOST` unset or naming the same host
-3. The stored token of the active account of the active host: the config file (`~/.config/copia/config.yml`) first, then the OS keyring
+The order in which copia-cli picks the host and the token is on the user page: [Auth precedence](https://qubernetic.github.io/copia-cli/getting-started/authentication/#auth-precedence). The host's default is `default_host`, or the alphabetically first host when that is unset or names no configured host. The rest of this section is how the code applies that order.
 
 `COPIA_TOKEN` is bound to the host you name, so it never goes to a host the config picks: `auth logout`, `auth switch`, `auth login` and the alphabetical fallback all move the default host. When `COPIA_TOKEN` is set but the host comes from the config, the commands use the stored token and print once on standard error:
 
