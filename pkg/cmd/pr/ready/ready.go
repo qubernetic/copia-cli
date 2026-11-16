@@ -43,7 +43,8 @@ func NewCmdReady(f *cmdutil.Factory) *cobra.Command {
   $ copia-cli pr ready 7
 
   # Convert it back to a draft
-  $ copia-cli pr ready https://app.copia.io/my-org/my-repo/pulls/7 --undo`,
+  $ copia-cli pr ready https://app.copia.io/my-org/my-repo/pulls/7 \
+      --undo`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ref, err := shared.ParsePRArg(args[0])

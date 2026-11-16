@@ -63,7 +63,8 @@ Quotes must always be used when defining a command as in the examples.`,
   $ copia-cli bugs urgent
   #=> copia-cli issue list --label urgent
 
-  $ copia-cli alias set --shell igrep 'copia-cli issue list --label "$1" | grep "$2"'
+  $ copia-cli alias set --shell igrep \
+      'copia-cli issue list --label "$1" | grep "$2"'
   $ copia-cli igrep epic foo
   #=> copia-cli issue list --label epic | grep foo`,
 		Args: cobra.ExactArgs(2),

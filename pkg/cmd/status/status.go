@@ -89,8 +89,11 @@ the repositories you can see, including:
 The first four list open issues and pull requests, the five most recently
 updated of each; Repository Activity lists your ten most recent notifications,
 read or unread.`,
-		Example: `  $ copia-cli status -e my-org/plc -e my-org/hmi # Exclude multiple repositories
-  $ copia-cli status -o my-org # Limit results to a single organization`,
+		Example: `  # Exclude multiple repositories
+  $ copia-cli status -e my-org/plc -e my-org/hmi
+
+  # Limit results to a single organization
+  $ copia-cli status -o my-org`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.IO = f.IOStreams

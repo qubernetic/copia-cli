@@ -102,7 +102,8 @@ With --json, the output is one object with the keys currentBranch (a pull
 request or null), createdBy and needsReview, each with the requested fields.`,
 		Example: `  $ copia-cli pr status
   $ copia-cli pr status --conflict-status
-  $ copia-cli pr status --json number,title --jq '.needsReview[].number'`,
+  $ copia-cli pr status --json number,title \
+      --jq '.needsReview[].number'`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.IO = f.IOStreams

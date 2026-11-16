@@ -64,7 +64,8 @@ fails before the issue is changed.`,
   $ copia-cli issue edit 12 --assignee john --assignee jane
 
   # Add and remove assignees
-  $ copia-cli issue edit 12 --add-assignee jane --remove-assignee john
+  $ copia-cli issue edit 12 --add-assignee jane \
+      --remove-assignee john
 
   # Set milestone by name or ID
   $ copia-cli issue edit 12 --milestone v1.0

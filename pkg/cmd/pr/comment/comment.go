@@ -49,7 +49,8 @@ func NewCmdComment(f *cmdutil.Factory) *cobra.Command {
 
   # Read the comment from a file, or from standard input with -
   $ copia-cli pr comment 7 --body-file review.md
-  $ echo "Rebased on develop" | copia-cli pr comment https://app.copia.io/my-org/my-repo/pulls/7 -F -
+  $ echo "Rebased on develop" | copia-cli pr comment -F - \
+      https://app.copia.io/my-org/my-repo/pulls/7
 
   # Write the comment in the editor
   $ copia-cli pr comment 7 --editor

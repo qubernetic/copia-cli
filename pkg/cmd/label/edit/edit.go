@@ -54,7 +54,8 @@ The label color needs to be a 6 character hex value; a leading # is dropped.`,
   $ copia-cli label edit bug --color FF0000
 
   # Rename and edit the description of the bug label
-  $ copia-cli label edit bug --name big-bug --description "Bigger than normal bug"`,
+  $ copia-cli label edit bug --name big-bug \
+      --description "Bigger than normal bug"`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			if len(args) != 1 {
 				return errors.New("cannot update label: name argument required")

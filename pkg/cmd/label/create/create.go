@@ -42,7 +42,8 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
   $ copia-cli label create --name bug --color "#e11d48"
 
   # Create a label with a description
-  $ copia-cli label create --name feature --color "#0969da" --description "New feature"`,
+  $ copia-cli label create --name feature --color "#0969da" \
+      --description "New feature"`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.IO = f.IOStreams
 			host, token, err := f.ResolveAuth()

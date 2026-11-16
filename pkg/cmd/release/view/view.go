@@ -52,7 +52,8 @@ looked up first.`,
   $ copia-cli release view v1.0.0
 
   # List the asset names as JSON
-  $ copia-cli release view v1.0.0 --json assets --jq '.assets[].name'
+  $ copia-cli release view v1.0.0 --json assets \
+      --jq '.assets[].name'
 
   # Open the release in the browser
   $ copia-cli release view v1.0.0 --web`,

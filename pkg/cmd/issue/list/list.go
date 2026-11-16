@@ -76,7 +76,8 @@ not applied there.`,
   $ copia-cli issue list --assignee @me --web
   $ copia-cli issue list --json number,title,state
   $ copia-cli issue list --json number,title --jq '.[].title'
-  $ copia-cli issue list --json number,title --template '{{range .}}{{tablerow .number .title}}{{end}}'`,
+  $ copia-cli issue list --json number,title \
+      --template '{{range .}}{{tablerow .number .title}}{{end}}'`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.IO = f.IOStreams
 			if opts.Web {

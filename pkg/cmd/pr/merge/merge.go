@@ -50,7 +50,8 @@ func NewCmdMerge(f *cmdutil.Factory) *cobra.Command {
   $ copia-cli pr merge 7 --rebase --delete-branch
 
   # Merge with a body for the merge commit
-  $ copia-cli pr merge 7 --squash --body "Tested on the line 3 PLC"`,
+  $ copia-cli pr merge 7 --squash \
+      --body "Tested on the line 3 PLC"`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			num, err := strconv.ParseInt(args[0], 10, 64)

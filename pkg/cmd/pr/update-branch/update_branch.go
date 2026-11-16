@@ -40,7 +40,8 @@ func NewCmdUpdateBranch(f *cmdutil.Factory) *cobra.Command {
   $ copia-cli pr update-branch 7
 
   # Rebase the branch onto the base branch
-  $ copia-cli pr update-branch https://app.copia.io/my-org/my-repo/pulls/7 --rebase`,
+  $ copia-cli pr update-branch --rebase \
+      https://app.copia.io/my-org/my-repo/pulls/7`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ref, err := shared.ParsePRArg(args[0])

@@ -93,29 +93,35 @@ An error response is printed unfiltered.`,
   $ copia-cli api /user
 
   # Create an issue
-  $ copia-cli api -X POST /repos/my-org/my-repo/issues -f title="Bug report"
+  $ copia-cli api -X POST /repos/my-org/my-repo/issues \
+      -f title="Bug report"
 
   # Create an issue with the body read from a file
-  $ copia-cli api /repos/my-org/my-repo/issues -f title="Bug report" -F body=@report.md
+  $ copia-cli api /repos/my-org/my-repo/issues \
+      -f title="Bug report" -F body=@report.md
 
   # Typed fields: a number and a boolean
-  $ copia-cli api -X PATCH /repos/my-org/my-repo/issues/12 -F milestone=3
+  $ copia-cli api -X PATCH /repos/my-org/my-repo/issues/12 \
+      -F milestone=3
   $ copia-cli api /user/repos -f name=demo -F private=true
 
   # Send a prepared JSON body from standard input
-  $ echo '{"title":"Bug report"}' | copia-cli api /repos/my-org/my-repo/issues --input -
+  $ echo '{"title":"Bug report"}' \
+      | copia-cli api /repos/my-org/my-repo/issues --input -
 
   # Delete a repo
   $ copia-cli api -X DELETE /repos/my-org/old-repo
 
-  # Show the status line and headers, for example the total count of a list
+  # Show the status line and headers, e.g. the total count of a list
   $ copia-cli api -i "/repos/my-org/my-repo/issues?limit=1"
 
   # List every open issue across all pages, as one JSON array
-  $ copia-cli api --paginate "/repos/my-org/my-repo/issues?state=open"
+  $ copia-cli api \
+      --paginate "/repos/my-org/my-repo/issues?state=open"
 
   # Print only the issue titles of every page
-  $ copia-cli api --paginate /repos/my-org/my-repo/issues --jq '.[].title'
+  $ copia-cli api --paginate /repos/my-org/my-repo/issues \
+      --jq '.[].title'
 
   # Custom header
   $ copia-cli api /user --header "Accept: application/json"`,
