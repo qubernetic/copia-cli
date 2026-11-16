@@ -82,10 +82,19 @@ permission is changed to the given one.`,
 	return cmd
 }
 
+// ValidateLogin refuses a login that is not a Gitea login, so it never
+// becomes a path segment of a request.
+func ValidateLogin(login string) error {
+	if !loginPattern.MatchString(login) {
+		return fmt.Errorf("invalid login %q", login)
+	}
+	return nil
+}
+
 // validate refuses a login or permission Gitea would not take.
 func validate(opts *AddOptions) error {
-	if !loginPattern.MatchString(opts.Login) {
-		return fmt.Errorf("invalid login %q", opts.Login)
+	if err := ValidateLogin(opts.Login); err != nil {
+		return err
 	}
 	if !slices.Contains(permissions, opts.Permission) {
 		return fmt.Errorf("invalid permission %q: use %s or %s", opts.Permission, strings.Join(permissions[:len(permissions)-1], ", "), permissions[len(permissions)-1])

@@ -4,6 +4,7 @@ import (
 	"github.com/spf13/cobra"
 	addCmd "github.com/qubernetic/copia-cli/pkg/cmd/repo/collaborator/add"
 	listCmd "github.com/qubernetic/copia-cli/pkg/cmd/repo/collaborator/list"
+	removeCmd "github.com/qubernetic/copia-cli/pkg/cmd/repo/collaborator/remove"
 	"github.com/qubernetic/copia-cli/pkg/cmdutil"
 )
 
@@ -18,6 +19,7 @@ func NewCmdCollaborator(f *cmdutil.Factory) *cobra.Command {
 	cmdutil.AddGroup(cmd, "General commands",
 		listCmd.NewCmdList(f),
 		addCmd.NewCmdAdd(f),
+		removeCmd.NewCmdRemove(f),
 	)
 
 	return cmd
