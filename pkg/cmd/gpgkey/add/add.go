@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 
@@ -34,6 +33,9 @@ const (
 	duplicateKeyMessage = "A key with the same id already exists"
 	noEmailMessage      = "None of the emails attached to the GPG key could be found."
 )
+
+// publicKeyHeader is the only armor header a key file may hold.
+const publicKeyHeader = "-----BEGIN PGP PUBLIC KEY BLOCK-----"
 
 // NewCmdAdd creates the `copia-cli gpg-key add` command.
 func NewCmdAdd(f *cmdutil.Factory) *cobra.Command {
@@ -93,12 +95,12 @@ func AddRun(opts *AddOptions) error {
 	}
 	key := string(data)
 
-	// The private half never leaves the machine, so it is refused here
-	// rather than by the server.
-	if strings.Contains(key, "PRIVATE KEY BLOCK") {
+	// The private half never leaves the machine, so only public key blocks
+	// are sent; anything else is refused here rather than by the server.
+	switch cmdutil.CheckArmor(key, publicKeyHeader) {
+	case cmdutil.ArmorPrivate:
 		return errors.New("the key file holds a private key; add the public key (gpg --armor --export <ID>)")
-	}
-	if !strings.Contains(key, "-----BEGIN ") {
+	case cmdutil.ArmorOther:
 		return errors.New("the GPG key you are trying to upload might not be in ASCII-armored format.\n" +
 			"Find your GPG key ID with:    gpg --list-keys\n" +
 			"Then add it to your account:  gpg --armor --export <ID> | copia-cli gpg-key add -")
@@ -122,37 +124,54 @@ func AddRun(opts *AddOptions) error {
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusCreated {
-		var apiErr struct {
-			Message string `json:"message"`
-		}
-		if data, err := io.ReadAll(resp.Body); err != nil || json.Unmarshal(data, &apiErr) != nil || apiErr.Message == "" {
-			return fmt.Errorf("failed to add GPG key (HTTP %d)", resp.StatusCode)
-		}
+		message := cmdutil.ReadAPIMessage(resp.Body)
 		switch {
-		case resp.StatusCode == http.StatusUnprocessableEntity && apiErr.Message == duplicateKeyMessage:
+		case message == "" || quotesKey(message, key):
+			return fmt.Errorf("failed to add GPG key (HTTP %d)", resp.StatusCode)
+		case resp.StatusCode == http.StatusUnprocessableEntity && message == duplicateKeyMessage:
 			return errors.New("the key already exists in your account")
-		case resp.StatusCode == http.StatusNotFound && strings.HasPrefix(apiErr.Message, noEmailMessage):
+		case resp.StatusCode == http.StatusNotFound && strings.HasPrefix(message, noEmailMessage):
 			// The rest of Gitea's message offers to sign a token, which
 			// Copia gives no route for, so only its first sentence is shown.
 			return fmt.Errorf("failed to add GPG key (HTTP %d): %s\n"+
 				"Copia adds a GPG key only when one of its emails is a verified email of your account;\n"+
 				"add and verify that email in your Copia settings, then add the key again", resp.StatusCode, noEmailMessage)
 		}
-		return fmt.Errorf("failed to add GPG key (HTTP %d): %s", resp.StatusCode, redact(apiErr.Message, key))
+		return fmt.Errorf("failed to add GPG key (HTTP %d): %s", resp.StatusCode, message)
 	}
 
 	_, _ = fmt.Fprintln(opts.IO.Out, "GPG key added to your account")
 	return nil
 }
 
-// redact replaces every line of content that is long enough to be key
-// material in a server message, so an error never shows the content of the
-// key file.
-func redact(message, content string) string {
-	for _, line := range strings.Split(content, "\n") {
-		if line = strings.TrimSpace(line); len(line) >= 16 {
-			message = strings.ReplaceAll(message, line, "[key content]")
+// quoteWindow is the shortest run of key material quotesKey looks for.
+const quoteWindow = 16
+
+// quotesKey reports whether message holds quoteWindow bytes in a row of the
+// key material in key, both compared without whitespace, so a key the server
+// quotes re-wrapped or joined is found as well. The key material is every
+// line but the armor lines (-----) and armor headers (Key: value), which are
+// no secret. An error then shows no part of the key file.
+func quotesKey(message, key string) bool {
+	var material strings.Builder
+	for _, line := range strings.Split(key, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "-----") || strings.Contains(line, ": ") {
+			continue
+		}
+		material.WriteString(line)
+	}
+	body := stripSpace(material.String())
+	message = stripSpace(message)
+	for i := 0; i+quoteWindow <= len(body); i++ {
+		if strings.Contains(message, body[i:i+quoteWindow]) {
+			return true
 		}
 	}
-	return message
+	return false
+}
+
+// stripSpace returns s without any white space.
+func stripSpace(s string) string {
+	return strings.Join(strings.Fields(s), "")
 }

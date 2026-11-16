@@ -16,7 +16,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const armoredKey = "-----BEGIN PGP PUBLIC KEY BLOCK-----\n\nmDMEaS0ZRhYJKwYBBAHaRw8BAQdAc29tZWtleW1hdGVyaWFsZm9ydGVzdHM\n=AbCd\n-----END PGP PUBLIC KEY BLOCK-----\n"
+const (
+	privateKeyErr = "the key file holds a private key; add the public key (gpg --armor --export <ID>)"
+	armorHintErr  = "the GPG key you are trying to upload might not be in ASCII-armored format.\n" +
+		"Find your GPG key ID with:    gpg --list-keys\n" +
+		"Then add it to your account:  gpg --armor --export <ID> | copia-cli gpg-key add -"
+)
+
+const armoredKey ="-----BEGIN PGP PUBLIC KEY BLOCK-----\n\nmDMEaS0ZRhYJKwYBBAHaRw8BAQdAc29tZWtleW1hdGVyaWFsZm9ydGVzdHM\n=AbCd\n-----END PGP PUBLIC KEY BLOCK-----\n"
 
 func writeFile(t *testing.T, name, content string) string {
 	t.Helper()
@@ -49,10 +56,12 @@ func postedBody(t *testing.T, reg *httpmock.Registry) map[string]any {
 func TestAddRun_Adds(t *testing.T) {
 	tests := []struct {
 		name     string
+		key      string
 		keyStdin bool
 	}{
-		{name: "a key file"},
-		{name: "the key from standard input", keyStdin: true},
+		{name: "a key file", key: armoredKey},
+		{name: "the key from standard input", key: armoredKey, keyStdin: true},
+		{name: "two public key blocks", key: armoredKey + armoredKey},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -63,16 +72,16 @@ func TestAddRun_Adds(t *testing.T) {
 			ios, stdin, stdout, stderr := iostreams.Test()
 			keyFile := "-"
 			if tt.keyStdin {
-				stdin.WriteString(armoredKey)
+				stdin.WriteString(tt.key)
 			} else {
-				keyFile = writeFile(t, "key.asc", armoredKey)
+				keyFile = writeFile(t, "key.asc", tt.key)
 			}
 			opts := newOpts(reg, ios, keyFile)
 
 			require.NoError(t, AddRun(opts))
 			assert.Equal(t, "GPG key added to your account\n", stdout.String())
 			assert.Empty(t, stderr.String())
-			assert.Equal(t, map[string]any{"armored_public_key": armoredKey}, postedBody(t, reg))
+			assert.Equal(t, map[string]any{"armored_public_key": tt.key}, postedBody(t, reg))
 			assert.Equal(t, "token test-token", reg.Requests[0].Header.Get("Authorization"))
 			assert.Equal(t, "application/json", reg.Requests[0].Header.Get("Content-Type"))
 		})
@@ -95,7 +104,37 @@ func TestAddRun_RefusedBeforeAnyRequest(t *testing.T) {
 		{
 			name:    "a private key",
 			key:     "-----BEGIN PGP PRIVATE KEY BLOCK-----\n\nlFgEaS0ZRhYJKwYBBAHaRw8BAQdAsecret\n-----END PGP PRIVATE KEY BLOCK-----\n",
-			wantErr: "the key file holds a private key; add the public key (gpg --armor --export <ID>)",
+			wantErr: privateKeyErr,
+		},
+		{
+			name:    "an OpenSSH private key",
+			key:     "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmU\n-----END OPENSSH PRIVATE KEY-----\n",
+			wantErr: privateKeyErr,
+		},
+		{
+			name:    "a PKCS#8 private key",
+			key:     "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIBy\n-----END PRIVATE KEY-----\n",
+			wantErr: privateKeyErr,
+		},
+		{
+			name:    "an RSA private key",
+			key:     "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA\n-----END RSA PRIVATE KEY-----\n",
+			wantErr: privateKeyErr,
+		},
+		{
+			name:    "a legacy PGP secret key",
+			key:     "-----BEGIN PGP SECRET KEY BLOCK-----\n\nlFgEaS0ZRhYJKwYBBAHaRw8B\n-----END PGP SECRET KEY BLOCK-----\n",
+			wantErr: privateKeyErr,
+		},
+		{
+			name:    "a public key followed by a private key",
+			key:     armoredKey + "-----BEGIN PGP PRIVATE KEY BLOCK-----\n\nlFgEaS0ZRhYJKwYBBAHaRw8B\n-----END PGP PRIVATE KEY BLOCK-----\n",
+			wantErr: privateKeyErr,
+		},
+		{
+			name:    "a signature instead of a key",
+			key:     "-----BEGIN PGP SIGNATURE-----\n\niHUEABYKAB0WIQRzaWdu\n-----END PGP SIGNATURE-----\n",
+			wantErr: armorHintErr,
 		},
 	}
 	for _, tt := range tests {
@@ -142,10 +181,34 @@ func TestAddRun_GiteaError(t *testing.T) {
 			wantErr: "failed to add GPG key (HTTP 404): Not Found",
 		},
 		{
-			name:    "a message that quotes the key shows no key content",
+			name:    "a message that quotes a key line is withheld",
 			status:  http.StatusUnprocessableEntity,
 			body:    `{"message":"failed to parse gpg key ` + keyLine + `"}`,
-			wantErr: "failed to add GPG key (HTTP 422): failed to parse gpg key [key content]",
+			wantErr: "failed to add GPG key (HTTP 422)",
+		},
+		{
+			name:    "a message that quotes the key joined on one line is withheld",
+			status:  http.StatusUnprocessableEntity,
+			body:    `{"message":"bad key ` + strings.Join(strings.Fields(armoredKey), "") + `"}`,
+			wantErr: "failed to add GPG key (HTTP 422)",
+		},
+		{
+			name:    "a message that quotes part of a key line is withheld",
+			status:  http.StatusUnprocessableEntity,
+			body:    `{"message":"bad key …` + keyLine[10:30] + `…"}`,
+			wantErr: "failed to add GPG key (HTTP 422)",
+		},
+		{
+			name:    "a long message is cut",
+			status:  http.StatusInternalServerError,
+			body:    `{"message":"` + strings.Repeat("m", 10<<10) + `"}`,
+			wantErr: "failed to add GPG key (HTTP 500): " + strings.Repeat("m", cmdutil.MaxAPIMessage),
+		},
+		{
+			name:    "a 1 MiB body",
+			status:  http.StatusInternalServerError,
+			body:    `{"message":"` + strings.Repeat("m", 100<<10) + `","pad":"` + strings.Repeat("p", 1<<20) + `"}`,
+			wantErr: "failed to add GPG key (HTTP 500)",
 		},
 		{
 			name:    "no message",
@@ -177,10 +240,36 @@ func TestAddRun_MissingFile(t *testing.T) {
 	assert.Empty(t, reg.Requests)
 }
 
-func TestRedact(t *testing.T) {
-	assert.Equal(t, "bad [key content] here", redact("bad mDMEaS0ZRhYJKwYBBAHaRw8B here", "-----BEGIN X-----\nmDMEaS0ZRhYJKwYBBAHaRw8B\n=AbCd\n"))
-	// Short lines such as the armor header or the checksum stay.
-	assert.Equal(t, "=AbCd", redact("=AbCd", "=AbCd\n"))
+func TestQuotesKey(t *testing.T) {
+	body := strings.Split(armoredKey, "\n")[2]
+	// The key re-wrapped at 20 columns, as a server might quote it.
+	var wrapped []string
+	for s := body; s != ""; {
+		n := min(20, len(s))
+		wrapped = append(wrapped, s[:n])
+		s = s[n:]
+	}
+	tests := []struct {
+		name    string
+		message string
+		key     string
+		want    bool
+	}{
+		{name: "a key line", message: "bad " + body + " here", key: armoredKey, want: true},
+		{name: "the key re-wrapped", message: "bad " + strings.Join(wrapped, "\n"), key: armoredKey, want: true},
+		{name: "the key joined on one line", message: strings.Join(strings.Fields(armoredKey), ""), key: armoredKey, want: true},
+		{name: "16 bytes of the key", message: "x" + body[5:21] + "x", key: armoredKey, want: true},
+		{name: "a single-line key file", message: "bad " + body[:16], key: body, want: true},
+		{name: "15 bytes of the key", message: "x" + body[5:20] + "x", key: armoredKey, want: false},
+		{name: "the armor header", message: "no -----BEGIN PGP PUBLIC KEY BLOCK----- found", key: armoredKey, want: false},
+		{name: "an unrelated message", message: "A key with the same id already exists", key: armoredKey, want: false},
+		{name: "a key shorter than 16 bytes", message: "=AbCd", key: "=AbCd\n", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, quotesKey(tt.message, tt.key))
+		})
+	}
 }
 
 func TestNewCmdAdd_Args(t *testing.T) {
