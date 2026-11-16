@@ -137,7 +137,7 @@ $ copia-cli api --paginate /repos/my-org/my-repo/issues --jq '.[].title'
 
 ## Shell Completion
 
-Shell completion is available for Bash, Zsh, Fish, and PowerShell. See `copia-cli completion --help` or the [manual](https://qubernetic.github.io/copia-cli/manual/copia-cli_completion) for setup instructions.
+Shell completion is available for Bash, Zsh, Fish, and PowerShell. See `copia-cli completion --help` or the [manual](https://qubernetic.github.io/copia-cli/manual/copia-cli_completion/) for setup instructions.
 
 ## Roadmap
 
