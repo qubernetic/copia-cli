@@ -293,8 +293,7 @@ func genMarkdown(cmd *cobra.Command, w io.Writer) error {
 // annotation.
 func GenMarkdownTree(cmd *cobra.Command, dir string) error {
 	for _, c := range cmd.Commands() {
-		_, forceGeneration := c.Annotations["markdown:generate"]
-		if c.Hidden && !forceGeneration {
+		if !visible(c) {
 			continue
 		}
 

@@ -3,11 +3,10 @@ bin/
 dist/
 /site/
 
-# Jekyll build artifacts
-docs/site/_site/
-docs/site/.jekyll-cache/
-docs/site/Gemfile.lock
-docs/site/manual/copia-cli_*.md
+# Docs site: generated pages, navigation and build output
+docs/site/docs/manual/copia-cli*.md
+docs/site/commands-nav.json
+docs/site/site/
 
 # IDE
 .idea/

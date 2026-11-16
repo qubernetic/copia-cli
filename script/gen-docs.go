@@ -12,9 +12,13 @@ import (
 )
 
 func main() {
-	outDir := "docs/site/manual"
+	outDir := "docs/site/docs/manual"
 	if len(os.Args) > 1 {
 		outDir = os.Args[1]
+	}
+	navFile := "docs/site/commands-nav.json"
+	if len(os.Args) > 2 {
+		navFile = os.Args[2]
 	}
 
 	if err := os.MkdirAll(outDir, 0755); err != nil {
@@ -38,5 +42,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err := docs.WriteNav(rootCmd, navFile, "manual/"); err != nil {
+		fmt.Fprintf(os.Stderr, "Error generating navigation: %v\n", err)
+		os.Exit(1)
+	}
+
 	fmt.Printf("Generated docs in %s\n", outDir)
+	fmt.Printf("Generated navigation in %s\n", navFile)
 }
