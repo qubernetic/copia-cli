@@ -1,0 +1,3 @@
+[submodule "docs/site/brand"]
+	path = docs/site/brand
+	url = git@github.com:qubernetic/brand.git
