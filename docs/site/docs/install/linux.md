@@ -16,14 +16,10 @@ brew upgrade qubernetic/tap/copia-cli
 
 ### Debian/Ubuntu (.deb)
 
-Download the `.deb` package from [GitHub Releases](https://github.com/qubernetic/copia-cli/releases/latest):
+Download the `.deb` package for your architecture from the [latest release](https://github.com/qubernetic/copia-cli/releases/latest). Its file name holds the version, for example `copia-cli_<version>_linux_amd64.deb`. Then install it, with your file's name in place of the example:
 
 ```bash
-# Download the latest .deb (amd64)
-curl -LO https://github.com/qubernetic/copia-cli/releases/latest/download/copia-cli_*_linux_amd64.deb
-
-# Install
-sudo dpkg -i copia-cli_*_linux_amd64.deb
+sudo dpkg -i copia-cli_<version>_linux_amd64.deb
 ```
 
 ### Fedora/RHEL (COPR)
@@ -39,11 +35,10 @@ To upgrade:
 sudo dnf upgrade copia-cli
 ```
 
-Alternatively, download the `.rpm` package directly from [GitHub Releases](https://github.com/qubernetic/copia-cli/releases/latest):
+Alternatively, download the `.rpm` package for your architecture from the [latest release](https://github.com/qubernetic/copia-cli/releases/latest) and install it, with your file's name in place of the example:
 
 ```bash
-curl -LO https://github.com/qubernetic/copia-cli/releases/latest/download/copia-cli_*_linux_amd64.rpm
-sudo dnf install -y copia-cli_*_linux_amd64.rpm
+sudo dnf install -y copia-cli_<version>_linux_amd64.rpm
 ```
 
 ### Snap
