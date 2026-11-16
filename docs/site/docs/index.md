@@ -15,7 +15,7 @@ copia-cli auth login
 copia-cli repo clone my-org/my-repo
 cd my-repo
 copia-cli issue list
-copia-cli pr create --title "Fix sensor mapping"
+copia-cli pr create --fill
 ```
 
-The [quick start](getting-started/quick-start.md) walks through these commands one by one.
+The [quick start](getting-started/quick-start.md) walks through these commands one by one. Every release, with its packages, archives and checksums, is on the [releases page](https://github.com/qubernetic/copia-cli/releases).

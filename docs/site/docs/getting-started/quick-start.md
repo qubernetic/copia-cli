@@ -83,13 +83,13 @@ https://app.copia.io/my-org/my-repo/issues/13
 
 ## 5. Open a pull request
 
-Push a branch with your change, then open a pull request from it. The command takes the branch you are on as the head and `main` as the base; pass `--base` to target another branch:
+Push a branch with your change, then open a pull request from it with `--fill`. The head is the branch you are on and the base is `main`; pass `--base` to target another branch. The title and body come from the commits on your branch that are not on the base. With one commit, the title is its subject and the body its body. With several, the title is the branch name and the body lists their subjects, oldest first. A `--title` you pass replaces the filled title.
 
 ```bash
-copia-cli pr create --title "Fix sensor mapping"
+copia-cli pr create --fill
 ```
 
-It prints the pull request's number, title and address:
+If the branch has one commit, `Fix sensor mapping`, the command prints the pull request's number, title and address:
 
 ```text
 Created PR #14: Fix sensor mapping
