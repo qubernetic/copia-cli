@@ -49,7 +49,8 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 		Short: "Create a release",
 		Long:  "Create a new release for a Copia repository. A tag name is required. Use --draft or --prerelease to control release visibility.",
 		Example: `  # Create a release
-  $ copia-cli release create v1.0.0 --title "Release 1.0.0" --notes "Changelog here"
+  $ copia-cli release create v1.0.0 --title "Release 1.0.0" \
+      --notes "Changelog here"
 
   # Create a draft prerelease
   $ copia-cli release create v2.0.0-rc.1 --draft --prerelease`,
@@ -71,7 +72,7 @@ func NewCmdCreate(f *cmdutil.Factory) *cobra.Command {
 			}
 			opts.Owner = owner
 			opts.Repo = repo
-			opts.HTTPClient = &http.Client{}
+			opts.HTTPClient = cmdutil.NewHTTPClient()
 			return CreateRun(opts)
 		},
 	}

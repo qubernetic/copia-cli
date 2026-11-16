@@ -5,8 +5,14 @@ import (
 	closeCmd "github.com/qubernetic/copia-cli/pkg/cmd/issue/close"
 	commentCmd "github.com/qubernetic/copia-cli/pkg/cmd/issue/comment"
 	createCmd "github.com/qubernetic/copia-cli/pkg/cmd/issue/create"
+	deleteCmd "github.com/qubernetic/copia-cli/pkg/cmd/issue/delete"
 	editCmd "github.com/qubernetic/copia-cli/pkg/cmd/issue/edit"
 	listCmd "github.com/qubernetic/copia-cli/pkg/cmd/issue/list"
+	lockCmd "github.com/qubernetic/copia-cli/pkg/cmd/issue/lock"
+	pinCmd "github.com/qubernetic/copia-cli/pkg/cmd/issue/pin"
+	reopenCmd "github.com/qubernetic/copia-cli/pkg/cmd/issue/reopen"
+	statusCmd "github.com/qubernetic/copia-cli/pkg/cmd/issue/status"
+	unpinCmd "github.com/qubernetic/copia-cli/pkg/cmd/issue/unpin"
 	viewCmd "github.com/qubernetic/copia-cli/pkg/cmd/issue/view"
 	"github.com/qubernetic/copia-cli/pkg/cmdutil"
 )
@@ -22,13 +28,20 @@ func NewCmdIssue(f *cmdutil.Factory) *cobra.Command {
 	cmdutil.AddGroup(cmd, "General commands",
 		listCmd.NewCmdList(f),
 		createCmd.NewCmdCreate(f),
+		statusCmd.NewCmdStatus(f),
 	)
 
 	cmdutil.AddGroup(cmd, "Targeted commands",
 		viewCmd.NewCmdView(f),
 		closeCmd.NewCmdClose(f),
+		reopenCmd.NewCmdReopen(f),
 		commentCmd.NewCmdComment(f),
 		editCmd.NewCmdEdit(f),
+		deleteCmd.NewCmdDelete(f),
+		pinCmd.NewCmdPin(f),
+		unpinCmd.NewCmdUnpin(f),
+		lockCmd.NewCmdLock(f),
+		lockCmd.NewCmdUnlock(f),
 	)
 
 	return cmd

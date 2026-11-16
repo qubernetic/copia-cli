@@ -3,7 +3,6 @@ package list
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"text/tabwriter"
 
@@ -17,6 +16,7 @@ type ListOptions struct {
 	HTTPClient *http.Client
 	Host       string
 	Token      string
+	Limit      int
 	JSON       cmdutil.JSONFlags
 }
 
@@ -32,9 +32,12 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "list",
 		Short:   "List your organizations",
-		Long:    "List organizations that the authenticated user belongs to.",
+		Long: `List organizations that the authenticated user belongs to.
+
+Use --limit to control how many organizations are returned (default 30).`,
 		Aliases: []string{"ls"},
 		Example: `  $ copia-cli org list
+  $ copia-cli org list --limit 100
   $ copia-cli org list --json username,full_name`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.IO = f.IOStreams
@@ -44,45 +47,40 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 			}
 			opts.Host = host
 			opts.Token = token
-			opts.HTTPClient = &http.Client{}
+			opts.HTTPClient = cmdutil.NewHTTPClient()
 			return ListRun(opts)
 		},
 	}
 
+	cmd.Flags().IntVarP(&opts.Limit, "limit", "L", 30, "Maximum number of organizations")
 	cmdutil.AddJSONFlags(cmd, &opts.JSON, []string{"username", "full_name", "description"})
 	return cmd
 }
 
-func ListRun(opts *ListOptions) error {
-	url := fmt.Sprintf("https://%s/api/v1/user/orgs", opts.Host)
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "token "+opts.Token)
-
-	resp, err := opts.HTTPClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("connecting to %s: %w", opts.Host, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("API error (HTTP %d)", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-
+func decodeOrgs(body []byte) ([]orgEntry, error) {
 	var orgs []orgEntry
-	if err := json.Unmarshal(body, &orgs); err != nil {
+	err := json.Unmarshal(body, &orgs)
+	return orgs, err
+}
+
+func ListRun(opts *ListOptions) error {
+	if err := cmdutil.ValidateLimit(opts.Limit); err != nil {
 		return err
 	}
+
+	u := fmt.Sprintf("https://%s/api/v1/user/orgs", opts.Host)
+	orgs, err := cmdutil.FetchPages(opts.HTTPClient, u, opts.Token, opts.Limit, decodeOrgs)
+	if err != nil {
+		return err
+	}
+
+	if err := opts.IO.StartPager(); err != nil {
+		_, _ = fmt.Fprintf(opts.IO.ErrOut, "failed to start pager: %v\n", err)
+	}
+	defer opts.IO.StopPager()
 
 	if opts.JSON.IsJSON() {
-		return cmdutil.PrintJSON(opts.IO.Out, orgs)
+		return opts.JSON.Print(opts.IO.Out, orgs)
 	}
 
 	w := tabwriter.NewWriter(opts.IO.Out, 0, 0, 2, ' ', 0)

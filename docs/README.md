@@ -2,11 +2,14 @@
 
 This folder is used for documentation related to developing `copia-cli`.
 
-User documentation for `copia-cli` is available at
-[qubernetic.github.io/copia-cli/manual/](https://qubernetic.github.io/copia-cli/manual/).
+User documentation for `copia-cli` (installation, getting started,
+authentication and the command reference) lives on the documentation site,
+[qubernetic.github.io/copia-cli](https://qubernetic.github.io/copia-cli/).
+Its sources are in [`site/`](site/).
 
 ## Developer docs
 
+- [CI Credentials](ci.md) - GitHub App used by the bump-go workflow
 - [API Reference](api-reference.md) — Gitea API endpoint mapping
 - [Authentication](authentication.md) — Auth methods and config
 - [CLI Patterns](cli-patterns.md) — Command implementation patterns
@@ -15,8 +18,4 @@ User documentation for `copia-cli` is available at
 
 ## Guides
 
-- [Installing on Linux](install_linux.md)
-- [Installing on macOS](install_macos.md)
-- [Installing on Windows](install_windows.md)
-- [Building from Source](install_source.md)
 - [Releasing](releasing.md)

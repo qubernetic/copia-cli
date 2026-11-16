@@ -3,7 +3,6 @@ package list
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"text/tabwriter"
 
@@ -12,7 +11,7 @@ import (
 	"github.com/qubernetic/copia-cli/pkg/iostreams"
 )
 
-var validJSONFields = []string{"tag_name", "name", "draft", "prerelease", "published_at"}
+var validJSONFields = []string{"id", "tag_name", "name", "draft", "prerelease", "published_at"}
 
 type ListOptions struct {
 	IO         *iostreams.IOStreams
@@ -43,7 +42,7 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 		Long:    "List releases in a Copia repository, ordered by creation date.",
 		Aliases: []string{"ls"},
 		Example: `  $ copia-cli release list
-  $ copia-cli release list --json tagName,name`,
+  $ copia-cli release list --json tag_name,name`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.IO = f.IOStreams
 			host, token, err := f.ResolveAuth()
@@ -59,7 +58,7 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 			}
 			opts.Owner = owner
 			opts.Repo = repo
-			opts.HTTPClient = &http.Client{}
+			opts.HTTPClient = cmdutil.NewHTTPClient()
 			return ListRun(opts)
 		},
 	}
@@ -70,42 +69,32 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 	return cmd
 }
 
+func decodeReleases(body []byte) ([]releaseEntry, error) {
+	var releases []releaseEntry
+	err := json.Unmarshal(body, &releases)
+	return releases, err
+}
+
 func ListRun(opts *ListOptions) error {
 	if err := cmdutil.ValidateLimit(opts.Limit); err != nil {
 		return err
 	}
 
-	url := fmt.Sprintf("https://%s/api/v1/repos/%s/%s/releases?limit=%d",
-		opts.Host, opts.Owner, opts.Repo, opts.Limit)
+	u := fmt.Sprintf("https://%s/api/v1/repos/%s/%s/releases",
+		opts.Host, opts.Owner, opts.Repo)
 
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "token "+opts.Token)
-
-	resp, err := opts.HTTPClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("connecting to %s: %w", opts.Host, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("API error (HTTP %d)", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
+	releases, err := cmdutil.FetchPages(opts.HTTPClient, u, opts.Token, opts.Limit, decodeReleases)
 	if err != nil {
 		return err
 	}
 
-	var releases []releaseEntry
-	if err := json.Unmarshal(body, &releases); err != nil {
-		return fmt.Errorf("parsing response: %w", err)
+	if err := opts.IO.StartPager(); err != nil {
+		_, _ = fmt.Fprintf(opts.IO.ErrOut, "failed to start pager: %v\n", err)
 	}
+	defer opts.IO.StopPager()
 
 	if opts.JSON.IsJSON() {
-		return cmdutil.PrintJSON(opts.IO.Out, releases)
+		return opts.JSON.Print(opts.IO.Out, releases)
 	}
 
 	w := tabwriter.NewWriter(opts.IO.Out, 0, 0, 2, ' ', 0)

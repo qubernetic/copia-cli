@@ -4,31 +4,44 @@ on:
   release:
     types: [released]
 
+permissions:
+  contents: read
+
 jobs:
   aur:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Extract version
         id: version
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          script/check-release-version.sh "$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Get checksums
         id: checksums
         run: |
-          gh release download "${{ github.ref_name }}" --pattern "checksums.txt" --output checksums.txt
-          echo "sha256_x86_64=$(grep 'linux_amd64.tar.gz' checksums.txt | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-          echo "sha256_aarch64=$(grep 'linux_arm64.tar.gz' checksums.txt | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          gh release download "$GITHUB_REF_NAME" --pattern "checksums.txt" --output checksums.txt
+          SHA_X86="$(script/select-checksum.sh checksums.txt "copia-cli_${VERSION}_linux_amd64.tar.gz")"
+          SHA_ARM="$(script/select-checksum.sh checksums.txt "copia-cli_${VERSION}_linux_arm64.tar.gz")"
+          script/check-sha256.sh "$SHA_X86"
+          script/check-sha256.sh "$SHA_ARM"
+          echo "sha256_x86_64=$SHA_X86" >> "$GITHUB_OUTPUT"
+          echo "sha256_aarch64=$SHA_ARM" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
 
       - name: Generate PKGBUILD and .SRCINFO
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          SHA_X86: ${{ steps.checksums.outputs.sha256_x86_64 }}
+          SHA_ARM: ${{ steps.checksums.outputs.sha256_aarch64 }}
         run: |
-          VERSION=${{ steps.version.outputs.version }}
-          SHA_X86=${{ steps.checksums.outputs.sha256_x86_64 }}
-          SHA_ARM=${{ steps.checksums.outputs.sha256_aarch64 }}
-
           cat > PKGBUILD <<EOF
           # Maintainer: Qubernetic <info@qubernetic.com>
           pkgname=copia-cli-bin
@@ -74,12 +87,14 @@ jobs:
           sed -i 's/^          //' .SRCINFO
 
       - name: Publish to AUR
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.AUR_SSH_PRIVATE_KEY }}" > ~/.ssh/aur
+          (umask 077; printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur)
           chmod 600 ~/.ssh/aur
-          ssh-keyscan -t ed25519 aur.archlinux.org >> ~/.ssh/known_hosts
-          export GIT_SSH_COMMAND="ssh -i ~/.ssh/aur"
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/aur -o UserKnownHostsFile=$GITHUB_WORKSPACE/.github/aur_known_hosts -o StrictHostKeyChecking=yes"
 
           git clone ssh://aur@aur.archlinux.org/copia-cli-bin.git aur-repo
           cp PKGBUILD .SRCINFO aur-repo/
@@ -87,5 +102,5 @@ jobs:
           git config user.name "qubernetic"
           git config user.email "info@qubernetic.com"
           git add PKGBUILD .SRCINFO
-          git commit -m "Update to ${{ steps.version.outputs.version }}"
+          git commit -m "Update to $VERSION"
           git push

@@ -40,7 +40,8 @@ func NewCmdReview(f *cmdutil.Factory) *cobra.Command {
   $ copia-cli pr review 7 --approve
 
   # Request changes
-  $ copia-cli pr review 7 --request-changes --body "Please fix the tests."
+  $ copia-cli pr review 7 --request-changes \
+      --body "Please fix the tests."
 
   # Leave a comment
   $ copia-cli pr review 7 --comment --body "Looks good overall."`,
@@ -82,7 +83,7 @@ func NewCmdReview(f *cmdutil.Factory) *cobra.Command {
 				return fmt.Errorf("specify --approve, --request-changes, or --comment")
 			}
 
-			opts.HTTPClient = &http.Client{}
+			opts.HTTPClient = cmdutil.NewHTTPClient()
 			return ReviewRun(opts)
 		},
 	}

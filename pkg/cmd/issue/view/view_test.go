@@ -1,9 +1,11 @@
 package view
 
 import (
+	"context"
 	"net/http"
 	"testing"
 
+	"github.com/qubernetic/copia-cli/internal/config"
 	"github.com/qubernetic/copia-cli/pkg/cmdutil"
 	"github.com/qubernetic/copia-cli/pkg/httpmock"
 	"github.com/qubernetic/copia-cli/pkg/iostreams"
@@ -98,4 +100,32 @@ func TestViewRun_NotFound(t *testing.T) {
 	err := ViewRun(opts)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
+}
+
+func TestNewCmdView_CommentsWithDefaultJSON(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		wantErr string
+	}{
+		{name: "comments drop the json default", args: []string{"--comments"}, wantErr: "no host configured. Run 'copia auth login' first"},
+		{name: "comments with explicit json", args: []string{"--comments", "--json", "number"}, wantErr: "specify only one of --comments or --json"},
+		{name: "comments with jq", args: []string{"--comments", "--jq", "."}, wantErr: "specify only one of --comments or --json"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ios, _, _, _ := iostreams.Test()
+			f := &cmdutil.Factory{
+				IOStreams: ios,
+				Config:    func() (*config.Config, error) { return &config.Config{}, nil },
+			}
+			cmd := NewCmdView(f)
+			cmd.SetArgs(append([]string{"1"}, tt.args...))
+			cmd.SetOut(ios.Out)
+			cmd.SetErr(ios.ErrOut)
+			jsonFormat := func() (string, error) { return cmdutil.OutputJSON, nil }
+			err := cmd.ExecuteContext(cmdutil.WithOutputFormat(context.Background(), jsonFormat))
+			assert.EqualError(t, err, tt.wantErr)
+		})
+	}
 }

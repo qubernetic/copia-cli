@@ -3,12 +3,13 @@ package list
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
+	"github.com/qubernetic/copia-cli/pkg/cmd/issue/shared"
 	"github.com/qubernetic/copia-cli/pkg/cmdutil"
 	"github.com/qubernetic/copia-cli/pkg/iostreams"
 )
@@ -26,7 +27,13 @@ type ListOptions struct {
 	State      string
 	Limit      int
 	Labels     []string
-	JSON       cmdutil.JSONFlags
+	Assignee   string
+	Author     string
+	Mention    string
+	Milestone  string
+	Search     string
+	Web        bool
+	JSON      cmdutil.JSONFlags
 }
 
 type labelRef struct {
@@ -52,13 +59,30 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 
 Use --state to filter by open, closed, or all states.
 Use --label to filter by one or more label names.
-Use --limit to control how many issues are returned (default 30).`,
+Use --assignee, --author and --mention to filter by a user login; "@me" in
+--assignee and --author stands for the authenticated user.
+Use --milestone to filter by a milestone name and --search to match a keyword.
+Use --limit to control how many issues are returned (default 30).
+
+Use --web to open the issue list in the browser instead; no API call is made,
+so no token is needed. The browser list applies --state, --search, --author
+and --assignee @me; --label, --milestone, --mention and other assignees are
+not applied there.`,
 		Aliases: []string{"ls"},
 		Example: `  $ copia-cli issue list
   $ copia-cli issue list --state closed
-  $ copia-cli issue list --json number,title,state`,
+  $ copia-cli issue list --assignee @me --milestone v1.0
+  $ copia-cli issue list --author jane --search "plc timeout"
+  $ copia-cli issue list --assignee @me --web
+  $ copia-cli issue list --json number,title,state
+  $ copia-cli issue list --json number,title --jq '.[].title'
+  $ copia-cli issue list --json number,title \
+      --template '{{range .}}{{tablerow .number .title}}{{end}}'`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.IO = f.IOStreams
+			if opts.Web {
+				return openList(f, opts)
+			}
 			host, token, err := f.ResolveAuth()
 			if err != nil {
 				return err
@@ -72,7 +96,7 @@ Use --limit to control how many issues are returned (default 30).`,
 			}
 			opts.Owner = owner
 			opts.Repo = repo
-			opts.HTTPClient = &http.Client{}
+			opts.HTTPClient = cmdutil.NewHTTPClient()
 			return ListRun(opts)
 		},
 	}
@@ -80,9 +104,21 @@ Use --limit to control how many issues are returned (default 30).`,
 	cmd.Flags().StringVarP(&opts.State, "state", "s", "open", "Filter by state: {open|closed|all}")
 	cmd.Flags().IntVarP(&opts.Limit, "limit", "L", 30, "Maximum number of issues")
 	cmd.Flags().StringSliceVarP(&opts.Labels, "label", "l", nil, "Filter by label")
+	cmd.Flags().StringVarP(&opts.Assignee, "assignee", "a", "", "Filter by assignee `login` (\"@me\" for yourself)")
+	cmd.Flags().StringVarP(&opts.Author, "author", "A", "", "Filter by author `login` (\"@me\" for yourself)")
+	cmd.Flags().StringVar(&opts.Mention, "mention", "", "Filter by mentioned `login`")
+	cmd.Flags().StringVarP(&opts.Milestone, "milestone", "m", "", "Filter by milestone `name`")
+	cmd.Flags().StringVarP(&opts.Search, "search", "S", "", "Search issues with a keyword `query`")
+	cmd.Flags().BoolVarP(&opts.Web, "web", "w", false, "List issues in the web browser")
 	cmdutil.AddJSONFlags(cmd, &opts.JSON, validJSONFields)
 
 	return cmd
+}
+
+func decodeIssues(body []byte) ([]issueEntry, error) {
+	var issues []issueEntry
+	err := json.Unmarshal(body, &issues)
+	return issues, err
 }
 
 func ListRun(opts *ListOptions) error {
@@ -90,46 +126,35 @@ func ListRun(opts *ListOptions) error {
 		return err
 	}
 
-	switch opts.State {
-	case "open", "closed", "all":
-	default:
-		return fmt.Errorf("invalid state %q: valid values are {open|closed|all}", opts.State)
+	if err := validateState(opts.State); err != nil {
+		return err
 	}
 
-	u := fmt.Sprintf("https://%s/api/v1/repos/%s/%s/issues?state=%s&limit=%d&type=issues",
-		opts.Host, opts.Owner, opts.Repo, opts.State, opts.Limit)
+	u := fmt.Sprintf("https://%s/api/v1/repos/%s/%s/issues?state=%s&type=issues",
+		opts.Host, opts.Owner, opts.Repo, opts.State)
 	if len(opts.Labels) > 0 {
 		u += "&labels=" + strings.Join(opts.Labels, ",")
 	}
-
-	req, err := http.NewRequest("GET", u, nil)
+	filters, err := filterQuery(opts)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "token "+opts.Token)
-
-	resp, err := opts.HTTPClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("connecting to %s: %w", opts.Host, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("API error (HTTP %d)", resp.StatusCode)
+	if len(filters) > 0 {
+		u += "&" + filters.Encode()
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	issues, err := cmdutil.FetchPages(opts.HTTPClient, u, opts.Token, opts.Limit, decodeIssues)
 	if err != nil {
 		return err
 	}
 
-	var issues []issueEntry
-	if err := json.Unmarshal(body, &issues); err != nil {
-		return fmt.Errorf("parsing response: %w", err)
+	if err := opts.IO.StartPager(); err != nil {
+		_, _ = fmt.Fprintf(opts.IO.ErrOut, "failed to start pager: %v\n", err)
 	}
+	defer opts.IO.StopPager()
 
 	if opts.JSON.IsJSON() {
-		return cmdutil.PrintJSON(opts.IO.Out, issues)
+		return opts.JSON.Print(opts.IO.Out, issues)
 	}
 
 	w := tabwriter.NewWriter(opts.IO.Out, 0, 0, 2, ' ', 0)
@@ -144,4 +169,92 @@ func ListRun(opts *ListOptions) error {
 		_, _ = fmt.Fprintf(w, "#%d\t%s\t%s\t%s\n", i.Number, i.Title, i.State, labels)
 	}
 	return w.Flush()
+}
+
+func validateState(state string) error {
+	switch state {
+	case "open", "closed", "all":
+		return nil
+	}
+	return fmt.Errorf("invalid state %q: valid values are {open|closed|all}", state)
+}
+
+// openList opens the issue list of the repository in the browser with the
+// filters the Gitea web list reads: state, q, poster (a login) and type for
+// the signed-in user's own issues (@me). The web list takes labels,
+// milestones and other assignees only by ID, which would need an API call,
+// so those flags, like --mention, only produce a warning.
+func openList(f *cmdutil.Factory, opts *ListOptions) error {
+	if err := validateState(opts.State); err != nil {
+		return err
+	}
+	host, err := f.ResolveHost()
+	if err != nil {
+		return err
+	}
+	owner, repo, err := f.ResolveRepo()
+	if err != nil {
+		return err
+	}
+
+	q := url.Values{}
+	q.Set("state", opts.State)
+	if opts.Search != "" {
+		q.Set("q", opts.Search)
+	}
+
+	var ignored []string
+	if len(opts.Labels) > 0 {
+		ignored = append(ignored, "label")
+	}
+	switch opts.Assignee {
+	case "":
+	case "@me":
+		q.Set("type", "assigned")
+	default:
+		ignored = append(ignored, "assignee")
+	}
+	switch {
+	case opts.Author == "":
+	case opts.Author != "@me":
+		q.Set("poster", opts.Author)
+	case q.Has("type"):
+		// The web list has one type, already taken by --assignee @me.
+		ignored = append(ignored, "author")
+	default:
+		q.Set("type", "created_by")
+	}
+	if opts.Mention != "" {
+		ignored = append(ignored, "mention")
+	}
+	if opts.Milestone != "" {
+		ignored = append(ignored, "milestone")
+	}
+	cmdutil.WarnWebIgnored(opts.IO, ignored...)
+
+	return cmdutil.OpenInBrowser(opts.IO, f.Browser, cmdutil.RepoWebURL(host, owner, repo, "issues")+"?"+q.Encode())
+}
+
+// filterQuery returns the query parameters of the --assignee, --author,
+// --mention, --milestone and --search filters that are set. `@me` in
+// --assignee and --author costs one GET /user, however often it appears.
+func filterQuery(opts *ListOptions) (url.Values, error) {
+	users, err := shared.ResolveAssignees(opts.HTTPClient, opts.Host, opts.Token, []string{opts.Assignee, opts.Author})
+	if err != nil {
+		return nil, err
+	}
+
+	q := url.Values{}
+	for _, p := range []struct{ key, value string }{
+		{"assigned_by", users[0]},
+		{"created_by", users[1]},
+		{"mentioned_by", opts.Mention},
+		{"milestones", opts.Milestone},
+		{"q", opts.Search},
+	} {
+		if p.value != "" {
+			q.Set(p.key, p.value)
+		}
+	}
+	return q, nil
 }

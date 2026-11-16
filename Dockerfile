@@ -1,6 +1,6 @@
-FROM golang:1.26.2-alpine
+FROM golang:1.27.4-alpine
 
-RUN apk add --no-cache git build-base
+RUN apk add --no-cache git git-daemon build-base
 
 RUN git config --global --add safe.directory /app
 

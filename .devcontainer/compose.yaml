@@ -1,0 +1,25 @@
+# Dev service for the Horde sandbox (horde-dev up / run). The local workflow
+# (docker-compose.yml, docker-compose.dev.yaml, devcontainer.json, justfile) does not use it.
+services:
+  dev:
+    build:
+      context: ..
+      dockerfile: .devcontainer/Dockerfile
+    user: "1000:100"
+    working_dir: /workspace
+    command: ["sleep", "infinity"]
+    mem_limit: 2147483648
+    environment:
+      HOME: /home/dev
+      GOCACHE: /home/dev/.cache/go-build
+      GOMODCACHE: /home/dev/go/pkg/mod
+    volumes:
+      - ..:/workspace
+      - home:/home/dev
+      - go-build-cache:/home/dev/.cache/go-build
+      - go-mod-cache:/home/dev/go/pkg/mod
+
+volumes:
+  home:
+  go-build-cache:
+  go-mod-cache:

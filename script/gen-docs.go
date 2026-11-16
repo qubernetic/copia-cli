@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/qubernetic/copia-cli/internal/config"
 	"github.com/qubernetic/copia-cli/internal/copiacmd"
@@ -13,9 +12,13 @@ import (
 )
 
 func main() {
-	outDir := "docs/site/manual"
+	outDir := "docs/site/docs/manual"
 	if len(os.Args) > 1 {
 		outDir = os.Args[1]
+	}
+	navFile := "docs/site/commands-nav.json"
+	if len(os.Args) > 2 {
+		navFile = os.Args[2]
 	}
 
 	if err := os.MkdirAll(outDir, 0755); err != nil {
@@ -34,18 +37,16 @@ func main() {
 	rootCmd := copiacmd.NewRootCmd(f)
 	rootCmd.DisableAutoGenTag = true
 
-	linkHandler := func(name string) string {
-		return "./" + strings.TrimSuffix(name, ".md")
-	}
-
-	filePrepender := func(_ string) string {
-		return "---\nlayout: manual\npermalink: /:path/:basename\n---\n\n"
-	}
-
-	if err := docs.GenMarkdownTreeCustom(rootCmd, outDir, filePrepender, linkHandler); err != nil {
+	if err := docs.GenMarkdownTree(rootCmd, outDir); err != nil {
 		fmt.Fprintf(os.Stderr, "Error generating docs: %v\n", err)
 		os.Exit(1)
 	}
 
+	if err := docs.WriteNav(rootCmd, navFile, "manual/"); err != nil {
+		fmt.Fprintf(os.Stderr, "Error generating navigation: %v\n", err)
+		os.Exit(1)
+	}
+
 	fmt.Printf("Generated docs in %s\n", outDir)
+	fmt.Printf("Generated navigation in %s\n", navFile)
 }

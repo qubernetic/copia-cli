@@ -3,14 +3,20 @@
 package integration
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 	"testing"
+	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	searchissues "github.com/qubernetic/copia-cli/pkg/cmd/search/issues"
+	searchprs "github.com/qubernetic/copia-cli/pkg/cmd/search/prs"
 	searchrepos "github.com/qubernetic/copia-cli/pkg/cmd/search/repos"
+	"github.com/qubernetic/copia-cli/pkg/cmdutil"
 )
 
 func TestSearchRepos_Run(t *testing.T) {
@@ -22,32 +28,122 @@ func TestSearchRepos_Run(t *testing.T) {
 		HTTPClient: &http.Client{},
 		Host:       env.Host,
 		Token:      env.Token,
-		Query:      "integration",
+		Query:      env.Repo,
 		Limit:      5,
 	}
 
 	err := searchrepos.SearchRun(opts)
 	require.NoError(t, err)
-	assert.Contains(t, stdout.String(), "integration")
-	t.Logf("Search repos: %s", stdout.String())
+	// The run repository's name stays out of the log, so no helper that
+	// names the expected text.
+	require.True(t, strings.Contains(stdout.String(), env.Owner+"/"+env.Repo), "search repos does not list the run repository")
 }
 
 func TestSearchIssues_Run(t *testing.T) {
 	env := loadTestEnv(t)
-	ios, stdout, _ := testIO()
+	token := "lifecycle" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	number := createIssue(t, env, "[integration-test] search issues "+token)
 
-	opts := &searchissues.SearchOptions{
-		IO:         ios,
-		HTTPClient: &http.Client{},
-		Host:       env.Host,
-		Token:      env.Token,
-		Owner:      env.Owner,
-		Repo:       env.Repo,
-		Query:      "lifecycle",
-		Limit:      5,
+	// Gitea indexes a new issue in the background.
+	var out string
+	for i := 0; i < 30; i++ {
+		ios, stdout, _ := testIO()
+		err := searchissues.SearchRun(&searchissues.SearchOptions{
+			IO:         ios,
+			HTTPClient: testHTTPClient(),
+			Host:       env.Host,
+			Token:      env.Token,
+			Owner:      env.Owner,
+			Repo:       env.Repo,
+			Query:      token,
+			Limit:      5,
+			JSON: cmdutil.JSONFlags{
+				Fields: []string{"number"},
+				JQ:     fmt.Sprintf(`[.[] | select(.number == %d)] | length`, number),
+			},
+		})
+		require.NoError(t, err)
+		if out = stdout.String(); out == "1\n" {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	assertOutputEqual(t, out, "1\n")
+}
+
+func TestSearchPRs_Run(t *testing.T) {
+	env := loadTestEnv(t)
+	token := "searchprs" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	pr := createFixturePR(t, env, "[integration-test] CLI search prs test "+token)
+
+	status, data := apiCall(t, env, "read user", "GET", "/user", nil)
+	assertStatusCode(t, status, http.StatusOK)
+	var me struct {
+		Login string `json:"login"`
+	}
+	require.NoError(t, json.Unmarshal(data, &me))
+
+	// search runs the command with the fixture's token as the query and
+	// prints how many results are the fixture pull request.
+	search := func(set func(*searchprs.SearchOptions)) (string, error) {
+		t.Helper()
+		ios, out, _ := testIO()
+		opts := &searchprs.SearchOptions{
+			IO: ios, HTTPClient: testHTTPClient(),
+			Host: env.Host, Token: env.Token,
+			Query: token,
+			Repo:  env.Owner + "/" + env.Repo,
+			Limit: 10,
+			JSON: cmdutil.JSONFlags{
+				Fields: []string{"number", "state"},
+				JQ:     fmt.Sprintf(`[.[] | select(.number == %d and .state == "open")] | length`, pr.Number),
+			},
+		}
+		if set != nil {
+			set(opts)
+		}
+		err := searchprs.SearchRun(opts)
+		return out.String(), err
+	}
+	// eventually waits until search prints want, since Gitea indexes a new
+	// or changed pull request in the background.
+	eventually := func(want string, set func(*searchprs.SearchOptions)) {
+		t.Helper()
+		var out string
+		for i := 0; i < 30; i++ {
+			var err error
+			out, err = search(set)
+			require.NoError(t, err)
+			if out == want {
+				break
+			}
+			time.Sleep(time.Second)
+		}
+		assertOutputEqual(t, out, want)
 	}
 
-	err := searchissues.SearchRun(opts)
+	eventually("1\n", nil)
+	eventually("1\n", func(o *searchprs.SearchOptions) { o.State = "open"; o.Author = "@me" })
+	eventually("1\n", func(o *searchprs.SearchOptions) { o.Author = me.Login; o.Owner = env.Owner })
+	out, err := search(func(o *searchprs.SearchOptions) { o.State = "closed" })
 	require.NoError(t, err)
-	t.Logf("Search issues: %s", stdout.String())
+	assertOutputEqual(t, out, "0\n")
+	out, err = search(func(o *searchprs.SearchOptions) { o.Assignee = "@me" })
+	require.NoError(t, err)
+	assertOutputEqual(t, out, "0\n")
+
+	// Gitea 1.26 answers created_by with an unknown user with HTTP 404;
+	// app.copia.io ignores created_by (found by the integration job of
+	// #376), so the command checks the author of each result.
+	out, err = search(func(o *searchprs.SearchOptions) { o.Author = token + "-nobody" })
+	if err != nil {
+		require.ErrorContains(t, err, "no user named", "created_by with an unknown user")
+	} else {
+		assertOutputEqual(t, out, "0\n")
+	}
+
+	status, _ = apiCall(t, env, "assign pull request", "PATCH",
+		fmt.Sprintf("/repos/%s/%s/issues/%d", env.Owner, env.Repo, pr.Number), map[string]any{"assignees": []string{me.Login}})
+	assertStatusCode(t, status, http.StatusCreated)
+	eventually("1\n", func(o *searchprs.SearchOptions) { o.Assignee = "@me" })
 }

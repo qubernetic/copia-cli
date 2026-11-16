@@ -6,13 +6,16 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/qubernetic/copia-cli/pkg/cmd/issue/shared"
+	prshared "github.com/qubernetic/copia-cli/pkg/cmd/pr/shared"
 	"github.com/qubernetic/copia-cli/pkg/cmdutil"
 	"github.com/qubernetic/copia-cli/pkg/iostreams"
 )
 
-var validJSONFields = []string{"number", "title", "body", "state", "mergeable", "author", "base", "head", "created_at"}
+var validJSONFields = []string{"number", "title", "body", "state", "mergeable", "user", "base", "head", "labels", "created_at", "html_url"}
 
 // ViewOptions holds all inputs for the pr view command.
 type ViewOptions struct {
@@ -24,10 +27,16 @@ type ViewOptions struct {
 	Repo       string
 	Number     int64
 	JSON       cmdutil.JSONFlags
+	Comments   bool
+	Web        bool
 }
 
 type userRef struct {
 	Login string `json:"login"`
+}
+
+type labelRef struct {
+	Name string `json:"name"`
 }
 
 type branchRef struct {
@@ -35,16 +44,17 @@ type branchRef struct {
 }
 
 type prDetail struct {
-	Number    int64     `json:"number"`
-	Title     string    `json:"title"`
-	Body      string    `json:"body"`
-	State     string    `json:"state"`
-	Mergeable bool      `json:"mergeable"`
-	HTMLURL   string    `json:"html_url"`
-	User      userRef   `json:"user"`
-	Base      branchRef `json:"base"`
-	Head      branchRef `json:"head"`
-	CreatedAt string    `json:"created_at"`
+	Number    int64      `json:"number"`
+	Title     string     `json:"title"`
+	Body      string     `json:"body"`
+	State     string     `json:"state"`
+	Mergeable bool       `json:"mergeable"`
+	HTMLURL   string     `json:"html_url"`
+	User      userRef    `json:"user"`
+	Base      branchRef  `json:"base"`
+	Head      branchRef  `json:"head"`
+	Labels    []labelRef `json:"labels"`
+	CreatedAt string     `json:"created_at"`
 }
 
 // NewCmdView creates the `copia pr view` command.
@@ -54,12 +64,21 @@ func NewCmdView(f *cmdutil.Factory) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "view <number>",
 		Short: "View a pull request",
-		Long:  "Display the title, body, and other information about a pull request.",
+		Long: `Display the title, body, and other information about a pull request.
+
+With --web, open the pull request page in the browser instead. No API call is
+made, so no token is needed.`,
 		Example: `  # View a pull request
   $ copia-cli pr view 7
 
+  # View a pull request with its comments
+  $ copia-cli pr view 7 --comments
+
   # View as JSON
-  $ copia-cli pr view 7 --json number,title,mergeable`,
+  $ copia-cli pr view 7 --json number,title,mergeable
+
+  # Open the pull request in the browser
+  $ copia-cli pr view 7 --web`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			num, err := strconv.ParseInt(args[0], 10, 64)
@@ -67,6 +86,18 @@ func NewCmdView(f *cmdutil.Factory) *cobra.Command {
 				return fmt.Errorf("invalid PR number: %s", args[0])
 			}
 			opts.Number = num
+
+			if opts.Web {
+				return prshared.OpenPR(f, prshared.PRRef{Number: num}, "")
+			}
+
+			if opts.Comments {
+				opts.JSON.DropDefault()
+			}
+			if opts.Comments && opts.JSON.IsJSON() {
+				return fmt.Errorf("specify only one of --comments or --json")
+			}
+
 			opts.IO = f.IOStreams
 
 			host, token, err := f.ResolveAuth()
@@ -82,11 +113,13 @@ func NewCmdView(f *cmdutil.Factory) *cobra.Command {
 			}
 			opts.Owner = owner
 			opts.Repo = repo
-			opts.HTTPClient = &http.Client{}
+			opts.HTTPClient = cmdutil.NewHTTPClient()
 			return ViewRun(opts)
 		},
 	}
 
+	cmd.Flags().BoolVarP(&opts.Comments, "comments", "c", false, "View comments")
+	cmd.Flags().BoolVarP(&opts.Web, "web", "w", false, "Open the pull request in the browser")
 	cmdutil.AddJSONFlags(cmd, &opts.JSON, validJSONFields)
 
 	return cmd
@@ -125,17 +158,39 @@ func ViewRun(opts *ViewOptions) error {
 		return err
 	}
 
+	var comments []shared.Comment
+	if opts.Comments {
+		comments, err = shared.FetchComments(opts.HTTPClient, opts.Host, opts.Token, opts.Owner, opts.Repo, opts.Number)
+		if err != nil {
+			return err
+		}
+	}
+
+	if err := opts.IO.StartPager(); err != nil {
+		_, _ = fmt.Fprintf(opts.IO.ErrOut, "failed to start pager: %v\n", err)
+	}
+	defer opts.IO.StopPager()
+
 	if opts.JSON.IsJSON() {
-		return cmdutil.PrintJSON(opts.IO.Out, pr)
+		return opts.JSON.Print(opts.IO.Out, pr)
 	}
 
 	_, _ = fmt.Fprintf(opts.IO.Out, "#%d %s\n", pr.Number, pr.Title)
 	_, _ = fmt.Fprintf(opts.IO.Out, "State: %s  Author: %s  Mergeable: %v\n", pr.State, pr.User.Login, pr.Mergeable)
 	_, _ = fmt.Fprintf(opts.IO.Out, "Branches: %s <- %s\n", pr.Base.Label, pr.Head.Label)
+	if len(pr.Labels) > 0 {
+		names := make([]string, 0, len(pr.Labels))
+		for _, l := range pr.Labels {
+			names = append(names, l.Name)
+		}
+		_, _ = fmt.Fprintf(opts.IO.Out, "Labels: %s\n", strings.Join(names, ", "))
+	}
 
 	if pr.Body != "" {
 		_, _ = fmt.Fprintf(opts.IO.Out, "\n%s\n", pr.Body)
 	}
+
+	shared.PrintComments(opts.IO.Out, comments)
 
 	_, _ = fmt.Fprintf(opts.IO.Out, "\n%s\n", pr.HTMLURL)
 	return nil

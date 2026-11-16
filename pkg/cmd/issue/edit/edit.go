@@ -6,26 +6,31 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 
 	"github.com/spf13/cobra"
+	"github.com/qubernetic/copia-cli/pkg/cmd/issue/shared"
 	"github.com/qubernetic/copia-cli/pkg/cmdutil"
 	"github.com/qubernetic/copia-cli/pkg/iostreams"
 )
 
 type EditOptions struct {
-	IO         *iostreams.IOStreams
-	HTTPClient *http.Client
-	Host       string
-	Token      string
-	Owner      string
-	Repo       string
-	Number     int64
-	Title      string
-	Body       string
-	AddLabels  []string
-	Assignees  []string
-	Milestone  int64
+	IO              *iostreams.IOStreams
+	HTTPClient      *http.Client
+	Host            string
+	Token           string
+	Owner           string
+	Repo            string
+	Number          int64
+	Title           string
+	Body            string
+	AddLabels       []string
+	RemoveLabels    []string
+	Assignees       []string
+	AddAssignees    []string
+	RemoveAssignees []string
+	Milestone       string
 }
 
 func NewCmdEdit(f *cmdutil.Factory) *cobra.Command {
@@ -34,17 +39,36 @@ func NewCmdEdit(f *cmdutil.Factory) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "edit <number>",
 		Short: "Edit an issue",
-		Long:  "Edit an issue's title, body, labels, assignees, or milestone.",
+		Long: `Edit an issue's title, body, labels, assignees, or milestone.
+
+--assignee replaces the whole assignee list. --add-assignee and
+--remove-assignee change it: the current assignees are read first, and
+removing a login the issue does not have changes nothing. --assignee cannot
+be combined with --add-assignee or --remove-assignee.
+
+--add-label and --remove-label take label names of the repository or its
+organization; an unknown name fails before the issue is changed.
+
+--milestone takes a milestone name or its numeric ID; an unknown milestone
+fails before the issue is changed.`,
 		Example: `  # Edit the title
   $ copia-cli issue edit 12 --title "New title"
 
   # Add labels
   $ copia-cli issue edit 12 --add-label bug --add-label urgent
 
+  # Remove a label
+  $ copia-cli issue edit 12 --remove-label wontfix
+
   # Set assignees
   $ copia-cli issue edit 12 --assignee john --assignee jane
 
-  # Set milestone
+  # Add and remove assignees
+  $ copia-cli issue edit 12 --add-assignee jane \
+      --remove-assignee john
+
+  # Set milestone by name or ID
+  $ copia-cli issue edit 12 --milestone v1.0
   $ copia-cli issue edit 12 --milestone 1`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -68,26 +92,65 @@ func NewCmdEdit(f *cmdutil.Factory) *cobra.Command {
 			}
 			opts.Owner = owner
 			opts.Repo = repo
-			opts.HTTPClient = &http.Client{}
+			opts.HTTPClient = cmdutil.NewHTTPClient()
 			return EditRun(opts)
 		},
 	}
 
 	cmd.Flags().StringVarP(&opts.Title, "title", "t", "", "Set title")
 	cmd.Flags().StringVarP(&opts.Body, "body", "b", "", "Set body")
-	cmd.Flags().StringSliceVar(&opts.AddLabels, "add-label", nil, "Add labels")
+	cmd.Flags().StringSliceVar(&opts.AddLabels, "add-label", nil, "Add labels by name (repository or organization labels)")
+	cmd.Flags().StringSliceVar(&opts.RemoveLabels, "remove-label", nil, "Remove labels by name (repository or organization labels)")
 	cmd.Flags().StringSliceVarP(&opts.Assignees, "assignee", "a", nil, "Set assignees")
-	cmd.Flags().Int64VarP(&opts.Milestone, "milestone", "m", 0, "Set milestone ID")
+	cmd.Flags().StringSliceVar(&opts.AddAssignees, "add-assignee", nil, "Add assignees by login")
+	cmd.Flags().StringSliceVar(&opts.RemoveAssignees, "remove-assignee", nil, "Remove assignees by login")
+	cmd.Flags().StringVarP(&opts.Milestone, "milestone", "m", "", "Set milestone by name or ID")
 
 	return cmd
 }
 
 func EditRun(opts *EditOptions) error {
-	hasIssueUpdate := opts.Title != "" || opts.Body != "" || len(opts.Assignees) > 0 || opts.Milestone > 0
+	changesAssignees := len(opts.AddAssignees) > 0 || len(opts.RemoveAssignees) > 0
+	hasIssueUpdate := opts.Title != "" || opts.Body != "" || len(opts.Assignees) > 0 || changesAssignees || opts.Milestone != ""
 	hasLabelAdd := len(opts.AddLabels) > 0
+	hasLabelRemove := len(opts.RemoveLabels) > 0
 
-	if !hasIssueUpdate && !hasLabelAdd {
-		return fmt.Errorf("nothing to edit. Use --title, --body, --add-label, --assignee, or --milestone")
+	if !hasIssueUpdate && !hasLabelAdd && !hasLabelRemove {
+		return fmt.Errorf("nothing to edit. Use --title, --body, --add-label, --remove-label, --assignee, --add-assignee, --remove-assignee, or --milestone")
+	}
+	if len(opts.Assignees) > 0 && changesAssignees {
+		return fmt.Errorf("specify only one of --assignee or --add-assignee/--remove-assignee")
+	}
+
+	// Resolve the milestone first, so an unknown one fails before any change.
+	var milestoneID int64
+	if opts.Milestone != "" {
+		id, err := shared.ResolveMilestoneID(opts.HTTPClient, opts.Host, opts.Token, opts.Owner, opts.Repo, opts.Milestone)
+		if err != nil {
+			return err
+		}
+		milestoneID = id
+	}
+
+	// Resolve the labels to remove before any change, for the same reason.
+	var removeLabelIDs []int64
+	if hasLabelRemove {
+		ids, err := shared.ResolveLabelIDs(opts.HTTPClient, opts.Host, opts.Token, opts.Owner, opts.Repo, opts.RemoveLabels)
+		if err != nil {
+			return err
+		}
+		removeLabelIDs = ids
+	}
+
+	// Gitea has no endpoint that removes one assignee: compute the new list
+	// from the current one and send it whole.
+	assignees := opts.Assignees
+	if changesAssignees {
+		current, err := currentAssignees(opts)
+		if err != nil {
+			return err
+		}
+		assignees = changeAssignees(current, opts.AddAssignees, opts.RemoveAssignees)
 	}
 
 	if hasLabelAdd {
@@ -96,8 +159,14 @@ func EditRun(opts *EditOptions) error {
 		}
 	}
 
+	for i, id := range removeLabelIDs {
+		if err := removeLabel(opts, opts.RemoveLabels[i], id); err != nil {
+			return err
+		}
+	}
+
 	if hasIssueUpdate {
-		if err := updateIssue(opts); err != nil {
+		if err := updateIssue(opts, assignees, milestoneID); err != nil {
 			return err
 		}
 	}
@@ -106,7 +175,7 @@ func EditRun(opts *EditOptions) error {
 	return nil
 }
 
-func updateIssue(opts *EditOptions) error {
+func updateIssue(opts *EditOptions, assignees []string, milestoneID int64) error {
 	payload := map[string]interface{}{}
 	if opts.Title != "" {
 		payload["title"] = opts.Title
@@ -114,11 +183,12 @@ func updateIssue(opts *EditOptions) error {
 	if opts.Body != "" {
 		payload["body"] = opts.Body
 	}
-	if len(opts.Assignees) > 0 {
-		payload["assignees"] = opts.Assignees
+	// A non-nil empty list is sent as [] and clears the assignees.
+	if assignees != nil {
+		payload["assignees"] = assignees
 	}
-	if opts.Milestone > 0 {
-		payload["milestone"] = opts.Milestone
+	if milestoneID > 0 {
+		payload["milestone"] = milestoneID
 	}
 
 	body, err := json.Marshal(payload)
@@ -151,7 +221,7 @@ func updateIssue(opts *EditOptions) error {
 
 func addLabels(opts *EditOptions) error {
 	// Gitea API expects label IDs, not names. Look up IDs first.
-	labelIDs, err := resolveLabelIDs(opts)
+	labelIDs, err := shared.ResolveLabelIDs(opts.HTTPClient, opts.Host, opts.Token, opts.Owner, opts.Repo, opts.AddLabels)
 	if err != nil {
 		return err
 	}
@@ -188,14 +258,32 @@ func addLabels(opts *EditOptions) error {
 	return nil
 }
 
-type labelEntry struct {
-	ID   int64  `json:"id"`
-	Name string `json:"name"`
+func removeLabel(opts *EditOptions, name string, id int64) error {
+	url := fmt.Sprintf("https://%s/api/v1/repos/%s/%s/issues/%d/labels/%d",
+		opts.Host, opts.Owner, opts.Repo, opts.Number, id)
+
+	req, err := http.NewRequest("DELETE", url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "token "+opts.Token)
+
+	resp, err := opts.HTTPClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("failed to remove label %q (HTTP %d)", name, resp.StatusCode)
+	}
+
+	return nil
 }
 
-func resolveLabelIDs(opts *EditOptions) ([]int64, error) {
-	url := fmt.Sprintf("https://%s/api/v1/repos/%s/%s/labels",
-		opts.Host, opts.Owner, opts.Repo)
+func currentAssignees(opts *EditOptions) ([]string, error) {
+	url := fmt.Sprintf("https://%s/api/v1/repos/%s/%s/issues/%d",
+		opts.Host, opts.Owner, opts.Repo, opts.Number)
 
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -209,29 +297,40 @@ func resolveLabelIDs(opts *EditOptions) ([]int64, error) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to read issue #%d (HTTP %d)", opts.Number, resp.StatusCode)
+	}
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
 
-	var allLabels []labelEntry
-	if err := json.Unmarshal(body, &allLabels); err != nil {
+	var issue struct {
+		Assignees []struct {
+			Login string `json:"login"`
+		} `json:"assignees"`
+	}
+	if err := json.Unmarshal(body, &issue); err != nil {
 		return nil, err
 	}
 
-	nameToID := map[string]int64{}
-	for _, l := range allLabels {
-		nameToID[l.Name] = l.ID
+	logins := make([]string, 0, len(issue.Assignees))
+	for _, a := range issue.Assignees {
+		logins = append(logins, a.Login)
 	}
+	return logins, nil
+}
 
-	var ids []int64
-	for _, name := range opts.AddLabels {
-		id, ok := nameToID[name]
-		if !ok {
-			return nil, fmt.Errorf("label %q not found in repository", name)
+// changeAssignees returns current without the removed logins and with the
+// added ones that are not already present. The result is never nil, so
+// removing the last assignee sends an empty list.
+func changeAssignees(current, add, remove []string) []string {
+	out := []string{}
+	for _, login := range slices.Concat(current, add) {
+		if !slices.Contains(remove, login) && !slices.Contains(out, login) {
+			out = append(out, login)
 		}
-		ids = append(ids, id)
 	}
-
-	return ids, nil
+	return out
 }

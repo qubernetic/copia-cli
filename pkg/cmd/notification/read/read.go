@@ -53,7 +53,7 @@ func NewCmdRead(f *cmdutil.Factory) *cobra.Command {
 				return fmt.Errorf("specify a thread ID or --all")
 			}
 
-			opts.HTTPClient = &http.Client{}
+			opts.HTTPClient = cmdutil.NewHTTPClient()
 			return ReadRun(opts)
 		},
 	}

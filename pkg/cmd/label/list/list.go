@@ -3,7 +3,6 @@ package list
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"text/tabwriter"
 
@@ -12,7 +11,7 @@ import (
 	"github.com/qubernetic/copia-cli/pkg/iostreams"
 )
 
-var validJSONFields = []string{"name", "color", "description"}
+var validJSONFields = []string{"id", "name", "color", "description"}
 
 // ListOptions holds all inputs for the label list command.
 type ListOptions struct {
@@ -22,7 +21,9 @@ type ListOptions struct {
 	Token      string
 	Owner      string
 	Repo       string
+	Limit      int
 	JSON       cmdutil.JSONFlags
+	Web        bool
 }
 
 type labelEntry struct {
@@ -39,12 +40,22 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "list",
 		Short:   "List labels in a repository",
-		Long:    "List labels in a Copia repository. Labels are displayed with their name, color, and description.",
+		Long: `List labels in a Copia repository. Labels are displayed with their name, color, and description.
+
+Use --limit to control how many labels are returned (default 30).
+
+Use --web to open the labels page in the browser instead; no API call is
+made, so no token is needed.`,
 		Aliases: []string{"ls"},
 		Example: `  $ copia-cli label list
-  $ copia-cli label list --json name,color`,
+  $ copia-cli label list --limit 100
+  $ copia-cli label list --json name,color
+  $ copia-cli label list --web`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.IO = f.IOStreams
+			if opts.Web {
+				return openLabels(f)
+			}
 			host, token, err := f.ResolveAuth()
 			if err != nil {
 				return err
@@ -58,46 +69,56 @@ func NewCmdList(f *cmdutil.Factory) *cobra.Command {
 			}
 			opts.Owner = owner
 			opts.Repo = repo
-			opts.HTTPClient = &http.Client{}
+			opts.HTTPClient = cmdutil.NewHTTPClient()
 			return ListRun(opts)
 		},
 	}
 
+	cmd.Flags().IntVarP(&opts.Limit, "limit", "L", 30, "Maximum number of labels")
+	cmd.Flags().BoolVarP(&opts.Web, "web", "w", false, "List labels in the web browser")
 	cmdutil.AddJSONFlags(cmd, &opts.JSON, validJSONFields)
 
 	return cmd
 }
 
-func ListRun(opts *ListOptions) error {
-	url := fmt.Sprintf("https://%s/api/v1/repos/%s/%s/labels", opts.Host, opts.Owner, opts.Repo)
-	req, err := http.NewRequest("GET", url, nil)
+// openLabels opens the labels page of the repository in the browser. It
+// makes no API call, so no token is needed.
+func openLabels(f *cmdutil.Factory) error {
+	host, err := f.ResolveHost()
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "token "+opts.Token)
-
-	resp, err := opts.HTTPClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("connecting to %s: %w", opts.Host, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("API error (HTTP %d)", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
+	owner, repo, err := f.ResolveRepo()
 	if err != nil {
 		return err
 	}
+	return cmdutil.OpenInBrowser(f.IOStreams, f.Browser, cmdutil.RepoWebURL(host, owner, repo, "labels"))
+}
 
+func decodeLabels(body []byte) ([]labelEntry, error) {
 	var labels []labelEntry
-	if err := json.Unmarshal(body, &labels); err != nil {
-		return fmt.Errorf("parsing response: %w", err)
+	err := json.Unmarshal(body, &labels)
+	return labels, err
+}
+
+func ListRun(opts *ListOptions) error {
+	if err := cmdutil.ValidateLimit(opts.Limit); err != nil {
+		return err
 	}
+
+	u := fmt.Sprintf("https://%s/api/v1/repos/%s/%s/labels", opts.Host, opts.Owner, opts.Repo)
+	labels, err := cmdutil.FetchPages(opts.HTTPClient, u, opts.Token, opts.Limit, decodeLabels)
+	if err != nil {
+		return err
+	}
+
+	if err := opts.IO.StartPager(); err != nil {
+		_, _ = fmt.Fprintf(opts.IO.ErrOut, "failed to start pager: %v\n", err)
+	}
+	defer opts.IO.StopPager()
 
 	if opts.JSON.IsJSON() {
-		return cmdutil.PrintJSON(opts.IO.Out, labels)
+		return opts.JSON.Print(opts.IO.Out, labels)
 	}
 
 	w := tabwriter.NewWriter(opts.IO.Out, 0, 0, 2, ' ', 0)

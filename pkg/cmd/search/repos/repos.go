@@ -3,7 +3,6 @@ package repos
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"text/tabwriter"
@@ -21,8 +20,11 @@ type SearchOptions struct {
 	Host       string
 	Token      string
 	Query      string
+	Sort       string
+	Order      string
 	Limit      int
 	JSON       cmdutil.JSONFlags
+	Web        bool
 }
 
 type repoEntry struct {
@@ -41,13 +43,22 @@ func NewCmdSearchRepos(f *cmdutil.Factory) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "repos <query>",
 		Short: "Search repositories",
-		Long:  "Search for repositories on Copia matching the given query string.",
+		Long: `Search for repositories on Copia matching the given query string.
+
+Use --web to open the explore page of Copia with the query and --sort and
+--order instead; no API call is made, so no token is needed.`,
 		Example: `  $ copia-cli search repos plc
-  $ copia-cli search repos "automation controller" --json fullName,description`,
+  $ copia-cli search repos plc --sort stars
+  $ copia-cli search repos "automation controller" \
+      --json fullName,description
+  $ copia-cli search repos plc --sort stars --web`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.Query = args[0]
 			opts.IO = f.IOStreams
+			if opts.Web {
+				return openSearch(f, opts)
+			}
 
 			host, token, err := f.ResolveAuth()
 			if err != nil {
@@ -55,15 +66,77 @@ func NewCmdSearchRepos(f *cmdutil.Factory) *cobra.Command {
 			}
 			opts.Host = host
 			opts.Token = token
-			opts.HTTPClient = &http.Client{}
+			opts.HTTPClient = cmdutil.NewHTTPClient()
 			return SearchRun(opts)
 		},
 	}
 
+	cmd.Flags().StringVar(&opts.Sort, "sort", "", "Sort fetched repositories: {alpha|created|updated|size|stars|forks}")
+	cmd.Flags().StringVar(&opts.Order, "order", "desc", "Order of repositories returned, ignored unless '--sort' flag is specified: {asc|desc}")
 	cmd.Flags().IntVarP(&opts.Limit, "limit", "L", 30, "Maximum number of results")
+	cmd.Flags().BoolVarP(&opts.Web, "web", "w", false, "Open the search query in the web browser")
 	cmdutil.AddJSONFlags(cmd, &opts.JSON, validJSONFields)
 
 	return cmd
+}
+
+// webSorts maps --sort and --order to the sort names of the Gitea 1.26
+// explore page (repo_model.OrderByFlatMap).
+var webSorts = map[string]map[string]string{
+	"asc": {
+		"alpha": "alphabetically", "created": "oldest", "updated": "leastupdate",
+		"size": "size", "stars": "feweststars", "forks": "fewestforks",
+	},
+	"desc": {
+		"alpha": "reversealphabetically", "created": "newest", "updated": "recentupdate",
+		"size": "reversesize", "stars": "moststars", "forks": "mostforks",
+	},
+}
+
+// openSearch opens the explore page with the query and the sort in the
+// browser. It makes no API call, so no token is needed.
+func openSearch(f *cmdutil.Factory, opts *SearchOptions) error {
+	order, err := validateSort(opts)
+	if err != nil {
+		return err
+	}
+	host, err := f.ResolveHost()
+	if err != nil {
+		return err
+	}
+
+	q := url.Values{}
+	q.Set("q", opts.Query)
+	if opts.Sort != "" {
+		q.Set("sort", webSorts[order][opts.Sort])
+	}
+	return cmdutil.OpenInBrowser(opts.IO, f.Browser, fmt.Sprintf("https://%s/explore/repos?%s", host, q.Encode()))
+}
+
+// validateSort checks --sort and --order and returns the order, "desc" when
+// it is empty.
+func validateSort(opts *SearchOptions) (string, error) {
+	switch opts.Sort {
+	case "", "alpha", "created", "updated", "size", "stars", "forks":
+	default:
+		return "", fmt.Errorf("invalid sort %q: valid values are {alpha|created|updated|size|stars|forks}", opts.Sort)
+	}
+
+	order := opts.Order
+	if order == "" {
+		order = "desc"
+	}
+	if order != "asc" && order != "desc" {
+		return "", fmt.Errorf("invalid order %q: valid values are {asc|desc}", opts.Order)
+	}
+	return order, nil
+}
+
+// decodeSearch unwraps the repositories from one page of search results.
+func decodeSearch(body []byte) ([]repoEntry, error) {
+	var result searchResponse
+	err := json.Unmarshal(body, &result)
+	return result.Data, err
 }
 
 func SearchRun(opts *SearchOptions) error {
@@ -71,41 +144,28 @@ func SearchRun(opts *SearchOptions) error {
 		return err
 	}
 
-	u := fmt.Sprintf("https://%s/api/v1/repos/search?q=%s&limit=%d",
-		opts.Host, url.QueryEscape(opts.Query), opts.Limit)
-
-	req, err := http.NewRequest("GET", u, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "token "+opts.Token)
-
-	resp, err := opts.HTTPClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("connecting to %s: %w", opts.Host, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("API error (HTTP %d)", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
+	order, err := validateSort(opts)
 	if err != nil {
 		return err
 	}
 
-	var result searchResponse
-	if err := json.Unmarshal(body, &result); err != nil {
+	u := fmt.Sprintf("https://%s/api/v1/repos/search?q=%s",
+		opts.Host, url.QueryEscape(opts.Query))
+	if opts.Sort != "" {
+		u += "&sort=" + opts.Sort + "&order=" + order
+	}
+
+	repos, err := cmdutil.FetchPages(opts.HTTPClient, u, opts.Token, opts.Limit, decodeSearch)
+	if err != nil {
 		return err
 	}
 
 	if opts.JSON.IsJSON() {
-		return cmdutil.PrintJSON(opts.IO.Out, result.Data)
+		return opts.JSON.Print(opts.IO.Out, repos)
 	}
 
 	w := tabwriter.NewWriter(opts.IO.Out, 0, 0, 2, ' ', 0)
-	for _, r := range result.Data {
+	for _, r := range repos {
 		_, _ = fmt.Fprintf(w, "%s\t%s\n", r.FullName, r.Description)
 	}
 	return w.Flush()

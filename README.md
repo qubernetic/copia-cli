@@ -18,6 +18,8 @@ Copia CLI is supported for users on [Copia Cloud](https://app.copia.io), with su
 
 For [installation options see below](#installation), for usage instructions [see the manual](https://qubernetic.github.io/copia-cli/manual/).
 
+The manual and the installation guides are on the [documentation site](https://qubernetic.github.io/copia-cli/). CI builds it with MkDocs Material and the Qubernetic docs theme, which is a private submodule (`docs/site/brand`). Without access to the theme a local build of the site fails; the CLI, the tests and the generated command pages (`just docs`) build as usual.
+
 ## Contributing
 
 If anything feels off, or if you feel that some functionality is missing, please check out the [contributing page](CONTRIBUTING.md). There you will find instructions for sharing your feedback, building the tool locally, and submitting pull requests to the project.
@@ -25,28 +27,28 @@ If anything feels off, or if you feel that some functionality is missing, please
 <!-- this anchor is linked to from elsewhere, so avoid renaming it -->
 ## Installation
 
-### [macOS](docs/install_macos.md)
+### [macOS](https://qubernetic.github.io/copia-cli/install/macos/)
 
-- [Homebrew](docs/install_macos.md#homebrew)
-- [Precompiled binaries](docs/install_macos.md#precompiled-binaries) on [releases page][]
+- [Homebrew](https://qubernetic.github.io/copia-cli/install/macos/#homebrew)
+- [Precompiled binaries](https://qubernetic.github.io/copia-cli/install/macos/#precompiled-binaries) on [releases page][]
 
-### [Linux](docs/install_linux.md)
+### [Linux](https://qubernetic.github.io/copia-cli/install/linux/)
 
-- [Homebrew](docs/install_linux.md#homebrew)
-- [Fedora/RHEL (COPR)](docs/install_linux.md#fedorarhel-copr)
-- [Debian/Ubuntu (.deb)](docs/install_linux.md#debianubuntu-deb)
-- [Snap](docs/install_linux.md#snap)
-- [AUR (Arch Linux)](docs/install_linux.md#aur-arch-linux)
-- [Precompiled binaries](docs/install_linux.md#precompiled-binaries) on [releases page][]
+- [Homebrew](https://qubernetic.github.io/copia-cli/install/linux/#homebrew)
+- [Fedora/RHEL (COPR)](https://qubernetic.github.io/copia-cli/install/linux/#fedorarhel-copr)
+- [Debian/Ubuntu (.deb)](https://qubernetic.github.io/copia-cli/install/linux/#debianubuntu-deb)
+- [Snap](https://qubernetic.github.io/copia-cli/install/linux/#snap)
+- [AUR (Arch Linux)](https://qubernetic.github.io/copia-cli/install/linux/#aur-arch-linux)
+- [Precompiled binaries](https://qubernetic.github.io/copia-cli/install/linux/#precompiled-binaries) on [releases page][]
 
-### [Windows](docs/install_windows.md)
+### [Windows](https://qubernetic.github.io/copia-cli/install/windows/)
 
-- [WinGet](docs/install_windows.md#winget)
-- [Precompiled binaries](docs/install_windows.md#precompiled-binaries) on [releases page][]
+- [WinGet](https://qubernetic.github.io/copia-cli/install/windows/#winget)
+- [Precompiled binaries](https://qubernetic.github.io/copia-cli/install/windows/#precompiled-binaries) on [releases page][]
 
 ### Build from source
 
-See here on how to [build Copia CLI from source](docs/install_source.md).
+See here on how to [build Copia CLI from source](https://qubernetic.github.io/copia-cli/install/source/).
 
 ## Quick Start
 
@@ -56,27 +58,93 @@ $ copia-cli auth login --host app.copia.io --token YOUR_TOKEN
 
 # List your repos
 $ copia-cli repo list
+$ copia-cli repo list --visibility private
 
 # Create an issue
-$ copia-cli issue create --title "Fix sensor mapping" --label bug
+$ copia-cli issue create --title "Fix sensor mapping" --label bug --assignee @me --milestone v1.0
+
+# Show the open issues assigned to you, mentioning you and opened by you
+$ copia-cli issue status
+
+# List the issues assigned to you in that milestone
+$ copia-cli issue list --assignee @me --milestone v1.0 --search "sensor"
+
+# Print only some fields as JSON, filter them with a jq expression, or format them with a Go template
+$ copia-cli issue list --json number,title
+$ copia-cli issue list --json number,title --jq '.[].title'
+$ copia-cli issue list --json number,title --template '{{range .}}{{tablerow .number .title}}{{end}}'
+
+# Move it to another milestone, by name or ID
+$ copia-cli issue edit 13 --milestone v1.1
+
+# Hand it over and drop a label
+$ copia-cli issue edit 13 --add-assignee jane --remove-assignee john --remove-label triage
 
 # Open a PR
 $ copia-cli pr create --title "feat: add safety interlock" --base develop
 
+# Open a draft PR from the current branch, title and body filled from its commits
+$ copia-cli pr create --fill --draft --base develop
+
+# Take the PR body from a file (or "-" for standard input)
+$ copia-cli pr create --title "docs: add manual" --base develop --body-file notes.md
+
+# Open a PR with metadata and request reviews from a person and a team
+$ copia-cli pr create --title "feat: add safety interlock" --base develop \
+    --assignee @me --label plc --milestone v1.0 --reviewer jane --reviewer my-org/controls
+
+# Show the PR of the current branch, your open PRs and the ones waiting for your review
+$ copia-cli pr status
+
 # Merge it
-$ copia-cli pr merge 7 --merge --delete-branch
+$ copia-cli pr merge 7 --merge --delete-branch --body "Tested on the line 3 PLC"
+
+# Open the repository, or issue or pull request 7, in the browser (--no-browser prints the URL)
+$ copia-cli browse
+$ copia-cli browse 7
+
+# Open a file at a line on a branch, its blame view, or the repository settings
+$ copia-cli browse main.st:312 --branch bug-fix
+$ copia-cli browse main.st:312 --blame
+$ copia-cli browse --settings
+
+# Your assigned issues and PRs, review requests, mentions and notifications across repositories
+$ copia-cli status --org my-org --exclude my-org/archive
+
+# Show and change the settings (output, browser, pager, editor)
+$ copia-cli config list
+$ copia-cli config set browser "firefox --new-tab"
+$ copia-cli config get browser
+
+# Page long output through less; COPIA_PAGER= turns it off for one call
+$ copia-cli config set pager "less -R"
+
+# Print JSON with every field by default; COPIA_OUTPUT=table overrides it for one call
+$ copia-cli config set output json
+$ copia-cli issue list --jq '.[].title'
+
+# Shortcuts: copia-cli bugs urgent runs issue list --label urgent
+$ copia-cli alias set bugs 'issue list --label $1'
+$ copia-cli alias list
+
+# In a fork with an upstream remote, work on the upstream repository by default
+$ copia-cli repo set-default my-org/my-repo
+$ copia-cli repo set-default --view
+
+# Call any API endpoint: fetch every page and keep only the titles
+$ copia-cli api --paginate /repos/my-org/my-repo/issues --jq '.[].title'
 ```
 
 ## Shell Completion
 
-Shell completion is available for Bash, Zsh, Fish, and PowerShell. See `copia-cli completion --help` or the [manual](https://qubernetic.github.io/copia-cli/manual/copia-cli_completion) for setup instructions.
+Shell completion is available for Bash, Zsh, Fish, and PowerShell. See `copia-cli completion --help` or the [manual](https://qubernetic.github.io/copia-cli/manual/copia-cli_completion/) for setup instructions.
 
 ## Roadmap
 
 - **Phase 1 (MVP):** auth, repo list/view/clone, issue CRUD, pr CRUD, label list/create — **Done**
 - **Phase 2 (Workflow):** release CRUD, repo create/delete/fork, pr review/diff/checkout, issue edit, Homebrew tap — **Done**
-- **Phase 3 (Power Features):** `api` escape hatch, search, orgs, notifications, `-R`/`--repo` flag, completion, Jekyll manual, AGPL license — **Done**
-- **Phase 4 (Nice to Have):** ~~winget~~, ~~COPR~~, ~~AUR~~, ~~Snap~~, OS keyring, aliases, browse, status dashboard, ssh-key, pr checks, scheduled integration tests
+- **Phase 3 (Power Features):** `api` escape hatch, search, orgs, notifications, `-R`/`--repo` flag, completion, manual, AGPL license — **Done**
+- **Phase 4 (Nice to Have):** ~~winget~~, ~~COPR~~, ~~AUR~~, ~~Snap~~, ~~OS keyring~~, ~~aliases~~, ~~browse~~, ~~status dashboard~~, ssh-key, pr checks, scheduled integration tests
 
 ## License
 

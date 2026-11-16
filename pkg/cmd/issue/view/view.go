@@ -8,11 +8,12 @@ import (
 	"strconv"
 
 	"github.com/spf13/cobra"
+	"github.com/qubernetic/copia-cli/pkg/cmd/issue/shared"
 	"github.com/qubernetic/copia-cli/pkg/cmdutil"
 	"github.com/qubernetic/copia-cli/pkg/iostreams"
 )
 
-var validJSONFields = []string{"number", "title", "body", "state", "author", "labels", "created_at", "comments"}
+var validJSONFields = []string{"number", "title", "body", "state", "user", "labels", "created_at", "comments", "html_url"}
 
 // ViewOptions holds all inputs for the issue view command.
 type ViewOptions struct {
@@ -24,6 +25,8 @@ type ViewOptions struct {
 	Repo       string
 	Number     int64
 	JSON       cmdutil.JSONFlags
+	Comments   bool
+	Web        bool
 }
 
 type userRef struct {
@@ -53,12 +56,21 @@ func NewCmdView(f *cmdutil.Factory) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "view <number>",
 		Short: "View an issue",
-		Long:  "Display the title, body, and other information about an issue.",
+		Long: `Display the title, body, and other information about an issue.
+
+With --web, open the issue page in the browser instead. No API call is made,
+so no token is needed.`,
 		Example: `  # View an issue
   $ copia-cli issue view 12
 
+  # View an issue with its comments
+  $ copia-cli issue view 12 --comments
+
   # View as JSON
-  $ copia-cli issue view 12 --json number,title,state`,
+  $ copia-cli issue view 12 --json number,title,state
+
+  # Open the issue in the browser
+  $ copia-cli issue view 12 --web`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			num, err := strconv.ParseInt(args[0], 10, 64)
@@ -66,6 +78,18 @@ func NewCmdView(f *cmdutil.Factory) *cobra.Command {
 				return fmt.Errorf("invalid issue number: %s", args[0])
 			}
 			opts.Number = num
+
+			if opts.Web {
+				return shared.OpenIssue(f, num)
+			}
+
+			if opts.Comments {
+				opts.JSON.DropDefault()
+			}
+			if opts.Comments && opts.JSON.IsJSON() {
+				return fmt.Errorf("specify only one of --comments or --json")
+			}
+
 			opts.IO = f.IOStreams
 
 			host, token, err := f.ResolveAuth()
@@ -81,11 +105,13 @@ func NewCmdView(f *cmdutil.Factory) *cobra.Command {
 			}
 			opts.Owner = owner
 			opts.Repo = repo
-			opts.HTTPClient = &http.Client{}
+			opts.HTTPClient = cmdutil.NewHTTPClient()
 			return ViewRun(opts)
 		},
 	}
 
+	cmd.Flags().BoolVarP(&opts.Comments, "comments", "c", false, "View comments")
+	cmd.Flags().BoolVarP(&opts.Web, "web", "w", false, "Open the issue in the browser")
 	cmdutil.AddJSONFlags(cmd, &opts.JSON, validJSONFields)
 
 	return cmd
@@ -124,8 +150,21 @@ func ViewRun(opts *ViewOptions) error {
 		return err
 	}
 
+	var comments []shared.Comment
+	if opts.Comments {
+		comments, err = shared.FetchComments(opts.HTTPClient, opts.Host, opts.Token, opts.Owner, opts.Repo, opts.Number)
+		if err != nil {
+			return err
+		}
+	}
+
+	if err := opts.IO.StartPager(); err != nil {
+		_, _ = fmt.Fprintf(opts.IO.ErrOut, "failed to start pager: %v\n", err)
+	}
+	defer opts.IO.StopPager()
+
 	if opts.JSON.IsJSON() {
-		return cmdutil.PrintJSON(opts.IO.Out, issue)
+		return opts.JSON.Print(opts.IO.Out, issue)
 	}
 
 	_, _ = fmt.Fprintf(opts.IO.Out, "#%d %s\n", issue.Number, issue.Title)
@@ -145,6 +184,8 @@ func ViewRun(opts *ViewOptions) error {
 	if issue.Body != "" {
 		_, _ = fmt.Fprintf(opts.IO.Out, "\n%s\n", issue.Body)
 	}
+
+	shared.PrintComments(opts.IO.Out, comments)
 
 	_, _ = fmt.Fprintf(opts.IO.Out, "\n%s\n", issue.HTMLURL)
 	return nil

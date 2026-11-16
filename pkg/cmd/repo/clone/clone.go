@@ -2,8 +2,11 @@ package clone
 
 import (
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -29,7 +32,15 @@ func NewCmdClone(f *cmdutil.Factory) *cobra.Command {
 		Short: "Clone a repository",
 		Long: `Clone a Copia repository locally. The repository can be specified as
 owner/repo or as a full URL. Private repositories are automatically
-authenticated using your configured token.`,
+authenticated using your configured token.
+
+The token is sent only to the configured host: an https URL whose host and
+port match it. Any other URL (another host, http, SSH) is cloned without
+credentials, and so is any other host the configured one redirects to. git
+gets the token from a credential helper scoped to the configured host,
+never from the clone URL or the command line, so it is not stored in the
+remote or in your credential store. A token with a character outside
+printable ASCII, such as a line break, is refused before git runs.`,
 		Example: `  # Clone by owner/repo
   $ copia-cli repo clone my-org/my-repo
 
@@ -59,53 +70,112 @@ authenticated using your configured token.`,
 }
 
 func CloneRun(opts *CloneOptions) error {
-	cloneURL := buildCloneURL(opts.Host, opts.Repo)
-
-	// Use token in URL for authentication, then remove it from the remote.
-	authURL := cloneURL
-	if opts.Token != "" && !strings.HasPrefix(opts.Repo, "git@") {
-		authURL = buildAuthCloneURL(opts.Host, opts.Token, opts.Repo)
+	existing, err := configCount(os.Getenv("GIT_CONFIG_COUNT"))
+	if err != nil {
+		return err
 	}
-
-	args := []string{"clone", "--", authURL}
-	dir := opts.Dir
-	if dir != "" {
-		args = append(args, dir)
-	} else {
-		// Derive dir name from repo for post-clone remote fix
-		parts := strings.Split(strings.TrimSuffix(opts.Repo, ".git"), "/")
-		dir = parts[len(parts)-1]
+	args, env, err := cloneCommand(opts, existing)
+	if err != nil {
+		return err
 	}
 
 	gitCmd := exec.Command("git", args...)
 	gitCmd.Stdout = opts.IO.Out
 	gitCmd.Stderr = opts.IO.ErrOut
 	gitCmd.Stdin = os.Stdin
-	gitCmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	gitCmd.Env = append(os.Environ(), env...)
 
-	if err := gitCmd.Run(); err != nil {
-		return err
+	return gitCmd.Run()
+}
+
+// credentialHelper answers git's `get` with the token from
+// COPIA_CLONE_TOKEN and ignores `store` and `erase`, so git keeps no copy
+// of it. The token is read from the environment, never the command line.
+const credentialHelper = `!f() { test "$1" = get || return 0; printf 'username=token\npassword=%s\n' "$COPIA_CLONE_TOKEN"; }; f`
+
+// cloneCommand returns the git arguments and the environment entries to add
+// for a clone. The token never goes into the arguments: when the URL points
+// at the configured host over https, git gets it from credentialHelper,
+// which git's config scopes to that host. The first, empty helper entry
+// drops the user's helpers for that host only. git asks for the credential
+// per origin, so after a redirect to another origin it has none to send.
+// existing is the number of GIT_CONFIG_* entries already in the
+// environment, which are kept.
+func cloneCommand(opts *CloneOptions, existing int) (args, env []string, err error) {
+	cloneURL := buildCloneURL(opts.Host, opts.Repo)
+	credEnv, err := CredentialEnv(opts.Host, opts.Token, cloneURL, existing)
+	if err != nil {
+		return nil, nil, err
 	}
 
-	// Remove token from the stored remote URL
-	if opts.Token != "" && authURL != cloneURL {
-		setCmd := exec.Command("git", "-C", dir, "remote", "set-url", "origin", cloneURL)
-		_ = setCmd.Run()
+	args = []string{"clone", "--", cloneURL}
+	if opts.Dir != "" {
+		args = append(args, opts.Dir)
+	}
+	return args, append([]string{"GIT_TERMINAL_PROMPT=0"}, credEnv...), nil
+}
+
+// CredentialEnv returns the environment entries that hand token to git for
+// gitURL through credentialHelper, scoped to host, or none when the token is
+// empty or gitURL is not https on host. repo sync uses it for git fetch.
+func CredentialEnv(host, token, gitURL string, existing int) ([]string, error) {
+	configured, err := cmdutil.ParseHost(host)
+	if err != nil {
+		return nil, err
+	}
+	if !cmdutil.IsPrintableASCII(token) {
+		return nil, fmt.Errorf("invalid token: it may contain only printable ASCII characters")
+	}
+	if token == "" || !cmdutil.MatchesHost(configured, gitURL) {
+		return nil, nil
 	}
 
-	return nil
+	key := credentialKey(configured)
+	return []string{
+		"COPIA_CLONE_TOKEN=" + token,
+		fmt.Sprintf("GIT_CONFIG_COUNT=%d", existing+2),
+		fmt.Sprintf("GIT_CONFIG_KEY_%d=%s", existing, key),
+		fmt.Sprintf("GIT_CONFIG_VALUE_%d=", existing),
+		fmt.Sprintf("GIT_CONFIG_KEY_%d=%s", existing+1, key),
+		fmt.Sprintf("GIT_CONFIG_VALUE_%d=%s", existing+1, credentialHelper),
+	}, nil
+}
+
+// ConfigCount parses GIT_CONFIG_COUNT of the environment; see configCount.
+func ConfigCount() (int, error) {
+	return configCount(os.Getenv("GIT_CONFIG_COUNT"))
+}
+
+// credentialKey returns the git config key that scopes a credential helper
+// to the configured host: its lower-case name, IPv6 in brackets, and the
+// port unless it is 443.
+func credentialKey(configured *url.URL) string {
+	host := strings.ToLower(configured.Hostname())
+	if port := configured.Port(); port != "" && port != "443" {
+		host = net.JoinHostPort(host, port)
+	} else if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	return "credential.https://" + host + ".helper"
+}
+
+// configCount parses GIT_CONFIG_COUNT. Unset or empty means no entries; any
+// other value that is not a non-negative integer is an error, as it is for
+// git, so the entries already set are never overwritten.
+func configCount(value string) (int, error) {
+	if value == "" {
+		return 0, nil
+	}
+	n, err := strconv.Atoi(value)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("invalid GIT_CONFIG_COUNT %q: must be a non-negative integer", value)
+	}
+	return n, nil
 }
 
 func buildCloneURL(host, repo string) string {
-	if strings.HasPrefix(repo, "https://") || strings.HasPrefix(repo, "git@") {
+	if strings.Contains(repo, "://") || strings.HasPrefix(repo, "git@") {
 		return repo
 	}
 	return fmt.Sprintf("https://%s/%s.git", host, repo)
-}
-
-func buildAuthCloneURL(host, token, repo string) string {
-	if strings.HasPrefix(repo, "https://") {
-		return strings.Replace(repo, "https://", fmt.Sprintf("https://token:%s@", token), 1)
-	}
-	return fmt.Sprintf("https://token:%s@%s/%s.git", token, host, repo)
 }

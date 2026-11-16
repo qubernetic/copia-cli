@@ -1,0 +1,3724 @@
+// Package workflows checks the GitHub Actions workflows under .github/workflows,
+// the composite actions under .github/actions and every local action they use,
+// and keeps the integration tests from printing the test account's data in
+// the CI log.
+package workflows
+
+import (
+	"crypto/sha256"
+	"encoding/base64"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"sort"
+	"strings"
+	"testing"
+
+	"gopkg.in/yaml.v3"
+)
+
+type step struct {
+	ID   string `yaml:"id"`
+	Name string `yaml:"name"`
+	Uses string `yaml:"uses"`
+	Run  string `yaml:"run"`
+	With struct {
+		Script             string `yaml:"script"`
+		PersistCredentials *bool  `yaml:"persist-credentials"`
+		Version            string `yaml:"version"`
+	} `yaml:"with"`
+}
+
+// actionFile covers both a workflow (jobs) and an action (runs).
+type actionFile struct {
+	Jobs map[string]struct {
+		Uses  string `yaml:"uses"`
+		Needs any    `yaml:"needs"`
+		Steps []step `yaml:"steps"`
+	} `yaml:"jobs"`
+	Runs struct {
+		Using      string   `yaml:"using"`
+		Steps      []step   `yaml:"steps"`
+		Args       []string `yaml:"args"`
+		Entrypoint string   `yaml:"entrypoint"`
+	} `yaml:"runs"`
+}
+
+func parseActionFile(file string, data []byte) (actionFile, error) {
+	var f actionFile
+	if err := yaml.Unmarshal(data, &f); err != nil {
+		return f, fmt.Errorf("%s: %w", file, err)
+	}
+	return f, nil
+}
+
+func sortedJobs(f actionFile) []string {
+	names := make([]string, 0, len(f.Jobs))
+	for name := range f.Jobs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// scriptExpressions returns one message per place in a workflow or action
+// whose script source contains `${{`: a `run:` block, the `script:` input of
+// actions/github-script, or a docker action's `runs.args` entry or
+// `runs.entrypoint`.
+func scriptExpressions(file string, data []byte) ([]string, error) {
+	f, err := parseActionFile(file, data)
+	if err != nil {
+		return nil, err
+	}
+	return expressions(file, f), nil
+}
+
+func expressions(file string, f actionFile) []string {
+	var offenders []string
+	check := func(where string, steps []step) {
+		for i, s := range steps {
+			if strings.Contains(s.Run, "${{") {
+				offenders = append(offenders, fmt.Sprintf("%s: %s step %d (%q): run block contains ${{; pass the value through env", file, where, i+1, s.Name))
+			}
+			if isGitHubScript(s.Uses) && strings.Contains(s.With.Script, "${{") {
+				offenders = append(offenders, fmt.Sprintf("%s: %s step %d (%q): github-script script contains ${{; pass the value through env", file, where, i+1, s.Name))
+			}
+		}
+	}
+
+	for _, name := range sortedJobs(f) {
+		check(fmt.Sprintf("job %q", name), f.Jobs[name].Steps)
+	}
+	check("runs", f.Runs.Steps)
+
+	if strings.EqualFold(f.Runs.Using, "docker") {
+		for i, arg := range f.Runs.Args {
+			if strings.Contains(arg, "${{") {
+				offenders = append(offenders, fmt.Sprintf("%s: runs.args entry %d contains ${{; pass the value through env", file, i+1))
+			}
+		}
+		if strings.Contains(f.Runs.Entrypoint, "${{") {
+			offenders = append(offenders, fmt.Sprintf("%s: runs.entrypoint contains ${{; pass the value through env", file))
+		}
+	}
+	return offenders
+}
+
+func isGitHubScript(uses string) bool {
+	return strings.HasPrefix(strings.ToLower(uses), "actions/github-script@")
+}
+
+var (
+	pinnedRef      = regexp.MustCompile(`^[^@\s]+@[0-9a-f]{40}$`)
+	versionComment = regexp.MustCompile(`^#\s*v\S+`)
+)
+
+// unpinnedUses returns one message per remote `uses:` of a workflow or action
+// (a job's reusable workflow, a job step or a `runs` step) that does not name
+// a full 40-character commit SHA followed by a `# v<version>` comment. Local
+// actions (`./`) and docker images (`docker://`) are left out.
+func unpinnedUses(file string, data []byte) ([]string, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil, fmt.Errorf("%s: %w", file, err)
+	}
+	if len(doc.Content) == 0 {
+		return nil, nil
+	}
+	var out []string
+	check := func(where string, uses *yaml.Node) {
+		if uses == nil || uses.Value == "" || strings.HasPrefix(uses.Value, "./") || strings.HasPrefix(uses.Value, "docker://") {
+			return
+		}
+		comment := strings.TrimSpace(uses.LineComment)
+		if pinnedRef.MatchString(uses.Value) && versionComment.MatchString(comment) {
+			return
+		}
+		out = append(out, fmt.Sprintf("%s: %s uses %s; pin it to a full 40-character commit SHA followed by a # v<version> comment", file, where, strings.TrimSpace(uses.Value+" "+comment)))
+	}
+	checkSteps := func(where string, steps *yaml.Node) {
+		if steps == nil {
+			return
+		}
+		for i, s := range steps.Content {
+			check(fmt.Sprintf("%s step %d", where, i+1), mappingValue(s, "uses"))
+		}
+	}
+
+	root := doc.Content[0]
+	if jobs := mappingValue(root, "jobs"); jobs != nil && jobs.Kind == yaml.MappingNode {
+		for j := 0; j+1 < len(jobs.Content); j += 2 {
+			where := fmt.Sprintf("job %q", jobs.Content[j].Value)
+			check(where, mappingValue(jobs.Content[j+1], "uses"))
+			checkSteps(where, mappingValue(jobs.Content[j+1], "steps"))
+		}
+	}
+	checkSteps("runs", mappingValue(mappingValue(root, "runs"), "steps"))
+	return out, nil
+}
+
+// localUses returns every `uses: ./<path>` of a workflow or action: the steps
+// of its jobs and of `runs`, and reusable workflows called by a job.
+func localUses(f actionFile) []string {
+	var uses []string
+	add := func(u string) {
+		if strings.HasPrefix(u, "./") {
+			uses = append(uses, u)
+		}
+	}
+	for _, name := range sortedJobs(f) {
+		add(f.Jobs[name].Uses)
+		for _, s := range f.Jobs[name].Steps {
+			add(s.Uses)
+		}
+	}
+	for _, s := range f.Runs.Steps {
+		add(s.Uses)
+	}
+	return uses
+}
+
+// localTargets resolves `uses: ./<path>` to the files it runs, relative to the
+// repository root: the reusable workflow itself, or <path>/action.yml and
+// <path>/action.yaml, whichever exist. It returns a message instead when the
+// path leaves the repository or names no file.
+func localTargets(repo, file, uses string) ([]string, string) {
+	dir := path.Clean(uses)
+	if dir == ".." || strings.HasPrefix(dir, "../") {
+		return nil, fmt.Sprintf("%s: uses %s, which points outside the repository", file, uses)
+	}
+	exists := func(name string) bool {
+		_, err := os.Stat(filepath.Join(repo, filepath.FromSlash(name)))
+		return err == nil
+	}
+
+	if ext := path.Ext(dir); ext == ".yml" || ext == ".yaml" {
+		if !exists(dir) {
+			return nil, fmt.Sprintf("%s: uses %s, but %s does not exist", file, uses, dir)
+		}
+		return []string{dir}, ""
+	}
+
+	var targets []string
+	for _, name := range []string{"action.yml", "action.yaml"} {
+		if exists(path.Join(dir, name)) {
+			targets = append(targets, path.Join(dir, name))
+		}
+	}
+	if len(targets) == 0 {
+		return nil, fmt.Sprintf("%s: uses %s, but %s has no action.yml or action.yaml", file, uses, dir)
+	}
+	return targets, ""
+}
+
+// scanRepo checks every file walkRepo visits. It returns one message per
+// expression in script source and per `uses: ./<path>` that names no file.
+func scanRepo(repo string) ([]string, error) {
+	return walkRepo(repo, func(file string, _ []byte, f actionFile) ([]string, error) {
+		return expressions(file, f), nil
+	})
+}
+
+// scanPins returns one message per remote `uses:` that is not pinned to a full
+// commit SHA with a version comment, in every file walkRepo visits. A local
+// path that names no file is left to scanRepo.
+func scanPins(repo string) ([]string, error) {
+	var offenders []string
+	_, err := walkRepo(repo, func(file string, data []byte, _ actionFile) ([]string, error) {
+		found, err := unpinnedUses(file, data)
+		offenders = append(offenders, found...)
+		return nil, err
+	})
+	return offenders, err
+}
+
+// walkRepo calls visit on every workflow under .github/workflows, every action
+// under .github/actions/* and every local action or reusable workflow they
+// use, following local actions that use local actions in turn. It returns the
+// messages visit returns and one per `uses: ./<path>` that names no file.
+func walkRepo(repo string, visit func(file string, data []byte, f actionFile) ([]string, error)) ([]string, error) {
+	var queue []string
+	for _, pattern := range []string{".github/workflows/*.y*ml", ".github/actions/*/action.y*ml"} {
+		matches, err := filepath.Glob(filepath.Join(repo, filepath.FromSlash(pattern)))
+		if err != nil {
+			return nil, err
+		}
+		for _, m := range matches {
+			rel, err := filepath.Rel(repo, m)
+			if err != nil {
+				return nil, err
+			}
+			queue = append(queue, filepath.ToSlash(rel))
+		}
+	}
+	if len(queue) == 0 {
+		return nil, errors.New("no workflow files found")
+	}
+
+	seen := map[string]bool{}
+	var offenders []string
+	for len(queue) > 0 {
+		file := queue[0]
+		queue = queue[1:]
+		if seen[file] {
+			continue
+		}
+		seen[file] = true
+
+		data, err := os.ReadFile(filepath.Join(repo, filepath.FromSlash(file)))
+		if err != nil {
+			return nil, err
+		}
+		f, err := parseActionFile(file, data)
+		if err != nil {
+			return nil, err
+		}
+		found, err := visit(file, data, f)
+		if err != nil {
+			return nil, err
+		}
+		offenders = append(offenders, found...)
+		for _, uses := range localUses(f) {
+			targets, problem := localTargets(repo, file, uses)
+			if problem != "" {
+				offenders = append(offenders, problem)
+			}
+			queue = append(queue, targets...)
+		}
+	}
+	return offenders, nil
+}
+
+// TestScriptsHaveNoExpressions keeps values from outside the workflow file
+// out of script source: a `${{ }}` inside `run:` or a github-script `script:`
+// is pasted into the script before the shell or Node parses it. Pass the
+// value through the step's `env:` and read it from the environment instead.
+// The check covers every local action a workflow uses, at any depth.
+func TestScriptsHaveNoExpressions(t *testing.T) {
+	offenders, err := scanRepo(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range offenders {
+		t.Error(o)
+	}
+}
+
+func TestScriptExpressions(t *testing.T) {
+	tests := []struct {
+		name string
+		yaml string
+		want int
+	}{
+		{"workflow run with expression", `
+jobs:
+  build:
+    steps:
+      - run: echo "${{ github.ref_name }}"
+`, 1},
+		{"workflow github-script with expression", `
+jobs:
+  build:
+    steps:
+      - uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: core.info('${{ github.event.issue.title }}')
+`, 1},
+		{"composite action run with expression", `
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: echo "${{ inputs.version }}"
+`, 1},
+		{"composite action github-script with expression", `
+runs:
+  using: composite
+  steps:
+    - uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+      with:
+        script: core.info('${{ inputs.version }}')
+`, 1},
+		{"expression in env and if", `
+jobs:
+  build:
+    steps:
+      - if: ${{ github.event_name == 'push' }}
+        env:
+          REF: ${{ github.ref_name }}
+        run: echo "$REF"
+`, 0},
+		{"github-script without expression", `
+jobs:
+  build:
+    steps:
+      - uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          TITLE: ${{ github.event.issue.title }}
+        with:
+          script: core.info(process.env.TITLE)
+`, 0},
+		{"script input of another action", `
+jobs:
+  build:
+    steps:
+      - uses: example/other-action@v1
+        with:
+          script: ${{ github.ref_name }}
+`, 0},
+		{"composite action with expression in env", `
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: echo "$VERSION"
+`, 0},
+		{"docker action args with expression", `
+runs:
+  using: docker
+  image: Dockerfile
+  args:
+    - --name
+    - ${{ inputs.name }}
+`, 1},
+		{"docker action entrypoint with expression", `
+runs:
+  using: docker
+  image: Dockerfile
+  entrypoint: ${{ inputs.entrypoint }}
+`, 1},
+		{"docker action without expression", `
+runs:
+  using: docker
+  image: Dockerfile
+  entrypoint: /entrypoint.sh
+  args:
+    - --name
+  env:
+    NAME: ${{ inputs.name }}
+`, 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := scriptExpressions("test.yml", []byte(tt.yaml))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != tt.want {
+				t.Errorf("scriptExpressions() = %q, want %d offenders", got, tt.want)
+			}
+		})
+	}
+}
+
+// writeRepo writes files (path relative to the repository root -> content)
+// into a temporary directory and returns its path.
+func writeRepo(t *testing.T, files map[string]string) string {
+	t.Helper()
+	repo := t.TempDir()
+	for name, content := range files {
+		path := filepath.Join(repo, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return repo
+}
+
+const usesNested = `
+jobs:
+  build:
+    steps:
+      - uses: ./nested/a/b
+`
+
+func TestScanRepo(t *testing.T) {
+	tests := []struct {
+		name  string
+		files map[string]string
+		want  []string
+	}{
+		{"nested local action with expression", map[string]string{
+			".github/workflows/ci.yml": usesNested,
+			"nested/a/b/action.yml": `
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: echo "${{ inputs.version }}"
+`,
+		}, []string{"nested/a/b/action.yml: runs step 1"}},
+		{"nested local action without expression", map[string]string{
+			".github/workflows/ci.yml": usesNested,
+			"nested/a/b/action.yaml": `
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: echo "$VERSION"
+`,
+		}, nil},
+		{"missing local action", map[string]string{
+			".github/workflows/ci.yml": usesNested,
+		}, []string{".github/workflows/ci.yml: uses ./nested/a/b, but nested/a/b has no action.yml or action.yaml"}},
+		{"local action that uses a local action", map[string]string{
+			".github/workflows/ci.yml": `
+jobs:
+  build:
+    steps:
+      - uses: ./.github/actions/outer
+`,
+			".github/actions/outer/action.yml": `
+runs:
+  using: composite
+  steps:
+    - uses: ./
+`,
+			"action.yml": `
+runs:
+  using: docker
+  image: Dockerfile
+  args:
+    - ${{ inputs.name }}
+`,
+		}, []string{"action.yml: runs.args entry 1"}},
+		{"local action outside the repository", map[string]string{
+			".github/workflows/ci.yml": `
+jobs:
+  build:
+    steps:
+      - uses: ./../other
+`,
+		}, []string{".github/workflows/ci.yml: uses ./../other, which points outside the repository"}},
+		{"reusable workflow", map[string]string{
+			".github/workflows/ci.yml": `
+jobs:
+  call:
+    uses: ./.github/workflows/reusable.yml
+  missing:
+    uses: ./.github/workflows/missing.yml
+`,
+			".github/workflows/reusable.yml": `
+jobs:
+  build:
+    steps:
+      - uses: ./nested/a/b
+`,
+		}, []string{
+			".github/workflows/ci.yml: uses ./.github/workflows/missing.yml, but .github/workflows/missing.yml does not exist",
+			".github/workflows/reusable.yml: uses ./nested/a/b, but nested/a/b has no action.yml",
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := scanRepo(writeRepo(t, tt.files))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("scanRepo() = %q, want %d offenders", got, len(tt.want))
+			}
+			for i, want := range tt.want {
+				if !strings.HasPrefix(got[i], want) {
+					t.Errorf("scanRepo()[%d] = %q, want prefix %q", i, got[i], want)
+				}
+			}
+		})
+	}
+}
+
+// TestRemoteActionsArePinned keeps every remote action and reusable workflow
+// on a full commit SHA with its release in a `# v<version>` comment: a tag or
+// a branch can be moved to other code after review, and a short SHA can
+// become ambiguous. The check covers every local action a workflow uses.
+func TestRemoteActionsArePinned(t *testing.T) {
+	offenders, err := scanPins(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range offenders {
+		t.Error(o)
+	}
+}
+
+func TestScanPins(t *testing.T) {
+	got, err := scanPins(writeRepo(t, map[string]string{
+		".github/workflows/ci.yml": `
+jobs:
+  build:
+    steps:
+      - uses: ./.github/actions/outer
+      - uses: ./missing
+`,
+		".github/actions/outer/action.yml": `
+runs:
+  using: composite
+  steps:
+    - uses: ./nested
+`,
+		"nested/action.yml": `
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v4
+`,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `nested/action.yml: runs step 1 uses actions/checkout@v4; pin it to a full 40-character commit SHA followed by a # v<version> comment`
+	if strings.Join(got, "\n") != want {
+		t.Errorf("scanPins() =\n%s\nwant:\n%s", strings.Join(got, "\n"), want)
+	}
+	if _, err := scanPins(t.TempDir()); err == nil {
+		t.Error("scanPins() succeeded without workflow files, want error")
+	}
+}
+
+// bannedPrefixes are the owners of actions no workflow may use: the snapcore
+// and canonical snap actions call snapcraft without a command and run on
+// node20, so snap.yml installs and runs snapcraft itself.
+var bannedPrefixes = []string{"snapcore/", "canonical/action-"}
+
+// scanBanned returns one message per `uses:` in every file walkRepo visits (a
+// job's reusable workflow, a job step or a `runs` step) that names an action
+// under bannedPrefixes, in any case, also as a docker:// image.
+func scanBanned(repo string) ([]string, error) {
+	return walkRepo(repo, func(file string, _ []byte, f actionFile) ([]string, error) {
+		var offenders []string
+		check := func(where, uses string) {
+			name := strings.TrimPrefix(strings.ToLower(uses), "docker://")
+			for _, prefix := range bannedPrefixes {
+				if strings.HasPrefix(name, prefix) {
+					offenders = append(offenders, fmt.Sprintf("%s: %s uses %s; install and run the tool in a run step instead", file, where, uses))
+				}
+			}
+		}
+		for _, name := range sortedJobs(f) {
+			where := fmt.Sprintf("job %q", name)
+			check(where, f.Jobs[name].Uses)
+			for i, s := range f.Jobs[name].Steps {
+				check(fmt.Sprintf("%s step %d", where, i+1), s.Uses)
+			}
+		}
+		for i, s := range f.Runs.Steps {
+			check(fmt.Sprintf("runs step %d", i+1), s.Uses)
+		}
+		return offenders, nil
+	})
+}
+
+// TestNoSnapActions keeps the snapcore and canonical snap actions out of every
+// workflow and local action.
+func TestNoSnapActions(t *testing.T) {
+	offenders, err := scanBanned(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range offenders {
+		t.Error(o)
+	}
+}
+
+func TestScanBanned(t *testing.T) {
+	got, err := scanBanned(writeRepo(t, map[string]string{
+		".github/workflows/snap.yml": `
+jobs:
+  call:
+    uses: canonical/action-build/.github/workflows/build.yml@main
+  snap:
+    steps:
+      - uses: actions/checkout@v4
+      - uses: SnapCore/action-build@v1
+      - uses: ./.github/actions/publish
+      - uses: docker://snapcore/snapcraft:stable
+      - uses: docker://ubuntu:24.04
+`,
+		".github/actions/publish/action.yml": `
+runs:
+  using: composite
+  steps:
+    - uses: canonical/action-publish@v1
+    - uses: canonical/setup-lxd@v1
+`,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		`.github/workflows/snap.yml: job "call" uses canonical/action-build/.github/workflows/build.yml@main; install and run the tool in a run step instead`,
+		`.github/workflows/snap.yml: job "snap" step 2 uses SnapCore/action-build@v1; install and run the tool in a run step instead`,
+		`.github/workflows/snap.yml: job "snap" step 4 uses docker://snapcore/snapcraft:stable; install and run the tool in a run step instead`,
+		`.github/actions/publish/action.yml: runs step 1 uses canonical/action-publish@v1; install and run the tool in a run step instead`,
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("scanBanned() =\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	if _, err := scanBanned(t.TempDir()); err == nil {
+		t.Error("scanBanned() succeeded without workflow files, want error")
+	}
+}
+
+// scanRunners returns one message per runner label ending in `-latest`, in
+// any case, in every file walkRepo visits: a job's `runs-on` (a label, a list
+// or a mapping such as `labels:`) and every value of its `strategy.matrix`,
+// which `runs-on` may read through an expression.
+func scanRunners(repo string) ([]string, error) {
+	return walkRepo(repo, func(file string, data []byte, _ actionFile) ([]string, error) {
+		var doc yaml.Node
+		if err := yaml.Unmarshal(data, &doc); err != nil {
+			return nil, fmt.Errorf("%s: %w", file, err)
+		}
+		if len(doc.Content) == 0 {
+			return nil, nil
+		}
+		jobs := mappingValue(doc.Content[0], "jobs")
+		if jobs == nil || jobs.Kind != yaml.MappingNode {
+			return nil, nil
+		}
+		var offenders []string
+		var check func(where string, n *yaml.Node)
+		check = func(where string, n *yaml.Node) {
+			if n == nil {
+				return
+			}
+			if n.Kind == yaml.ScalarNode {
+				if strings.HasSuffix(strings.ToLower(strings.TrimSpace(n.Value)), "-latest") {
+					offenders = append(offenders, fmt.Sprintf("%s: %s %s; pin the runner to a named image such as ubuntu-24.04", file, where, strings.TrimSpace(n.Value)))
+				}
+				return
+			}
+			for i, c := range n.Content {
+				if n.Kind == yaml.MappingNode && i%2 == 0 {
+					continue
+				}
+				check(where, c)
+			}
+		}
+		names := make([]string, 0, len(jobs.Content)/2)
+		for j := 0; j+1 < len(jobs.Content); j += 2 {
+			names = append(names, jobs.Content[j].Value)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			job := mappingValue(jobs, name)
+			where := fmt.Sprintf("job %q", name)
+			check(where+" runs-on", mappingValue(job, "runs-on"))
+			check(where+" strategy.matrix", mappingValue(mappingValue(job, "strategy"), "matrix"))
+		}
+		return offenders, nil
+	})
+}
+
+// TestRunnersArePinned keeps every job on a named runner image: a `-latest`
+// label moves the image under the job without a commit.
+func TestRunnersArePinned(t *testing.T) {
+	offenders, err := scanRunners(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range offenders {
+		t.Error(o)
+	}
+}
+
+func TestScanRunners(t *testing.T) {
+	got, err := scanRunners(writeRepo(t, map[string]string{
+		".github/workflows/ci.yml": `
+jobs:
+  call:
+    uses: ./.github/workflows/reusable.yml
+  label:
+    runs-on: ubuntu-latest
+  list:
+    runs-on: [self-hosted, Ubuntu-Latest]
+  group:
+    runs-on:
+      group: runners
+      labels: [ubuntu-latest ]
+  matrix:
+    strategy:
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+        include:
+          - os: macos-latest
+    runs-on: ${{ matrix.os }}
+  pinned:
+    runs-on: ubuntu-24.04
+`,
+		".github/workflows/reusable.yml": `
+jobs:
+  inner:
+    runs-on: ubuntu-latest
+`,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		`.github/workflows/ci.yml: job "group" runs-on ubuntu-latest; pin the runner to a named image such as ubuntu-24.04`,
+		`.github/workflows/ci.yml: job "label" runs-on ubuntu-latest; pin the runner to a named image such as ubuntu-24.04`,
+		`.github/workflows/ci.yml: job "list" runs-on Ubuntu-Latest; pin the runner to a named image such as ubuntu-24.04`,
+		`.github/workflows/ci.yml: job "matrix" strategy.matrix windows-latest; pin the runner to a named image such as ubuntu-24.04`,
+		`.github/workflows/ci.yml: job "matrix" strategy.matrix macos-latest; pin the runner to a named image such as ubuntu-24.04`,
+		`.github/workflows/reusable.yml: job "inner" runs-on ubuntu-latest; pin the runner to a named image such as ubuntu-24.04`,
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("scanRunners() =\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	if _, err := scanRunners(t.TempDir()); err == nil {
+		t.Error("scanRunners() succeeded without workflow files, want error")
+	}
+}
+
+func TestUnpinnedUses(t *testing.T) {
+	const sha = "3d3c42e5aac5ba805825da76410c181273ba90b1"
+	step := func(uses string) string {
+		return `
+jobs:
+  build:
+    steps:
+      - uses: ` + uses + `
+`
+	}
+	tests := []struct {
+		name string
+		yaml string
+		want []string
+	}{
+		{"full sha with version comment", step("actions/checkout@" + sha + " # v7.0.1"), nil},
+		{"tag", step("actions/checkout@v4"), []string{
+			`test.yml: job "build" step 1 uses actions/checkout@v4; pin it to a full 40-character commit SHA followed by a # v<version> comment`,
+		}},
+		{"no ref", step("actions/checkout"), []string{
+			`test.yml: job "build" step 1 uses actions/checkout; pin it to a full 40-character commit SHA followed by a # v<version> comment`,
+		}},
+		{"short sha", step("actions/checkout@3d3c42e # v7.0.1"), []string{
+			`test.yml: job "build" step 1 uses actions/checkout@3d3c42e # v7.0.1; pin it to a full 40-character commit SHA followed by a # v<version> comment`,
+		}},
+		{"full sha without comment", step("actions/checkout@" + sha), []string{
+			`test.yml: job "build" step 1 uses actions/checkout@` + sha + `; pin it to a full 40-character commit SHA followed by a # v<version> comment`,
+		}},
+		{"full sha with another comment", step("actions/checkout@" + sha + " # main"), []string{
+			`test.yml: job "build" step 1 uses actions/checkout@` + sha + ` # main; pin it to a full 40-character commit SHA followed by a # v<version> comment`,
+		}},
+		{"upper-case sha", step("actions/checkout@" + strings.ToUpper(sha) + " # v7.0.1"), []string{
+			`test.yml: job "build" step 1 uses actions/checkout@` + strings.ToUpper(sha) + ` # v7.0.1; pin it to a full 40-character commit SHA followed by a # v<version> comment`,
+		}},
+		{"local action and docker image", `
+jobs:
+  build:
+    steps:
+      - uses: ./.github/actions/setup
+      - uses: docker://alpine:3.22
+`, nil},
+		{"reusable workflow of another repository", `
+jobs:
+  call:
+    uses: example/workflows/.github/workflows/build.yml@main
+  local:
+    uses: ./.github/workflows/reusable.yml
+`, []string{
+			`test.yml: job "call" uses example/workflows/.github/workflows/build.yml@main; pin it to a full 40-character commit SHA followed by a # v<version> comment`,
+		}},
+		{"composite action step", `
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v6
+    - uses: actions/checkout@` + sha + ` # v7.0.1
+`, []string{
+			`test.yml: runs step 1 uses actions/setup-go@v6; pin it to a full 40-character commit SHA followed by a # v<version> comment`,
+		}},
+		{"steps without uses", step("") + `      - run: go test ./...
+`, nil},
+		{"empty file", ``, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := unpinnedUses("test.yml", []byte(tt.yaml))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Join(got, "\n") != strings.Join(tt.want, "\n") {
+				t.Errorf("unpinnedUses() =\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(tt.want, "\n"))
+			}
+		})
+	}
+	if _, err := unpinnedUses("test.yml", []byte("jobs: [")); err == nil {
+		t.Error("unpinnedUses() succeeded on invalid YAML, want error")
+	}
+}
+
+func TestScriptExpressionsRejectsInvalidYAML(t *testing.T) {
+	if _, err := scriptExpressions("test.yml", []byte("jobs: [")); err == nil {
+		t.Error("scriptExpressions() succeeded on invalid YAML, want error")
+	}
+}
+
+// loadWorkflow parses one file under .github/workflows.
+func loadWorkflow(t *testing.T, name string) actionFile {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wf actionFile
+	if err := yaml.Unmarshal(data, &wf); err != nil {
+		t.Fatalf("%s: %v", name, err)
+	}
+	return wf
+}
+
+// stepRun returns the run block of the step with the given name.
+func stepRun(t *testing.T, file, step string) string {
+	t.Helper()
+	for _, job := range loadWorkflow(t, file).Jobs {
+		for _, s := range job.Steps {
+			if s.Name == step {
+				return s.Run
+			}
+		}
+	}
+	t.Fatalf("%s: no step named %q", file, step)
+	return ""
+}
+
+// TestReleaseVersionIsChecked keeps the release tag out of PKGBUILD, .SRCINFO,
+// the RPM spec and the snap version check unless it passed script/check-release-version.sh.
+func TestReleaseVersionIsChecked(t *testing.T) {
+	for _, file := range []string{"aur.yml", "copr.yml", "snap.yml"} {
+		run := stepRun(t, file, "Extract version")
+		guard := strings.Index(run, `script/check-release-version.sh "$VERSION"`)
+		output := strings.Index(run, "GITHUB_OUTPUT")
+		if guard < 0 {
+			t.Errorf("%s: Extract version does not run script/check-release-version.sh \"$VERSION\"", file)
+		} else if output < guard {
+			t.Errorf("%s: Extract version writes GITHUB_OUTPUT before it runs the guard", file)
+		}
+	}
+}
+
+// pipInstalls returns every line of a workflow that runs pip install, trimmed.
+func pipInstalls(t *testing.T, file string) []string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", file))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lines []string
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.Contains(line, "pip install") || strings.Contains(line, "pip3 install") {
+			lines = append(lines, strings.TrimSpace(line))
+		}
+	}
+	return lines
+}
+
+// requirementsFile returns the file a `pip3 install --require-hashes -r
+// <file>` line installs, or a message when the line names a package or does
+// not require hashes.
+func requirementsFile(line string) (string, string) {
+	fields := strings.Fields(line)
+	i := 0
+	for i < len(fields) && fields[i] != "install" {
+		i++
+	}
+	var file string
+	hashes := false
+	for i++; i < len(fields); i++ {
+		switch {
+		case fields[i] == "--require-hashes":
+			hashes = true
+		case fields[i] == "-r" && i+1 < len(fields):
+			i++
+			file = fields[i]
+		case strings.HasPrefix(fields[i], "-"):
+		default:
+			return "", fmt.Sprintf("%q names the package %s; install it from a requirements file with hashes", line, fields[i])
+		}
+	}
+	if file == "" || !hashes {
+		return "", fmt.Sprintf("%q does not install with --require-hashes -r <file>", line)
+	}
+	return file, ""
+}
+
+// unhashedRequirements returns every requirement of a pip requirements file
+// that is not pinned with == or carries no --hash=sha256: entry.
+func unhashedRequirements(data string) []string {
+	var bad []string
+	for _, req := range strings.Split(strings.ReplaceAll(data, "\\\n", " "), "\n") {
+		if i := strings.Index(req, "#"); i >= 0 && !strings.Contains(req[:i], "--hash") {
+			req = req[:i]
+		}
+		req = strings.TrimSpace(req)
+		if req == "" {
+			continue
+		}
+		if !strings.Contains(strings.Fields(req)[0], "==") || !strings.Contains(req, "--hash=sha256:") {
+			bad = append(bad, strings.Fields(req)[0])
+		}
+	}
+	return bad
+}
+
+// coprRequirements returns the requirements file copr.yml installs copr-cli
+// from, relative to the repository root.
+func coprRequirements(t *testing.T) string {
+	t.Helper()
+	lines := pipInstalls(t, "copr.yml")
+	if len(lines) != 1 {
+		t.Fatalf("copr.yml: %d pip install lines, want 1: %q", len(lines), lines)
+	}
+	file, problem := requirementsFile(lines[0])
+	if problem != "" {
+		t.Fatalf("copr.yml: %s", problem)
+	}
+	return file
+}
+
+// TestCoprCLIIsPinnedByHash keeps copr.yml from installing a package PyPI can
+// change under it: copr-cli and its dependencies run in the job that holds
+// COPR_TOKEN, so each one is pinned to a version and its sha256 hashes.
+func TestCoprCLIIsPinnedByHash(t *testing.T) {
+	file := coprRequirements(t)
+	data, err := os.ReadFile(filepath.Join("..", "..", filepath.FromSlash(file)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "copr-cli==") {
+		t.Errorf("%s does not pin copr-cli", file)
+	}
+	for _, req := range unhashedRequirements(string(data)) {
+		t.Errorf("%s: %s is not pinned with == and --hash=sha256:", file, req)
+	}
+}
+
+func TestRequirementsFile(t *testing.T) {
+	for _, tc := range []struct{ line, file string }{
+		{"pip3 install --require-hashes -r rpmbuild/requirements.txt", "rpmbuild/requirements.txt"},
+		{"pip3 install --require-hashes --no-build-isolation -r a.txt", "a.txt"},
+		{"pip install -r a.txt --require-hashes", "a.txt"},
+	} {
+		if file, problem := requirementsFile(tc.line); file != tc.file || problem != "" {
+			t.Errorf("requirementsFile(%q) = %q, %q, want %q", tc.line, file, problem, tc.file)
+		}
+	}
+	for _, line := range []string{
+		"pip3 install copr-cli",
+		"pip3 install -r a.txt",
+		"pip3 install --require-hashes -r a.txt copr-cli",
+		"pip3 install --require-hashes",
+	} {
+		if file, problem := requirementsFile(line); problem == "" {
+			t.Errorf("requirementsFile(%q) = %q, want a problem", line, file)
+		}
+	}
+}
+
+func TestUnhashedRequirements(t *testing.T) {
+	data := `# comment
+a==1.0 \
+    --hash=sha256:00 \
+    --hash=sha256:11
+    # via b
+b==2.0 --hash=sha256:22  # via c
+c>=1.0 --hash=sha256:33
+d==1.0
+e
+`
+	got := unhashedRequirements(data)
+	want := []string{"c>=1.0", "d==1.0", "e"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("unhashedRequirements() = %q, want %q", got, want)
+	}
+}
+
+// isCheckout reports whether a step uses actions/checkout.
+func isCheckout(s step) bool {
+	return strings.HasPrefix(strings.ToLower(s.Uses), "actions/checkout@")
+}
+
+// TestVersionGateRunsFirst keeps every step that installs or configures
+// anything in the release jobs behind the version gate: the step with id
+// version comes right after actions/checkout. A job without a checkout runs
+// no repository code and only after a job with the gate, which it needs.
+func TestVersionGateRunsFirst(t *testing.T) {
+	for _, file := range []string{"aur.yml", "copr.yml", "snap.yml"} {
+		wf := loadWorkflow(t, file)
+		gated := map[string]bool{}
+		for name, job := range wf.Jobs {
+			for i, s := range job.Steps {
+				if isCheckout(s) {
+					gated[name] = i+1 < len(job.Steps) && job.Steps[i+1].ID == "version"
+					if !gated[name] {
+						t.Errorf("%s: job %q: the step after actions/checkout is not the one with id version", file, name)
+					}
+					break
+				}
+			}
+		}
+		for name, job := range wf.Jobs {
+			if _, ok := gated[name]; ok {
+				continue
+			}
+			needsGate := false
+			for _, dep := range jobNeeds(job.Needs) {
+				needsGate = needsGate || gated[dep]
+			}
+			if !needsGate {
+				t.Errorf("%s: job %q has no actions/checkout step and needs no job with the version gate", file, name)
+			}
+		}
+	}
+}
+
+// TestReleaseCheckoutsDropCredentials keeps the GITHUB_TOKEN out of the git
+// credential store in the release jobs: none runs authenticated git against
+// GitHub, and gh reads its own GH_TOKEN.
+func TestReleaseCheckoutsDropCredentials(t *testing.T) {
+	for _, file := range []string{"aur.yml", "copr.yml", "snap.yml"} {
+		for name, job := range loadWorkflow(t, file).Jobs {
+			for i, s := range job.Steps {
+				if !isCheckout(s) {
+					continue
+				}
+				if p := s.With.PersistCredentials; p == nil || *p {
+					t.Errorf("%s: job %q step %d: actions/checkout does not set persist-credentials: false", file, name, i+1)
+				}
+			}
+		}
+	}
+}
+
+// TestDependabotUpdatesCoprRequirements keeps the hash-pinned copr-cli
+// requirements from going stale: Dependabot watches their directory.
+func TestDependabotUpdatesCoprRequirements(t *testing.T) {
+	dir := "/" + path.Dir(coprRequirements(t))
+	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "dependabot.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		Updates []struct {
+			Ecosystem string `yaml:"package-ecosystem"`
+			Directory string `yaml:"directory"`
+		} `yaml:"updates"`
+	}
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range cfg.Updates {
+		if u.Ecosystem == "pip" && path.Clean(u.Directory) == dir {
+			return
+		}
+	}
+	t.Errorf("dependabot.yml has no pip entry for %s", dir)
+}
+
+// dependabotPatternMatches reports whether a Dependabot group pattern matches
+// a dependency name: `*` stands for any run of characters, `/` included.
+func dependabotPatternMatches(pattern, name string) bool {
+	re := "^" + strings.ReplaceAll(regexp.QuoteMeta(pattern), `\*`, ".*") + "$"
+	return regexp.MustCompile(re).MatchString(name)
+}
+
+// TestDependabotGroupsCodeQLAction keeps the github/codeql-action sub-actions
+// in one Dependabot group: bumped one PR per step, each PR fails CodeQL
+// because its steps run different versions (#308, #309, #310).
+func TestDependabotGroupsCodeQLAction(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "dependabot.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		Updates []struct {
+			Ecosystem string `yaml:"package-ecosystem"`
+			Groups    map[string]struct {
+				Patterns []string `yaml:"patterns"`
+			} `yaml:"groups"`
+		} `yaml:"updates"`
+	}
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	subActions := []string{"init", "autobuild", "analyze", "upload-sarif"}
+	for _, u := range cfg.Updates {
+		if u.Ecosystem != "github-actions" {
+			continue
+		}
+		for _, g := range u.Groups {
+			matched := 0
+			for _, sub := range subActions {
+				for _, p := range g.Patterns {
+					if dependabotPatternMatches(p, "github/codeql-action/"+sub) {
+						matched++
+						break
+					}
+				}
+			}
+			if matched == len(subActions) {
+				return
+			}
+		}
+	}
+	t.Errorf("dependabot.yml: the github-actions entry has no group whose patterns match github/codeql-action/{%s}", strings.Join(subActions, ","))
+}
+
+func TestDependabotPatternMatches(t *testing.T) {
+	tests := []struct {
+		pattern, name string
+		want          bool
+	}{
+		{"github/codeql-action*", "github/codeql-action/init", true},
+		{"github/codeql-action*", "github/codeql-action", true},
+		{"github/codeql-action/*", "github/codeql-action/upload-sarif", true},
+		{"github/codeql-action/init", "github/codeql-action/analyze", false},
+		{"github/codeql-action*", "actions/checkout", false},
+		{"*", "actions/checkout", true},
+		{"actions.checkout", "actions/checkout", false},
+	}
+	for _, tt := range tests {
+		if got := dependabotPatternMatches(tt.pattern, tt.name); got != tt.want {
+			t.Errorf("dependabotPatternMatches(%q, %q) = %v, want %v", tt.pattern, tt.name, got, tt.want)
+		}
+	}
+}
+
+// TestCoprInstallRunsInCI keeps the hash-pinned copr-cli install exercised on
+// every pull request: ci.yml runs the same Install copr-cli step as copr.yml,
+// which only runs on a release.
+func TestCoprInstallRunsInCI(t *testing.T) {
+	ci, copr := stepRun(t, "ci.yml", "Install copr-cli"), stepRun(t, "copr.yml", "Install copr-cli")
+	if ci != copr {
+		t.Errorf("ci.yml Install copr-cli run block differs from copr.yml:\n%s\nwant:\n%s", ci, copr)
+	}
+}
+
+// verboseFlag matches the go test flags that print t.Logf of a passing test.
+var verboseFlag = regexp.MustCompile(`^--?(test\.)?v(=.*)?$`)
+
+// goTestArgs returns the arguments of every go test in a run block: those of
+// go test itself and those gotestsum hands on to go test after --.
+func goTestArgs(run string) [][]string {
+	var out [][]string
+	for _, line := range strings.Split(run, "\n") {
+		fields := strings.Fields(line)
+		for i := range fields {
+			switch {
+			case fields[i] == "go" && i+1 < len(fields) && fields[i+1] == "test":
+				out = append(out, fields[i+2:])
+			case fields[i] == "gotestsum":
+				for j := i + 1; j < len(fields); j++ {
+					if fields[j] == "--" {
+						out = append(out, fields[j+1:])
+						break
+					}
+				}
+			}
+		}
+	}
+	return out
+}
+
+// verboseGoTest reports whether a run block runs go test with -v.
+func verboseGoTest(run string) bool {
+	for _, args := range goTestArgs(run) {
+		for _, f := range args {
+			if verboseFlag.MatchString(f) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func TestVerboseGoTest(t *testing.T) {
+	for run, want := range map[string]bool{
+		"go test -tags=integration ./...":                  false,
+		"go test -vet=off ./...":                           false,
+		"go test -tags=integration -v ./...":               true,
+		"go test -v=true ./...":                            true,
+		"go test --v ./...":                                true,
+		"go test -test.v ./...":                            true,
+		"echo start\ngo test -count=1 -v ./...":            true,
+		"go vet -v ./...":                                  false,
+		"go test -run '^TestAPI_Version$' ./test/...":      false,
+		"gotestsum --format pkgname -- -timeout 30m ./...": false,
+		"gotestsum --format pkgname -- -v ./...":           true,
+		"gotestsum --format pkgname -- -test.v=true ./...": true,
+		"gotestsum tool slowest --jsonfile f.json":         false,
+	} {
+		if got := verboseGoTest(run); got != want {
+			t.Errorf("verboseGoTest(%q) = %v, want %v", run, got, want)
+		}
+	}
+}
+
+// TestSnapPackRunsLikeRelease keeps the snap-pack job of ci.yml building the
+// snap the way snap.yml, which only runs on a release, builds it: both run the
+// same Install snapcraft and Pack snap steps, in every job of snap.yml.
+func TestSnapPackRunsLikeRelease(t *testing.T) {
+	snap := loadWorkflow(t, "snap.yml")
+	for _, name := range []string{"Install snapcraft", "Pack snap"} {
+		ci := stepRun(t, "ci.yml", name)
+		found := false
+		for _, job := range sortedJobs(snap) {
+			for _, s := range snap.Jobs[job].Steps {
+				if s.Name != name {
+					continue
+				}
+				found = true
+				if s.Run != ci {
+					t.Errorf("snap.yml job %q %s run block differs from ci.yml:\n%s\nwant:\n%s", job, name, s.Run, ci)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("snap.yml: no step named %q", name)
+		}
+	}
+}
+
+// timeoutFlag matches a go test -timeout flag in either of its two forms.
+var timeoutFlag = regexp.MustCompile(`^--?(test\.)?timeout(=.+)?$`)
+
+// goTestTimeout reports whether a run block runs go test with -timeout.
+func goTestTimeout(run string) bool {
+	for _, args := range goTestArgs(run) {
+		for j, f := range args {
+			m := timeoutFlag.FindStringSubmatch(f)
+			if m == nil {
+				continue
+			}
+			if m[2] != "" || j+1 < len(args) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func TestGoTestTimeout(t *testing.T) {
+	for run, want := range map[string]bool{
+		"go test -tags=integration ./...":                   false,
+		"go test -tags=integration -timeout 30m ./...":      true,
+		"go test -timeout=30m ./...":                        true,
+		"go test --timeout 30m ./...":                       true,
+		"go test -test.timeout=30m ./...":                   true,
+		"echo start\ngo test -count=1 -timeout 1h ./...":    true,
+		"go test -run TestTimeout ./...":                    false,
+		"go vet -timeout 30m ./...":                         false,
+		"go test ./... -timeout":                            false,
+		"timeout 30m go test -tags=integration ./...":       false,
+		"gotestsum -- -tags=integration -timeout 30m ./...": true,
+		"gotestsum --format pkgname -- ./...":               false,
+		"gotestsum --format pkgname -- ./... -timeout":      false,
+	} {
+		if got := goTestTimeout(run); got != want {
+			t.Errorf("goTestTimeout(%q) = %v, want %v", run, got, want)
+		}
+	}
+}
+
+// TestIntegrationTestsHaveATimeout keeps the integration package, which runs
+// longer against app.copia.io than go test's default of 10 minutes, from
+// panicking in whichever test is running at that mark: the Integration tests
+// step sets -timeout, identical in ci.yml and integration-scheduled.yml.
+func TestIntegrationTestsHaveATimeout(t *testing.T) {
+	ci := stepRun(t, "ci.yml", "Integration tests")
+	scheduled := stepRun(t, "integration-scheduled.yml", "Integration tests")
+	if ci != scheduled {
+		t.Errorf("integration-scheduled.yml Integration tests run block differs from ci.yml:\n%s\nwant:\n%s", scheduled, ci)
+	}
+	if !goTestTimeout(ci) {
+		t.Errorf("ci.yml: Integration tests runs go test without -timeout: %q", strings.TrimSpace(ci))
+	}
+}
+
+// versionRun is the only verbose go test of an integration job: it prints the
+// version Copia reports and nothing else.
+const versionRun = `go test -tags=integration -v -run '^TestAPI_Version$' ./test/integration/`
+
+// TestIntegrationLogsOnlyTheVersion keeps the integration tests' t.Logf output,
+// which names the test account, its private repositories and notifications,
+// out of the public Actions log: the Integration tests step runs without -v,
+// and a separate Copia version step with the same env runs only
+// TestAPI_Version verbosely.
+func TestIntegrationLogsOnlyTheVersion(t *testing.T) {
+	type envStep struct {
+		Name string            `yaml:"name"`
+		Run  string            `yaml:"run"`
+		Env  map[string]string `yaml:"env"`
+	}
+	for _, file := range []string{"ci.yml", "integration-scheduled.yml"} {
+		data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var wf struct {
+			Jobs map[string]struct {
+				Steps []envStep `yaml:"steps"`
+			} `yaml:"jobs"`
+		}
+		if err := yaml.Unmarshal(data, &wf); err != nil {
+			t.Fatalf("%s: %v", file, err)
+		}
+		steps := map[string]envStep{}
+		for _, s := range wf.Jobs["integration"].Steps {
+			steps[s.Name] = s
+			if s.Name != "Copia version" && verboseGoTest(s.Run) {
+				t.Errorf("%s: job integration step %q runs go test -v", file, s.Name)
+			}
+		}
+		main, ok := steps["Integration tests"]
+		if !ok {
+			t.Errorf("%s: job integration has no Integration tests step", file)
+			continue
+		}
+		version, ok := steps["Copia version"]
+		if !ok {
+			t.Errorf("%s: job integration has no Copia version step", file)
+			continue
+		}
+		if strings.TrimSpace(version.Run) != versionRun {
+			t.Errorf("%s: Copia version runs %q, want %q", file, strings.TrimSpace(version.Run), versionRun)
+		}
+		if fmt.Sprint(version.Env) != fmt.Sprint(main.Env) {
+			t.Errorf("%s: Copia version env %v differs from Integration tests env %v", file, version.Env, main.Env)
+		}
+	}
+}
+
+// timingFile is where the Integration tests step writes the pass, skip and
+// fail events of the integration tests, without their output, for the Slowest
+// tests step to read.
+const timingFile = "$RUNNER_TEMP/integration-timing.json"
+
+// slowestRun prints the integration tests by run time, names and durations
+// only.
+const slowestRun = `gotestsum tool slowest --jsonfile "` + timingFile + `"`
+
+// notCancelled runs a step also after a failed or timed-out step, unless the
+// run was canceled.
+const notCancelled = "!cancelled()" //nolint:misspell // the GitHub Actions function name
+
+// quietFormats are the gotestsum formats that print no output of a passing
+// test. testname is not one: on a runner (GITHUB_ACTIONS=true) gotestsum
+// switches it to github-actions, which prints the output of every test.
+var quietFormats = map[string]bool{
+	"dots":                   true,
+	"dots-v2":                true,
+	"pkgname":                true,
+	"pkgname-and-test-fails": true,
+}
+
+// jsonFlag matches the go test flag that prints every event, output included.
+var jsonFlag = regexp.MustCompile(`^--?(test\.)?json(=.*)?$`)
+
+// gotestsumFlags returns the flags the gotestsum lines of a run block give
+// gotestsum itself, before --, by name without dashes, and how many such lines
+// there are. A flag without = takes the next field as its value; a field
+// without a dash is kept under its own name, so it is never an allowed flag.
+func gotestsumFlags(run string) (map[string]string, int) {
+	flags := map[string]string{}
+	n := 0
+	for _, line := range strings.Split(run, "\n") {
+		fields := strings.Fields(line)
+		for i := range fields {
+			if fields[i] != "gotestsum" || (i+1 < len(fields) && fields[i+1] == "tool") {
+				continue
+			}
+			n++
+			for j := i + 1; j < len(fields) && fields[j] != "--"; j++ {
+				f := fields[j]
+				if !strings.HasPrefix(f, "-") {
+					flags[f] = ""
+					continue
+				}
+				name, value, ok := strings.Cut(strings.TrimLeft(f, "-"), "=")
+				if !ok && j+1 < len(fields) && fields[j+1] != "--" && !strings.HasPrefix(fields[j+1], "-") {
+					j++
+					value = fields[j]
+				}
+				flags[name] = strings.Trim(value, `"'`)
+			}
+		}
+	}
+	return flags, n
+}
+
+// integrationRunViolations lists what makes the run block of the Integration
+// tests step print more than package results and failing tests, or lose the
+// timing report: it runs gotestsum once, with only --format (a quiet one),
+// --hide-summary with skipped (go test without -v prints no skip message) and
+// --jsonfile-timing-events to timingFile (pass, skip and fail events, no
+// output; --jsonfile would hold every t.Logf), and hands go test a -timeout
+// but no -v or -json.
+func integrationRunViolations(run string) []string {
+	flags, n := gotestsumFlags(run)
+	if n != 1 {
+		return []string{fmt.Sprintf("runs gotestsum %d times, want once", n)}
+	}
+	var out []string
+	for _, name := range sortedKeys(flags) {
+		switch name {
+		case "format", "hide-summary", "jsonfile-timing-events":
+		default:
+			out = append(out, fmt.Sprintf("gotestsum flag %q is not allowed", name))
+		}
+	}
+	if !quietFormats[flags["format"]] {
+		out = append(out, fmt.Sprintf("gotestsum --format %q is not a quiet format", flags["format"]))
+	}
+	if !slices.Contains(strings.Split(flags["hide-summary"], ","), "skipped") {
+		out = append(out, "gotestsum does not hide the skipped summary")
+	}
+	if got := flags["jsonfile-timing-events"]; got != timingFile {
+		out = append(out, fmt.Sprintf("gotestsum --jsonfile-timing-events is %q, want %q", got, timingFile))
+	}
+	if verboseGoTest(run) {
+		out = append(out, "go test runs with -v")
+	}
+	for _, args := range goTestArgs(run) {
+		for _, f := range args {
+			if jsonFlag.MatchString(f) {
+				out = append(out, "go test runs with -json")
+			}
+		}
+	}
+	if !goTestTimeout(run) {
+		out = append(out, "go test runs without -timeout")
+	}
+	return out
+}
+
+func TestIntegrationRunViolations(t *testing.T) {
+	const good = `gotestsum --format pkgname --hide-summary skipped --jsonfile-timing-events "` + timingFile + `" -- -tags=integration -timeout 30m ./...`
+	tests := []struct {
+		name string
+		run  string
+		want int
+	}{
+		{"good", good, 0},
+		{"flags with =", `gotestsum --format=pkgname-and-test-fails --hide-summary=failed,skipped --jsonfile-timing-events="` + timingFile + `" -- -timeout=30m ./...`, 0},
+		{"plain go test", "go test -tags=integration -timeout 30m ./...", 1},
+		{"gotestsum twice", good + "\n" + good, 1},
+		{"verbose go test", strings.Replace(good, "-- ", "-- -v ", 1), 1},
+		{"json go test", strings.Replace(good, "-- ", "-- -json ", 1), 1},
+		{"loud format", strings.Replace(good, "pkgname", "standard-verbose", 1), 1},
+		{"github-actions format", strings.Replace(good, "pkgname", "github-actions", 1), 1},
+		// gotestsum switches testname to github-actions when GITHUB_ACTIONS is
+		// true, as on every runner.
+		{"testname format", strings.Replace(good, "pkgname", "testname", 1), 1},
+		{"no format", strings.Replace(good, "--format pkgname ", "", 1), 1},
+		{"short format flag", strings.Replace(good, "--format", "-f", 1), 2},
+		{"skipped summary shown", strings.Replace(good, "--hide-summary skipped ", "", 1), 1},
+		{"full jsonfile", strings.Replace(good, "--jsonfile-timing-events", "--jsonfile", 1), 2},
+		{"both json files", strings.Replace(good, "-- ", "--jsonfile out.json -- ", 1), 1},
+		{"other timing file", strings.Replace(good, timingFile, "timing.json", 1), 1},
+		{"post-run command", strings.Replace(good, "-- ", "--post-run-command true -- ", 1), 1},
+		{"raw command", strings.Replace(good, "-- ", "--raw-command -- ", 1), 1},
+		{"no timeout", strings.Replace(good, "-timeout 30m ", "", 1), 1},
+		{"timeout without value", strings.Replace(good, "-timeout 30m ./...", "./... -timeout", 1), 1},
+	}
+	for _, tt := range tests {
+		if got := integrationRunViolations(tt.run); len(got) != tt.want {
+			t.Errorf("%s: integrationRunViolations() = %q, want %d violations", tt.name, got, tt.want)
+		}
+	}
+}
+
+// reportWorkflow is the part of an integration workflow
+// integrationReportViolations reads.
+type reportWorkflow struct {
+	Env  map[string]any `yaml:"env"`
+	Jobs map[string]struct {
+		Env   map[string]any `yaml:"env"`
+		Steps []struct {
+			Name string         `yaml:"name"`
+			Uses string         `yaml:"uses"`
+			If   string         `yaml:"if"`
+			Run  string         `yaml:"run"`
+			With map[string]any `yaml:"with"`
+			Env  map[string]any `yaml:"env"`
+		} `yaml:"steps"`
+	} `yaml:"jobs"`
+}
+
+// integrationReportViolations lists what breaks the slowest tests report of a
+// workflow's integration job or lets the timing file out: the job installs
+// gotestsum, as every Install gotestsum step of the file does, before an
+// Integration tests step that passes integrationRunViolations with no
+// GOTESTSUM_ variable in reach, directly followed by a Slowest tests step that
+// runs slowestRun also when the tests failed or timed out. No other step of
+// the file names the timing file, and none uploads an artifact.
+func integrationReportViolations(file string, data []byte) ([]string, error) {
+	var wf reportWorkflow
+	if err := yaml.Unmarshal(data, &wf); err != nil {
+		return nil, fmt.Errorf("%s: %w", file, err)
+	}
+	var out []string
+	install := map[string]bool{}
+	for _, job := range sortedKeys(wf.Jobs) {
+		for i, s := range wf.Jobs[job].Steps {
+			if s.Name == "Install gotestsum" {
+				install[s.Run] = true
+			}
+			if strings.HasPrefix(strings.ToLower(s.Uses), "actions/upload-artifact") {
+				out = append(out, fmt.Sprintf("%s: job %q step %d uploads an artifact", file, job, i+1))
+			}
+			reads := job == "integration" && (s.Name == "Integration tests" || s.Name == "Slowest tests")
+			if !reads && strings.Contains(fmt.Sprint(s.Run, s.With, s.Env, s.If), path.Base(timingFile)) {
+				out = append(out, fmt.Sprintf("%s: job %q step %d names the timing file", file, job, i+1))
+			}
+		}
+	}
+	if len(install) > 1 {
+		out = append(out, fmt.Sprintf("%s: Install gotestsum steps differ", file))
+	}
+	integration, ok := wf.Jobs["integration"]
+	if !ok {
+		return append(out, fmt.Sprintf("%s: no job integration", file)), nil
+	}
+	main := -1
+	installed := false
+	for i, s := range integration.Steps {
+		if s.Name == "Install gotestsum" && main < 0 {
+			installed = true
+		}
+		if s.Name == "Integration tests" {
+			main = i
+		}
+	}
+	if main < 0 {
+		return append(out, fmt.Sprintf("%s: job integration has no Integration tests step", file)), nil
+	}
+	if !installed {
+		out = append(out, fmt.Sprintf("%s: job integration does not install gotestsum before Integration tests", file))
+	}
+	tests := integration.Steps[main]
+	for _, v := range sortedKeys(wf.Env) {
+		if strings.HasPrefix(strings.ToUpper(v), "GOTESTSUM_") {
+			out = append(out, fmt.Sprintf("%s: workflow env sets %s", file, v))
+		}
+	}
+	for _, env := range []map[string]any{integration.Env, tests.Env} {
+		for _, v := range sortedKeys(env) {
+			if strings.HasPrefix(strings.ToUpper(v), "GOTESTSUM_") {
+				out = append(out, fmt.Sprintf("%s: job integration sets %s", file, v))
+			}
+		}
+	}
+	for _, v := range integrationRunViolations(tests.Run) {
+		out = append(out, fmt.Sprintf("%s: Integration tests %s", file, v))
+	}
+	if main+1 >= len(integration.Steps) || integration.Steps[main+1].Name != "Slowest tests" {
+		return append(out, fmt.Sprintf("%s: Integration tests is not followed by Slowest tests", file)), nil
+	}
+	slowest := integration.Steps[main+1]
+	if got := strings.TrimSpace(slowest.Run); got != slowestRun {
+		out = append(out, fmt.Sprintf("%s: Slowest tests runs %q, want %q", file, got, slowestRun))
+	}
+	cond := strings.Join(strings.Fields(slowest.If), "")
+	if cond != "${{"+notCancelled+"}}" && cond != notCancelled {
+		out = append(out, fmt.Sprintf("%s: Slowest tests runs if %q, want ${{ %s }}", file, slowest.If, notCancelled))
+	}
+	return out, nil
+}
+
+// TestIntegrationPrintsSlowestTests keeps the run time of every integration
+// test in the public log without the tests' output: the Integration tests step
+// of ci.yml and integration-scheduled.yml writes only timing events through
+// gotestsum, at the version the test job installs, and the next step prints
+// the slowest tests, also after a failure or the -timeout panic.
+func TestIntegrationPrintsSlowestTests(t *testing.T) {
+	install := map[string]bool{}
+	for _, file := range []string{"ci.yml", "integration-scheduled.yml"} {
+		data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		offenders, err := integrationReportViolations(file, data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, o := range offenders {
+			t.Error(o)
+		}
+		install[stepRun(t, file, "Install gotestsum")] = true
+	}
+	if len(install) != 1 {
+		t.Errorf("Install gotestsum differs between ci.yml and integration-scheduled.yml: %q", sortedKeys(install))
+	}
+}
+
+func TestIntegrationReportViolations(t *testing.T) {
+	const good = `
+jobs:
+  test:
+    steps:
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@v1.13.0
+  integration:
+    steps:
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@v1.13.0
+      - name: Integration tests
+        run: gotestsum --format pkgname --hide-summary skipped --jsonfile-timing-events "$RUNNER_TEMP/integration-timing.json" -- -tags=integration -timeout 30m ./...
+      - name: Slowest tests
+        if: ${{ ` + notCancelled + ` }}
+        run: gotestsum tool slowest --jsonfile "$RUNNER_TEMP/integration-timing.json"
+      - name: Copia version
+        run: go test -tags=integration -v -run '^TestAPI_Version$' ./test/integration/
+`
+	upload := `
+      - uses: actions/upload-artifact@x
+        with:
+          path: ${{ runner.temp }}
+`
+	tests := []struct {
+		name string
+		yaml string
+		want int
+	}{
+		{"good", good, 0},
+		{"bare condition", strings.Replace(good, "${{ "+notCancelled+" }}", "'"+notCancelled+"'", 1), 0},
+		{"no condition", strings.Replace(good, "        if: ${{ "+notCancelled+" }}\n", "", 1), 1},
+		{"always", strings.Replace(good, notCancelled, "always()", 1), 1},
+		{"success only", strings.Replace(good, notCancelled, "success()", 1), 1},
+		{"no slowest step", strings.Replace(good, "Slowest tests", "Report", 1), 2},
+		{"slowest prints more", strings.Replace(good, `slowest --jsonfile`, `slowest --skip-stmt testing.Short --jsonfile`, 1), 1},
+		{"slowest not next", strings.Replace(good, "      - name: Slowest tests", "      - name: Between\n        run: true\n      - name: Slowest tests", 1), 1},
+		{"verbose go test", strings.Replace(good, "-- -tags", "-- -v -tags", 1), 1},
+		{"loud format", strings.Replace(good, "--format pkgname", "--format standard-verbose", 1), 1},
+		{"artifact upload", good + upload, 1},
+		{"artifact upload in another job", strings.Replace(good, "  integration:\n", "  other:\n    steps:"+upload+"  integration:\n", 1), 1},
+		{"step prints the file", good + "      - run: cat \"$RUNNER_TEMP/integration-timing.json\"\n", 1},
+		{"step in another job names the file", strings.Replace(good, "  integration:\n", "  other:\n    steps:\n      - run: echo integration-timing.json\n  integration:\n", 1), 1},
+		{"step env names the file", good + "      - run: true\n        env:\n          F: integration-timing.json\n", 1},
+		{"no install", strings.Replace(good, "      - name: Install gotestsum\n        run: go install gotest.tools/gotestsum@v1.13.0\n      - name: Integration tests", "      - name: Integration tests", 1), 1},
+		{"other gotestsum version", strings.Replace(good, "@v1.13.0\n      - name: Integration tests", "@v1.12.0\n      - name: Integration tests", 1), 1},
+		{"GOTESTSUM_JSONFILE in step env", strings.Replace(good, "-timeout 30m ./...\n", "-timeout 30m ./...\n        env:\n          GOTESTSUM_JSONFILE: out.json\n", 1), 1},
+		{"GOTESTSUM_FORMAT in job env", strings.Replace(good, "  integration:\n", "  integration:\n    env:\n      GOTESTSUM_FORMAT: standard-verbose\n", 1), 1},
+		{"GOTESTSUM_JSONFILE in workflow env", "env:\n  GOTESTSUM_JSONFILE: out.json\n" + good, 1},
+		{"no integration tests step", strings.Replace(good, "Integration tests", "Tests", 1), 2},
+		{"no integration job", strings.Replace(good, "  integration:", "  other:", 1), 3},
+	}
+	for _, tt := range tests {
+		got, err := integrationReportViolations("test.yml", []byte(tt.yaml))
+		if err != nil {
+			t.Fatalf("%s: %v", tt.name, err)
+		}
+		if len(got) != tt.want {
+			t.Errorf("%s: integrationReportViolations() = %q, want %d violations", tt.name, got, tt.want)
+		}
+	}
+	if _, err := integrationReportViolations("test.yml", []byte("jobs: [")); err == nil {
+		t.Error("integrationReportViolations() succeeded on invalid YAML, want error")
+	}
+}
+
+// gateWorkflow is the part of an integration workflow
+// integrationGateViolations reads.
+type gateWorkflow struct {
+	On   any `yaml:"on"`
+	Jobs map[string]struct {
+		If          string `yaml:"if"`
+		Concurrency any    `yaml:"concurrency"`
+	} `yaml:"jobs"`
+}
+
+// readyPullRequest skips the integration job on a draft pull request and runs
+// it on every other event.
+const readyPullRequest = "github.event_name != 'pull_request' || !github.event.pull_request.draft"
+
+// pullRequestTypes start CI on a new, pushed, reopened or ready pull request;
+// without ready_for_review a draft marked ready would get no integration run.
+var pullRequestTypes = []string{"opened", "synchronize", "reopened", "ready_for_review"}
+
+// integrationGateViolations lists what lets the integration job of a workflow
+// run more often than once at a time per pull request or ref: the job sits in
+// the concurrency group named group and never cancels a running job, whose
+// t.Cleanup would then leave fixture pull requests and branches behind. When
+// pr is set or the workflow runs on pull_request, the job skips drafts and the event lists
+// pullRequestTypes, so marking a draft ready starts the run.
+func integrationGateViolations(file, group string, pr bool, data []byte) ([]string, error) {
+	var wf gateWorkflow
+	if err := yaml.Unmarshal(data, &wf); err != nil {
+		return nil, fmt.Errorf("%s: %w", file, err)
+	}
+	job, ok := wf.Jobs["integration"]
+	if !ok {
+		return []string{fmt.Sprintf("%s: no job integration", file)}, nil
+	}
+	var out []string
+	c, _ := job.Concurrency.(map[string]any)
+	if g, _ := c["group"].(string); g != group {
+		out = append(out, fmt.Sprintf("%s: job integration concurrency group is %v, want %s", file, c["group"], group))
+	}
+	if cancel, isBool := c["cancel-in-progress"].(bool); !isBool || cancel {
+		out = append(out, fmt.Sprintf("%s: job integration concurrency cancel-in-progress is %v, want false", file, c["cancel-in-progress"]))
+	}
+	types, onPR := pullRequestTypesOf(wf.On)
+	if !onPR {
+		if pr {
+			out = append(out, fmt.Sprintf("%s: no pull_request trigger", file))
+		}
+		return out, nil
+	}
+	cond := strings.Join(strings.Fields(job.If), " ")
+	if cond != "${{ "+readyPullRequest+" }}" && cond != readyPullRequest {
+		out = append(out, fmt.Sprintf("%s: job integration runs if %q, want %s", file, job.If, readyPullRequest))
+	}
+	for _, typ := range pullRequestTypes {
+		if !slices.Contains(types, typ) {
+			out = append(out, fmt.Sprintf("%s: pull_request types lack %s", file, typ))
+		}
+	}
+	return out, nil
+}
+
+// pullRequestTypesOf reads the on: key of a workflow in any of its forms
+// (event name, list of names, map of events) and reports whether it holds
+// pull_request and which activity types that event lists.
+func pullRequestTypesOf(on any) ([]string, bool) {
+	switch v := on.(type) {
+	case string:
+		return nil, v == "pull_request"
+	case []any:
+		return nil, slices.Contains(v, any("pull_request"))
+	case map[string]any:
+		event, ok := v["pull_request"]
+		if !ok {
+			return nil, false
+		}
+		m, _ := event.(map[string]any)
+		var types []string
+		switch t := m["types"].(type) {
+		case string:
+			types = append(types, t)
+		case []any:
+			for _, typ := range t {
+				s, _ := typ.(string)
+				types = append(types, s)
+			}
+		}
+		return types, true
+	}
+	return nil, false
+}
+
+// TestIntegrationRunsOnReadyPullRequests keeps the integration job, which
+// cannot run locally and adds fixtures to the shared test repository on every
+// run, off draft pull requests, and runs at most one integration job per pull
+// request or ref at a time, so two runs never share the test account.
+func TestIntegrationRunsOnReadyPullRequests(t *testing.T) {
+	for _, w := range []struct {
+		file, group string
+		pr          bool
+	}{
+		{"ci.yml", "integration-${{ github.event.pull_request.number || github.ref }}", true},
+		{"integration-scheduled.yml", "integration-${{ github.ref }}", false},
+	} {
+		data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", w.file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		offenders, err := integrationGateViolations(w.file, w.group, w.pr, data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, o := range offenders {
+			t.Error(o)
+		}
+	}
+}
+
+func TestIntegrationGateViolations(t *testing.T) {
+	const group = "integration-${{ github.event.pull_request.number || github.ref }}"
+	const good = `
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+jobs:
+  integration:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    concurrency:
+      group: ` + group + `
+      cancel-in-progress: false
+`
+	const scheduled = `
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+jobs:
+  integration:
+    concurrency:
+      group: ` + group + `
+      cancel-in-progress: false
+`
+	jobs := scheduled[strings.Index(scheduled, "jobs:"):]
+	tests := []struct {
+		name string
+		yaml string
+		pr   bool
+		want int
+	}{
+		{"good", good, true, 0},
+		{"braced condition", strings.Replace(good, "if: github.event_name != 'pull_request' || !github.event.pull_request.draft", "if: ${{ github.event_name != 'pull_request' ||  !github.event.pull_request.draft }}", 1), true, 0},
+		{"no condition", strings.Replace(good, "    if: github.event_name != 'pull_request' || !github.event.pull_request.draft\n", "", 1), true, 1},
+		{"draft only on pull_request", strings.Replace(good, "github.event_name != 'pull_request' || ", "", 1), true, 1},
+		{"no types", strings.Replace(good, "    types: [opened, synchronize, reopened, ready_for_review]\n", "    branches: [main]\n", 1), true, 4},
+		{"no ready_for_review", strings.Replace(good, ", ready_for_review", "", 1), true, 1},
+		{"no synchronize", strings.Replace(good, " synchronize,", "", 1), true, 1},
+		{"cancel in progress", strings.Replace(good, "cancel-in-progress: false", "cancel-in-progress: true", 1), true, 1},
+		{"cancel in progress unset", strings.Replace(good, "      cancel-in-progress: false\n", "", 1), true, 1},
+		{"cancel in progress expression", strings.Replace(good, "cancel-in-progress: false", "cancel-in-progress: ${{ false }}", 1), true, 1},
+		{"other group", strings.Replace(good, "group: integration-", "group: ci-", 1), true, 1},
+		{"group as string", strings.Replace(good, "    concurrency:\n      group: "+group+"\n      cancel-in-progress: false\n", "    concurrency: "+group+"\n", 1), true, 2},
+		{"no concurrency", strings.Replace(good, "    concurrency:\n      group: "+group+"\n      cancel-in-progress: false\n", "", 1), true, 2},
+		{"scheduled", scheduled, false, 0},
+		{"scheduled without concurrency", strings.Replace(scheduled, "    concurrency:\n      group: "+group+"\n      cancel-in-progress: false\n", "    runs-on: ubuntu-latest\n", 1), false, 2},
+		{"scheduled on a pull request", strings.Replace(scheduled, "  schedule:\n    - cron: \"0 6 * * 1\"\n", "  pull_request:\n", 1), false, 5},
+		{"pull request workflow without pull_request", scheduled, true, 1},
+		{"single type", strings.Replace(good, "[opened, synchronize, reopened, ready_for_review]", "ready_for_review", 1), true, 3},
+		{"pull_request by name", "on: pull_request\n" + jobs, false, 5},
+		{"pull_request in a list", "on: [push, pull_request]\n" + jobs, false, 5},
+		{"push by name", "on: push\n" + jobs, false, 0},
+		{"no integration job", strings.Replace(good, "  integration:", "  other:", 1), true, 1},
+	}
+	for _, tt := range tests {
+		got, err := integrationGateViolations("test.yml", group, tt.pr, []byte(tt.yaml))
+		if err != nil {
+			t.Fatalf("%s: %v", tt.name, err)
+		}
+		if len(got) != tt.want {
+			t.Errorf("%s: integrationGateViolations() = %q, want %d violations", tt.name, got, tt.want)
+		}
+	}
+	if _, err := integrationGateViolations("test.yml", group, true, []byte("jobs: [")); err == nil {
+		t.Error("integrationGateViolations() succeeded on invalid YAML, want error")
+	}
+}
+
+// snapWorkflow is the part of snap.yml snapViolations reads.
+type snapWorkflow struct {
+	Env  any `yaml:"env"`
+	Jobs map[string]struct {
+		If              any            `yaml:"if"`
+		ContinueOnError any            `yaml:"continue-on-error"`
+		Needs           any            `yaml:"needs"`
+		RunsOn          string         `yaml:"runs-on"`
+		Env             any            `yaml:"env"`
+		Outputs         map[string]any `yaml:"outputs"`
+		Steps           []struct {
+			ID              string            `yaml:"id"`
+			Name            string            `yaml:"name"`
+			Uses            string            `yaml:"uses"`
+			If              any               `yaml:"if"`
+			ContinueOnError any               `yaml:"continue-on-error"`
+			Run             string            `yaml:"run"`
+			With            any               `yaml:"with"`
+			Env             map[string]string `yaml:"env"`
+		} `yaml:"steps"`
+	} `yaml:"jobs"`
+}
+
+// snapMetaChecks are the comparisons a step that checks meta/snap.yaml runs.
+var snapMetaChecks = []string{
+	`[ "$name" != copia-cli ]`,
+	`[ "$version" != "$VERSION" ]`,
+	`[ "$architectures" != '[amd64]' ]`,
+}
+
+// checksSnapMeta reports whether a run block reads meta/snap.yaml and compares
+// its name, version and architectures.
+func checksSnapMeta(run string) bool {
+	if !strings.Contains(run, "meta/snap.yaml") {
+		return false
+	}
+	for _, c := range snapMetaChecks {
+		if !strings.Contains(run, c) {
+			return false
+		}
+	}
+	return true
+}
+
+// snapViolations lists every way snap.yml lets an unchecked snap reach the Snap
+// Store or the credentials reach the build. The job that runs snapcraft pack
+// holds no secret, checks meta/snap.yaml and uploads the snap as an artifact.
+// The job that holds SNAPCRAFT_STORE_CREDENTIALS needs it, runs no repository
+// code, checks the artifact's sha256 and meta/snap.yaml again and uploads the
+// file that check names, with the credentials on the upload step alone. No job
+// or step is conditional or may fail without failing the run.
+func snapViolations(data []byte) ([]string, error) {
+	var wf snapWorkflow
+	if err := yaml.Unmarshal(data, &wf); err != nil {
+		return nil, fmt.Errorf("snap.yml: %w", err)
+	}
+	var raw struct {
+		Jobs map[string]any `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("snap.yml: %w", err)
+	}
+	var out []string
+	add := func(format string, args ...any) { out = append(out, "snap.yml: "+fmt.Sprintf(format, args...)) }
+	if strings.Contains(fmt.Sprint(wf.Env), "secrets") {
+		add("workflow env mentions secrets")
+	}
+
+	build, upload := "", ""
+	for _, name := range sortedKeys(wf.Jobs) {
+		job := wf.Jobs[name]
+		if job.RunsOn != "ubuntu-24.04" {
+			add("job %q runs-on %q, want ubuntu-24.04", name, job.RunsOn)
+		}
+		if job.If != nil {
+			add("job %q sets if:", name)
+		}
+		if job.ContinueOnError != nil {
+			add("job %q sets continue-on-error", name)
+		}
+		for i, s := range job.Steps {
+			if s.If != nil {
+				add("job %q step %d (%q) sets if:", name, i+1, s.Name)
+			}
+			if s.ContinueOnError != nil {
+				add("job %q step %d (%q) sets continue-on-error", name, i+1, s.Name)
+			}
+			if strings.Contains(s.Run, "snapcraft pack") {
+				build = name
+			}
+			if _, ok := s.Env["SNAPCRAFT_STORE_CREDENTIALS"]; ok {
+				upload = name
+			}
+		}
+	}
+	if build == "" || upload == "" || build == upload || len(wf.Jobs) != 2 {
+		add("jobs %v: want one job that runs snapcraft pack and another that holds SNAPCRAFT_STORE_CREDENTIALS", sortedKeys(wf.Jobs))
+		return out, nil
+	}
+
+	// The build job.
+	node, err := yaml.Marshal(raw.Jobs[build])
+	if err != nil {
+		return nil, err
+	}
+	if strings.Contains(string(node), "secrets") {
+		add("job %q runs snapcraft pack and mentions secrets", build)
+	}
+	job := wf.Jobs[build]
+	pack, check, artifact := -1, -1, -1
+	for i, s := range job.Steps {
+		switch {
+		case s.Name == "Pack snap":
+			pack = i
+		case checksSnapMeta(s.Run) && s.ID != "":
+			check = i
+		case strings.HasPrefix(strings.ToLower(s.Uses), "actions/upload-artifact@"):
+			artifact = i
+		}
+	}
+	if pack < 0 || check < pack || artifact < check {
+		add("job %q: Pack snap at step %d, meta/snap.yaml check at %d, actions/upload-artifact at %d; want them in that order", build, pack+1, check+1, artifact+1)
+	} else if want := "${{ steps." + job.Steps[check].ID + ".outputs.sha256 }}"; fmt.Sprint(job.Outputs["sha256"]) != want {
+		add("job %q: outputs.sha256 is %v, want %s", build, job.Outputs["sha256"], want)
+	}
+
+	// The upload job.
+	job = wf.Jobs[upload]
+	if needs := jobNeeds(job.Needs); len(needs) != 1 || needs[0] != build {
+		add("job %q needs %v, want [%s]", upload, needs, build)
+	}
+	if strings.Contains(fmt.Sprint(job.Env), "secrets") {
+		add("job %q env mentions secrets", upload)
+	}
+	download, verify, send := -1, -1, -1
+	for i, s := range job.Steps {
+		uses := strings.ToLower(s.Uses)
+		switch {
+		case strings.HasPrefix(uses, "actions/checkout@"), strings.HasPrefix(uses, "./"), strings.Contains(s.Run, "snapcraft pack"), strings.Contains(s.Run, "script/"):
+			add("job %q step %d (%q) runs repository code", upload, i+1, s.Name)
+		case strings.HasPrefix(uses, "actions/download-artifact@"):
+			download = i
+		case checksSnapMeta(s.Run) && strings.Contains(s.Run, "sha256sum -c") && s.ID != "":
+			verify = i
+			if want := "${{ needs." + build + ".outputs.sha256 }}"; !strings.Contains(fmt.Sprint(s.Env), want) {
+				add("job %q step %d (%q) does not check the sha256 against %s", upload, i+1, s.Name, want)
+			}
+		case strings.Contains(s.Run, "snapcraft upload"):
+			send = i
+		}
+		for k, v := range s.Env {
+			if strings.Contains(v, "secrets") && (k != "SNAPCRAFT_STORE_CREDENTIALS" || v != "${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}") {
+				add("job %q step %d (%q): env %s=%s; only SNAPCRAFT_STORE_CREDENTIALS may read a secret", upload, i+1, s.Name, k, v)
+			}
+		}
+		if strings.Contains(s.Run+fmt.Sprint(s.With), "secrets") {
+			add("job %q step %d (%q) mentions secrets outside env", upload, i+1, s.Name)
+		}
+	}
+	if download < 0 || verify < download || send < verify {
+		add("job %q: actions/download-artifact at step %d, sha256 and meta/snap.yaml check at %d, snapcraft upload at %d; want them in that order", upload, download+1, verify+1, send+1)
+		return out, nil
+	}
+	for i, s := range job.Steps {
+		if _, ok := s.Env["SNAPCRAFT_STORE_CREDENTIALS"]; ok && i != send {
+			add("job %q step %d (%q) sets SNAPCRAFT_STORE_CREDENTIALS; only the upload step may", upload, i+1, s.Name)
+		}
+	}
+	s := job.Steps[send]
+	if want := `snapcraft upload --release stable "$SNAP_FILE"`; strings.TrimSpace(s.Run) != want {
+		add("job %q: upload step runs %q, want %q", upload, strings.TrimSpace(s.Run), want)
+	}
+	if want := "${{ steps." + job.Steps[verify].ID + ".outputs.file }}"; s.Env["SNAP_FILE"] != want {
+		add("job %q: upload step sets SNAP_FILE=%q, want %s", upload, s.Env["SNAP_FILE"], want)
+	}
+	return out, nil
+}
+
+// TestSnapUploadsCheckedVersion keeps snap.yml on a fixed runner, packs the snap
+// in a job without secrets, and uploads only that snap, checked against its
+// sha256 and meta/snap.yaml, from a job that runs no repository code and hands
+// the Snap Store credentials to the upload step alone.
+func TestSnapUploadsCheckedVersion(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "snap.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	offenders, err := snapViolations(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range offenders {
+		t.Error(o)
+	}
+}
+
+// TestSnapViolations edits the real snap.yml one way at a time and expects
+// snapViolations to reject each edit.
+func TestSnapViolations(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "snap.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const (
+		pack    = "      - name: Pack snap\n        run: sudo snapcraft pack --destructive-mode"
+		gate    = "      - name: Verify snap\n        id: snap"
+		install = "      - name: Install snapcraft\n        run: sudo snap install snapcraft --classic --channel=9.x/stable\n\n      - name: Upload snap"
+		header  = "  upload:\n    needs: build\n    runs-on: ubuntu-24.04\n    permissions: {}\n    steps:\n"
+		sha     = "SHA256: ${{ needs.build.outputs.sha256 }}"
+		secret  = "SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}"
+	)
+	tests := []struct {
+		name, old, new, want string
+	}{
+		{"if: always() on the upload", "      - name: Upload snap\n", "      - name: Upload snap\n        if: always()\n", `step 4 ("Upload snap") sets if:`},
+		{"if: on the upload job", "    needs: build\n", "    needs: build\n    if: always()\n", `job "upload" sets if:`},
+		{"continue-on-error on a gate", gate, gate + "\n        continue-on-error: true", `step 2 ("Verify snap") sets continue-on-error`},
+		{"glob upload", `run: snapcraft upload --release stable "$SNAP_FILE"`, "run: snapcraft upload --release stable *.snap", `upload step runs "snapcraft upload --release stable *.snap"`},
+		{"literal SNAP_FILE", "SNAP_FILE: ${{ steps.snap.outputs.file }}", "SNAP_FILE: copia-cli_1.0.0_amd64.snap", `upload step sets SNAP_FILE="copia-cli_1.0.0_amd64.snap"`},
+		{"no name check", `[ "$name" != copia-cli ]`, `[ -z "$name" ]`, "meta/snap.yaml check at 0"},
+		{"no architectures check", `[ "$architectures" != '[amd64]' ]`, `[ -z "$architectures" ]`, "meta/snap.yaml check at 0"},
+		{"no sha256 check", "sha256sum -c -", "true", "sha256 and meta/snap.yaml check at 0"},
+		{"sha256 not from build", sha, "SHA256: abc", "does not check the sha256 against"},
+		{"secret in the build job", pack, pack + "\n        env:\n          T: ${{ secrets.T }}", `job "build" runs snapcraft pack and mentions secrets`},
+		{"pack in the upload job", install, strings.Replace(install, "snap install snapcraft --classic --channel=9.x/stable", "snapcraft pack --destructive-mode", 1), "want one job that runs snapcraft pack and another"},
+		{"checkout in the upload job", header, header + "      - uses: actions/checkout@x\n", `step 1 ("") runs repository code`},
+		{"upload without needs", "    needs: build\n", "", `job "upload" needs [], want [build]`},
+		{"credentials on the gate", sha, sha + "\n          " + secret, "only the upload step may"},
+		{"one job", header, "", "want one job that runs snapcraft pack and another"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !strings.Contains(string(data), tt.old) {
+				t.Fatalf("snap.yml has no %q", tt.old)
+			}
+			got, err := snapViolations([]byte(strings.Replace(string(data), tt.old, tt.new, 1)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(strings.Join(got, "\n"), tt.want) {
+				t.Errorf("snapViolations() =\n%s\nwant a line with %q", strings.Join(got, "\n"), tt.want)
+			}
+		})
+	}
+	if _, err := snapViolations([]byte("jobs: [")); err == nil {
+		t.Error("snapViolations() accepted invalid YAML")
+	}
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// TestCoprInstallHasNoSecrets keeps the copr-install job of ci.yml, which runs
+// PyPI code on pull requests, away from every secret and from the GITHUB_TOKEN
+// in the git credential store.
+func TestCoprInstallHasNoSecrets(t *testing.T) {
+	checkUnprivilegedJob(t, "copr-install")
+}
+
+// TestSnapPackHasNoSecrets keeps the snap-pack job of ci.yml, which builds the
+// snap with sudo on pull requests, away from every secret, every write
+// permission and the GITHUB_TOKEN in the git credential store.
+func TestSnapPackHasNoSecrets(t *testing.T) {
+	checkUnprivilegedJob(t, "snap-pack")
+}
+
+// checkUnprivilegedJob fails when the ci.yml job mentions a secret, grants a
+// write permission or checks out without persist-credentials: false.
+func checkUnprivilegedJob(t *testing.T, name string) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "ci.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wf struct {
+		Jobs map[string]struct {
+			Permissions any `yaml:"permissions"`
+			Env         any `yaml:"env"`
+			Steps       []struct {
+				Uses string `yaml:"uses"`
+				Run  any    `yaml:"run"`
+				With any    `yaml:"with"`
+				Env  any    `yaml:"env"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(data, &wf); err != nil {
+		t.Fatal(err)
+	}
+	job, ok := wf.Jobs[name]
+	if !ok {
+		t.Fatalf("ci.yml has no %s job", name)
+	}
+	if job.Permissions == nil || strings.Contains(fmt.Sprint(job.Permissions), "write") {
+		t.Errorf("ci.yml: job %s permissions %v, want read only (contents: read)", name, job.Permissions)
+	}
+	if strings.Contains(fmt.Sprint(job.Env), "secrets.") {
+		t.Errorf("ci.yml: job %s env mentions secrets.", name)
+	}
+	for i, s := range job.Steps {
+		for field, v := range map[string]any{"run": s.Run, "with": s.With, "env": s.Env} {
+			if strings.Contains(fmt.Sprint(v), "secrets.") {
+				t.Errorf("ci.yml: job %s step %d: %s mentions secrets.", name, i+1, field)
+			}
+		}
+	}
+	for i, s := range loadWorkflow(t, "ci.yml").Jobs[name].Steps {
+		if p := s.With.PersistCredentials; isCheckout(s) && (p == nil || *p) {
+			t.Errorf("ci.yml: job %s step %d: actions/checkout does not set persist-credentials: false", name, i+1)
+		}
+	}
+}
+
+// TestSnapPackRunsInCI keeps the snap build exercised on every pull request:
+// snap.yml only runs on a release, so ci.yml packs the snap and checks the
+// version and architectures snapcraft wrote into meta/snap.yaml.
+func TestSnapPackRunsInCI(t *testing.T) {
+	job, ok := loadWorkflow(t, "ci.yml").Jobs["snap-pack"]
+	if !ok {
+		t.Fatal("ci.yml has no snap-pack job")
+	}
+	var runs []string
+	for _, s := range job.Steps {
+		runs = append(runs, s.Run)
+	}
+	all := strings.Join(runs, "\n")
+	for _, want := range []string{
+		"snap install snapcraft --classic --channel=9.x/stable",
+		"snapcraft pack",
+		"meta/snap.yaml",
+		"git describe --tags --always",
+	} {
+		if !strings.Contains(all, want) {
+			t.Errorf("ci.yml: job snap-pack runs no %q", want)
+		}
+	}
+}
+
+// TestSnapVersionComesFromTag keeps the snap version on the release tag: the
+// tags are lightweight, so version: git (git describe without --tags) never
+// sees one, and the snap is built for amd64 only.
+func TestSnapVersionComesFromTag(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "snap", "snapcraft.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snap struct {
+		Version   string         `yaml:"version"`
+		AdoptInfo string         `yaml:"adopt-info"`
+		Platforms map[string]any `yaml:"platforms"`
+		Parts     map[string]struct {
+			OverrideBuild string `yaml:"override-build"`
+		} `yaml:"parts"`
+	}
+	if err := yaml.Unmarshal(data, &snap); err != nil {
+		t.Fatal(err)
+	}
+	if snap.Version != "" {
+		t.Errorf("snapcraft.yaml: version %q, want none (adopt-info sets it)", snap.Version)
+	}
+	if snap.AdoptInfo != "copia-cli" {
+		t.Errorf("snapcraft.yaml: adopt-info %q, want copia-cli", snap.AdoptInfo)
+	}
+	if _, ok := snap.Platforms["amd64"]; !ok || len(snap.Platforms) != 1 {
+		t.Errorf("snapcraft.yaml: platforms %v, want amd64 only", snap.Platforms)
+	}
+	build := snap.Parts["copia-cli"].OverrideBuild
+	for _, want := range []string{
+		`git describe --tags --always | sed 's/^v//'`,
+		`craftctl set version="$VERSION"`,
+		"internal/build.Version=$VERSION",
+	} {
+		if !strings.Contains(build, want) {
+			t.Errorf("snapcraft.yaml: override-build has no %q", want)
+		}
+	}
+}
+
+// cacheWorkflow is the part of a workflow goCacheViolations reads.
+type cacheWorkflow struct {
+	Permissions any `yaml:"permissions"`
+	Jobs        map[string]struct {
+		Needs       any `yaml:"needs"`
+		Permissions any `yaml:"permissions"`
+		Env         any `yaml:"env"`
+		Steps       []struct {
+			Uses string         `yaml:"uses"`
+			Run  any            `yaml:"run"`
+			With map[string]any `yaml:"with"`
+			Env  any            `yaml:"env"`
+		} `yaml:"steps"`
+	} `yaml:"jobs"`
+}
+
+// writesToken reports whether a permissions block grants write on any scope
+// other than id-token, or is write-all.
+func writesToken(p any) bool {
+	switch p := p.(type) {
+	case string:
+		return p == "write-all"
+	case map[string]any:
+		for scope, access := range p {
+			if scope != "id-token" && fmt.Sprint(access) == "write" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// jobNeeds returns the job names of a needs: value, a string or a list.
+func jobNeeds(needs any) []string {
+	switch n := needs.(type) {
+	case string:
+		return []string{n}
+	case []any:
+		names := make([]string, 0, len(n))
+		for _, v := range n {
+			names = append(names, fmt.Sprint(v))
+		}
+		return names
+	}
+	return nil
+}
+
+// goCacheViolations lists every actions/setup-go step that leaves the Go cache
+// on in a job that holds a secret or a write token, or that such a job depends
+// on through needs: at any depth, since the privileged job uses its output. A
+// job without its own permissions block inherits the workflow's.
+func goCacheViolations(file string, data []byte) ([]string, error) {
+	var wf cacheWorkflow
+	if err := yaml.Unmarshal(data, &wf); err != nil {
+		return nil, fmt.Errorf("%s: %w", file, err)
+	}
+	privileged := map[string]bool{}
+	var pending []string
+	for name, job := range wf.Jobs {
+		perms := job.Permissions
+		if perms == nil {
+			perms = wf.Permissions
+		}
+		holds := writesToken(perms) || strings.Contains(fmt.Sprint(job.Env), "secrets.")
+		for _, s := range job.Steps {
+			for _, v := range []any{s.Run, s.With, s.Env} {
+				if strings.Contains(fmt.Sprint(v), "secrets.") {
+					holds = true
+				}
+			}
+		}
+		if holds {
+			privileged[name] = true
+			pending = append(pending, name)
+		}
+	}
+	for len(pending) > 0 {
+		name := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		for _, dep := range jobNeeds(wf.Jobs[name].Needs) {
+			if !privileged[dep] {
+				privileged[dep] = true
+				pending = append(pending, dep)
+			}
+		}
+	}
+	var out []string
+	for name, job := range wf.Jobs {
+		if !privileged[name] {
+			continue
+		}
+		for i, s := range job.Steps {
+			if strings.HasPrefix(strings.ToLower(s.Uses), "actions/setup-go@") && fmt.Sprint(s.With["cache"]) != "false" {
+				out = append(out, fmt.Sprintf("%s: job %q step %d: actions/setup-go does not set cache: false", file, name, i+1))
+			}
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// TestGoCacheOnlyInUnprivilegedJobs keeps the shared Go module and build cache
+// out of every job that holds a secret or a write token: the cache is written
+// by jobs that run unpinned tools (golangci-lint, govulncheck@latest), and a
+// release or integration run restores it.
+func TestGoCacheOnlyInUnprivilegedJobs(t *testing.T) {
+	files, err := filepath.Glob(filepath.Join("..", "..", ".github", "workflows", "*.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range files {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		offenders, err := goCacheViolations(filepath.Base(file), data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, o := range offenders {
+			t.Error(o)
+		}
+	}
+}
+
+func TestGoCacheViolations(t *testing.T) {
+	tests := []struct {
+		name string
+		yaml string
+		want int
+	}{
+		{"no secret, read token, cache on", `
+permissions:
+  contents: read
+jobs:
+  a:
+    steps:
+      - uses: actions/setup-go@x
+`, 0},
+		{"id-token write only, cache on", `
+jobs:
+  a:
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-go@x
+`, 0},
+		{"secret in step env, cache on", `
+jobs:
+  a:
+    steps:
+      - uses: actions/setup-go@x
+      - run: go test
+        env:
+          T: ${{ secrets.T }}
+`, 1},
+		{"secret in step env, cache off", `
+jobs:
+  a:
+    steps:
+      - uses: actions/setup-go@x
+        with:
+          cache: false
+      - run: go test
+        env:
+          T: ${{ secrets.T }}
+`, 0},
+		{"secret in job env", `
+jobs:
+  a:
+    env:
+      T: ${{ secrets.T }}
+    steps:
+      - uses: actions/setup-go@x
+`, 1},
+		{"secret in with", `
+jobs:
+  a:
+    steps:
+      - uses: actions/setup-go@x
+      - uses: some/action@x
+        with:
+          key: ${{ secrets.K }}
+`, 1},
+		{"secret in run", `
+jobs:
+  a:
+    steps:
+      - uses: actions/setup-go@x
+      - run: echo ${{ secrets.K }}
+`, 1},
+		{"job write token", `
+jobs:
+  a:
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/setup-go@x
+        with:
+          cache: true
+`, 1},
+		{"inherited write token", `
+permissions:
+  contents: write
+jobs:
+  a:
+    steps:
+      - uses: actions/setup-go@x
+`, 1},
+		{"job block replaces workflow block", `
+permissions:
+  contents: write
+jobs:
+  a:
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/setup-go@x
+`, 0},
+		{"write-all", `
+permissions: write-all
+jobs:
+  a:
+    steps:
+      - uses: Actions/Setup-Go@x
+`, 1},
+		{"other job holds the secret", `
+jobs:
+  a:
+    steps:
+      - uses: actions/setup-go@x
+  b:
+    steps:
+      - run: go test
+        env:
+          T: ${{ secrets.T }}
+`, 0},
+		{"privileged job needs the build", `
+jobs:
+  build:
+    steps:
+      - uses: actions/setup-go@x
+  deploy:
+    needs: build
+    permissions:
+      pages: write
+      id-token: write
+    steps:
+      - uses: actions/deploy-pages@x
+`, 1},
+		{"privileged job needs a chain", `
+jobs:
+  a:
+    steps:
+      - uses: actions/setup-go@x
+  b:
+    needs: [a]
+    steps:
+      - run: go test
+  c:
+    needs: [b]
+    permissions:
+      contents: write
+    steps:
+      - run: echo
+`, 1},
+		{"privileged job needs a job without setup-go", `
+jobs:
+  a:
+    steps:
+      - run: echo
+  b:
+    steps:
+      - uses: actions/setup-go@x
+  c:
+    needs: a
+    permissions:
+      contents: write
+    steps:
+      - run: echo
+`, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := goCacheViolations("test.yml", []byte(tt.yaml))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != tt.want {
+				t.Errorf("goCacheViolations() = %q, want %d offenders", got, tt.want)
+			}
+		})
+	}
+	if _, err := goCacheViolations("test.yml", []byte("jobs: [")); err == nil {
+		t.Error("goCacheViolations() succeeded on invalid YAML, want error")
+	}
+}
+
+// TestGolangciLintIsPinned keeps the golangci-lint the test job of ci.yml runs,
+// and so the Go cache it saves, on the version of .devcontainer/Dockerfile:
+// Dependabot tracks neither, so one bump moves both.
+func TestGolangciLintIsPinned(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", ".devcontainer", "Dockerfile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want string
+	for _, line := range strings.Split(string(data), "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "ARG GOLANGCI_LINT_VERSION="); ok {
+			want = v
+		}
+	}
+	if want == "" {
+		t.Fatal(".devcontainer/Dockerfile: no ARG GOLANGCI_LINT_VERSION=")
+	}
+	found := false
+	for _, s := range loadWorkflow(t, "ci.yml").Jobs["test"].Steps {
+		if strings.HasPrefix(s.Uses, "golangci/golangci-lint-action@") {
+			found = true
+			if s.With.Version != want {
+				t.Errorf("ci.yml: job test: golangci-lint-action version %q, want %q (.devcontainer/Dockerfile)", s.With.Version, want)
+			}
+		}
+	}
+	if !found {
+		t.Error("ci.yml: job test has no golangci/golangci-lint-action step")
+	}
+}
+
+var goImageLine = regexp.MustCompile(`^FROM\s+golang:(\S+)-alpine(\s|$)`)
+
+// goDirective returns the version of the go directive of a go.mod file.
+func goDirective(data []byte) (string, bool) {
+	for _, line := range strings.Split(string(data), "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "go "); ok {
+			return strings.TrimSpace(v), true
+		}
+	}
+	return "", false
+}
+
+// goImageMismatch returns a message when the Dockerfile has no
+// FROM golang:<version>-alpine line or its version is not want, else "".
+func goImageMismatch(name, want string, data []byte) string {
+	for _, line := range strings.Split(string(data), "\n") {
+		if m := goImageLine.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
+			if m[1] != want {
+				return fmt.Sprintf("%s: FROM golang:%s-alpine, want golang:%s-alpine (go.mod go %s)", name, m[1], want, want)
+			}
+			return ""
+		}
+	}
+	return fmt.Sprintf("%s: no FROM golang:<version>-alpine line, want golang:%s-alpine (go.mod go %s)", name, want, want)
+}
+
+// TestGoVersionsMatch keeps the Go of both dev images on the go directive of
+// go.mod: the sandbox image sets GOTOOLCHAIN=local, so an older image cannot
+// build the module, and golangci-lint, built with the image's Go, refuses it.
+func TestGoVersionsMatch(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, ok := goDirective(data)
+	if !ok {
+		t.Fatal("go.mod: no go directive")
+	}
+	for _, name := range []string{"Dockerfile", ".devcontainer/Dockerfile"} {
+		data, err := os.ReadFile(filepath.Join("..", "..", filepath.FromSlash(name)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if msg := goImageMismatch(name, want, data); msg != "" {
+			t.Error(msg)
+		}
+	}
+}
+
+func TestGoImageMismatch(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want string
+	}{
+		{"match", "# dev image\nFROM golang:1.27.3-alpine\n", ""},
+		{"match with stage", "FROM golang:1.27.3-alpine AS build\n", ""},
+		{"older image", "FROM golang:1.26.9-alpine\n", "Dockerfile: FROM golang:1.26.9-alpine, want golang:1.27.3-alpine (go.mod go 1.27.3)"},
+		{"newer image", "FROM golang:1.27.4-alpine\n", "Dockerfile: FROM golang:1.27.4-alpine, want golang:1.27.3-alpine (go.mod go 1.27.3)"},
+		{"no golang line", "FROM alpine:3.22\n", "Dockerfile: no FROM golang:<version>-alpine line, want golang:1.27.3-alpine (go.mod go 1.27.3)"},
+		{"not alpine", "FROM golang:1.27.3\n", "Dockerfile: no FROM golang:<version>-alpine line, want golang:1.27.3-alpine (go.mod go 1.27.3)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := goImageMismatch("Dockerfile", "1.27.3", []byte(tt.data)); got != tt.want {
+				t.Errorf("goImageMismatch() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+	if v, ok := goDirective([]byte("module x\n\ngo 1.27.3\n\nrequire (\n")); !ok || v != "1.27.3" {
+		t.Errorf("goDirective() = %q, %v, want \"1.27.3\", true", v, ok)
+	}
+	if _, ok := goDirective([]byte("module x\n")); ok {
+		t.Error("goDirective() found a go directive in a go.mod without one")
+	}
+}
+
+// TestRunBlocksPinTools keeps every go run and go install in a workflow on a
+// fixed version: a tool fetched @latest runs whatever was published last.
+func TestRunBlocksPinTools(t *testing.T) {
+	files, err := filepath.Glob(filepath.Join("..", "..", ".github", "workflows", "*.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range files {
+		name := filepath.Base(file)
+		wf := loadWorkflow(t, name)
+		for _, job := range sortedJobs(wf) {
+			for i, s := range wf.Jobs[job].Steps {
+				if strings.Contains(s.Run, "@latest") {
+					t.Errorf("%s: job %q step %d: run block uses @latest", name, job, i+1)
+				}
+			}
+		}
+	}
+}
+
+var exactVersion = regexp.MustCompile(`^v\d+\.\d+\.\d+$`)
+
+// versionedActions install a tool chosen by their `with.version` input and
+// fall back to `latest` when it is missing or empty.
+var versionedActions = []string{
+	"codecov/codecov-action@",
+	"goreleaser/goreleaser-action@",
+}
+
+func isVersionedAction(uses string) bool {
+	for _, prefix := range versionedActions {
+		if strings.HasPrefix(strings.ToLower(uses), prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// codecovSkipInputs are the codecov/codecov-action inputs that skip the GPG
+// signature and SHA256 check of the Codecov CLI; `binary` also runs a file
+// of any version in place of the pinned one. Each counts unless it is
+// `false`; `binary` counts with any value.
+var codecovSkipInputs = []string{"skip_validation", "binary", "use_pypi"}
+
+// unpinnedVersions returns one message per step of a workflow or action, in
+// the steps of its jobs and of `runs`, whose tool version can float: a
+// versionedActions step without an exact `with.version` (v<x.y.z>), any other
+// step whose `with.version` is not exact, any step with `with.version-file`,
+// and a codecov/codecov-action step with one of codecovSkipInputs. Input
+// names match regardless of case, as on the runner.
+func unpinnedVersions(file string, data []byte) ([]string, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil, fmt.Errorf("%s: %w", file, err)
+	}
+	if len(doc.Content) == 0 {
+		return nil, nil
+	}
+	var out []string
+	checkSteps := func(where string, steps *yaml.Node) {
+		if steps == nil {
+			return
+		}
+		for i, s := range steps.Content {
+			at := fmt.Sprintf("%s: %s step %d", file, where, i+1)
+			if uses := mappingValue(s, "uses"); uses != nil {
+				at += " (" + uses.Value + ")"
+			}
+			with := mappingValue(s, "with")
+			if inputValue(with, "version-file") != nil {
+				out = append(out, at+": with.version-file reads the version at run time, set with.version to v<x.y.z>")
+			}
+			version := inputValue(with, "version")
+			switch {
+			case version == nil:
+				if uses := mappingValue(s, "uses"); uses != nil && isVersionedAction(uses.Value) {
+					out = append(out, at+": with.version is missing and defaults to latest, set it to v<x.y.z>")
+				}
+			case !exactVersion.MatchString(version.Value):
+				out = append(out, fmt.Sprintf("%s: with.version %q is not an exact version, set it to v<x.y.z>", at, version.Value))
+			}
+			if uses := mappingValue(s, "uses"); uses != nil && strings.HasPrefix(strings.ToLower(uses.Value), "codecov/codecov-action@") {
+				for _, input := range codecovSkipInputs {
+					if v := inputValue(with, input); v != nil && (input == "binary" || v.Value != "false") {
+						out = append(out, fmt.Sprintf("%s: with.%s %q skips the signature and checksum check of the Codecov CLI, remove it", at, input, v.Value))
+					}
+				}
+			}
+		}
+	}
+	root := doc.Content[0]
+	if jobs := mappingValue(root, "jobs"); jobs != nil && jobs.Kind == yaml.MappingNode {
+		for j := 0; j+1 < len(jobs.Content); j += 2 {
+			checkSteps(fmt.Sprintf("job %q", jobs.Content[j].Value), mappingValue(jobs.Content[j+1], "steps"))
+		}
+	}
+	checkSteps("runs", mappingValue(mappingValue(root, "runs"), "steps"))
+	return out, nil
+}
+
+// scanVersions returns the unpinnedVersions messages of every file walkRepo
+// visits. A local path that names no file is left to scanRepo.
+func scanVersions(repo string) ([]string, error) {
+	var offenders []string
+	_, err := walkRepo(repo, func(file string, data []byte, _ actionFile) ([]string, error) {
+		found, err := unpinnedVersions(file, data)
+		offenders = append(offenders, found...)
+		return nil, err
+	})
+	return offenders, err
+}
+
+// TestNoStepUsesLatestVersion keeps every tool an action installs from its
+// `with.version` input on a fixed version: `latest`, a missing or empty input,
+// a range (`~> v2`), a major version, `nightly` or a version file runs
+// whatever was published last, and Dependabot does not track the input. A
+// Codecov step may not skip the CLI's signature and checksum check either.
+// The check covers every local action a workflow uses.
+func TestNoStepUsesLatestVersion(t *testing.T) {
+	offenders, err := scanVersions(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range offenders {
+		t.Error(o)
+	}
+}
+
+func TestUnpinnedVersions(t *testing.T) {
+	const (
+		goreleaser = "goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0"
+		codecov    = "codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1"
+	)
+	step := func(uses, with string) string {
+		return `
+jobs:
+  release:
+    steps:
+      - uses: ` + uses + `
+        with:
+          distribution: goreleaser` + with + `
+`
+	}
+	at := `test.yml: job "release" step 1 (` + strings.SplitN(goreleaser, " ", 2)[0] + `)`
+	notExact := func(v string) []string {
+		return []string{fmt.Sprintf("%s: with.version %q is not an exact version, set it to v<x.y.z>", at, v)}
+	}
+	missing := []string{at + ": with.version is missing and defaults to latest, set it to v<x.y.z>"}
+	codecovStep := func(with string) string {
+		return `
+jobs:
+  test:
+    steps:
+      - uses: ` + codecov + `
+        with:
+          use_oidc: true
+          version: v11.3.2` + with + `
+`
+	}
+	codecovSkips := func(input, v string) []string {
+		return []string{fmt.Sprintf(`test.yml: job "test" step 1 (%s): with.%s %q skips the signature and checksum check of the Codecov CLI, remove it`,
+			strings.SplitN(codecov, " ", 2)[0], input, v)}
+	}
+	tests := []struct {
+		name string
+		yaml string
+		want []string
+	}{
+		{"exact version", step(goreleaser, "\n          version: v2.18.3"), nil},
+		{"missing version", step(goreleaser, ""), missing},
+		{"empty version", step(goreleaser, "\n          version:"), notExact("")},
+		{"empty string version", step(goreleaser, "\n          version: ''"), notExact("")},
+		{"latest", step(goreleaser, "\n          version: latest"), notExact("latest")},
+		{"major version", step(goreleaser, "\n          version: v2"), notExact("v2")},
+		{"range", step(goreleaser, "\n          version: '~> v2'"), notExact("~> v2")},
+		{"nightly", step(goreleaser, "\n          version: nightly"), notExact("nightly")},
+		{"without v", step(goreleaser, "\n          version: 2.18.3"), notExact("2.18.3")},
+		{"expression", step(goreleaser, "\n          version: ${{ env.GORELEASER }}"), notExact("${{ env.GORELEASER }}")},
+		{"version file", step(goreleaser, "\n          version-file: .goreleaser-version"), []string{
+			at + ": with.version-file reads the version at run time, set with.version to v<x.y.z>",
+			at + ": with.version is missing and defaults to latest, set it to v<x.y.z>",
+		}},
+		{"version file next to a version", step(goreleaser, "\n          version: v2.18.3\n          version-file: .goreleaser-version"), []string{
+			at + ": with.version-file reads the version at run time, set with.version to v<x.y.z>",
+		}},
+		{"upper-case action", step("GoReleaser/GoReleaser-Action@v7", ""), []string{
+			`test.yml: job "release" step 1 (GoReleaser/GoReleaser-Action@v7): with.version is missing and defaults to latest, set it to v<x.y.z>`,
+		}},
+		{"codecov without version", `
+jobs:
+  test:
+    steps:
+      - uses: ` + codecov + `
+        with:
+          use_oidc: true
+      - uses: ` + codecov + `
+        with:
+          use_oidc: true
+          version: v11.3.2
+`, []string{
+			`test.yml: job "test" step 1 (` + strings.SplitN(codecov, " ", 2)[0] + `): with.version is missing and defaults to latest, set it to v<x.y.z>`,
+		}},
+		{"codecov without with", `
+jobs:
+  test:
+    steps:
+      - uses: ` + codecov + `
+`, []string{
+			`test.yml: job "test" step 1 (` + strings.SplitN(codecov, " ", 2)[0] + `): with.version is missing and defaults to latest, set it to v<x.y.z>`,
+		}},
+		{"other action with a floating version", `
+jobs:
+  lint:
+    steps:
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: latest
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.15.0
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: go test ./...
+`, []string{
+			`test.yml: job "lint" step 1 (golangci/golangci-lint-action@v9): with.version "latest" is not an exact version, set it to v<x.y.z>`,
+		}},
+		{"upper-case input names", `
+jobs:
+  lint:
+    steps:
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          Version: latest
+      - uses: actions/setup-go@v6
+        with:
+          Version-File: .v
+      - uses: ` + goreleaser + `
+        with:
+          VERSION: v2.18.3
+`, []string{
+			`test.yml: job "lint" step 1 (golangci/golangci-lint-action@v9): with.version "latest" is not an exact version, set it to v<x.y.z>`,
+			`test.yml: job "lint" step 2 (actions/setup-go@v6): with.version-file reads the version at run time, set with.version to v<x.y.z>`,
+		}},
+		{"codecov skip validation", codecovStep("\n          skip_validation: true"), codecovSkips("skip_validation", "true")},
+		{"codecov skip validation one", codecovStep("\n          skip_validation: '1'"), codecovSkips("skip_validation", "1")},
+		{"codecov skip validation expression", codecovStep("\n          skip_validation: ${{ env.X }}"), codecovSkips("skip_validation", "${{ env.X }}")},
+		{"codecov upper-case skip validation", codecovStep("\n          Skip_Validation: true"), codecovSkips("skip_validation", "true")},
+		{"codecov skip validation false", codecovStep("\n          skip_validation: false"), nil},
+		{"codecov binary", codecovStep("\n          binary: ./codecov"), codecovSkips("binary", "./codecov")},
+		{"codecov empty binary", codecovStep("\n          binary: ''"), codecovSkips("binary", "")},
+		{"codecov use pypi", codecovStep("\n          use_pypi: true"), codecovSkips("use_pypi", "true")},
+		{"codecov use pypi false", codecovStep("\n          use_pypi: false"), nil},
+		{"other action with skip validation", step(goreleaser, "\n          version: v2.18.3\n          skip_validation: true"), nil},
+		{"composite action step", `
+runs:
+  using: composite
+  steps:
+    - uses: ` + codecov + `
+`, []string{
+			`test.yml: runs step 1 (` + strings.SplitN(codecov, " ", 2)[0] + `): with.version is missing and defaults to latest, set it to v<x.y.z>`,
+		}},
+		{"empty file", ``, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := unpinnedVersions("test.yml", []byte(tt.yaml))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Join(got, "\n") != strings.Join(tt.want, "\n") {
+				t.Errorf("unpinnedVersions() =\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(tt.want, "\n"))
+			}
+		})
+	}
+	if _, err := unpinnedVersions("test.yml", []byte("jobs: [")); err == nil {
+		t.Error("unpinnedVersions() succeeded on invalid YAML, want error")
+	}
+}
+
+func TestScanVersions(t *testing.T) {
+	got, err := scanVersions(writeRepo(t, map[string]string{
+		".github/workflows/release.yaml": `
+jobs:
+  release:
+    steps:
+      - uses: ./.github/actions/outer
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          version: '~> v2'
+`,
+		".github/actions/outer/action.yml": `
+runs:
+  using: composite
+  steps:
+    - uses: ./nested
+`,
+		"nested/action.yml": `
+runs:
+  using: composite
+  steps:
+    - uses: codecov/codecov-action@v7
+      with:
+        version: latest
+`,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `.github/workflows/release.yaml: job "release" step 2 (goreleaser/goreleaser-action@v7): with.version "~> v2" is not an exact version, set it to v<x.y.z>
+nested/action.yml: runs step 1 (codecov/codecov-action@v7): with.version "latest" is not an exact version, set it to v<x.y.z>`
+	if strings.Join(got, "\n") != want {
+		t.Errorf("scanVersions() =\n%s\nwant:\n%s", strings.Join(got, "\n"), want)
+	}
+	if _, err := scanVersions(t.TempDir()); err == nil {
+		t.Error("scanVersions() succeeded without workflow files, want error")
+	}
+}
+
+// mappingValue returns the value node of key in a YAML mapping node, or nil.
+func mappingValue(n *yaml.Node, key string) *yaml.Node {
+	if n == nil || n.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		if n.Content[i].Value == key {
+			return n.Content[i+1]
+		}
+	}
+	return nil
+}
+
+// inputValue returns the value node of the input name in a step's `with`
+// mapping, or nil. The runner matches input names regardless of case.
+func inputValue(with *yaml.Node, name string) *yaml.Node {
+	if with == nil || with.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(with.Content); i += 2 {
+		if strings.EqualFold(with.Content[i].Value, name) {
+			return with.Content[i+1]
+		}
+	}
+	return nil
+}
+
+// codeqlUse is one github/codeql-action step: where it is, and its ref with
+// the trailing version comment.
+type codeqlUse struct {
+	at, version string
+}
+
+// codeqlUses returns every github/codeql-action step of a workflow or action,
+// in the steps of its jobs and of `runs`.
+func codeqlUses(file string, data []byte) ([]codeqlUse, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil, fmt.Errorf("%s: %w", file, err)
+	}
+	if len(doc.Content) == 0 {
+		return nil, nil
+	}
+	var out []codeqlUse
+	add := func(where string, steps *yaml.Node) {
+		if steps == nil {
+			return
+		}
+		for i, s := range steps.Content {
+			uses := mappingValue(s, "uses")
+			if uses == nil || !strings.HasPrefix(strings.ToLower(uses.Value), "github/codeql-action/") {
+				continue
+			}
+			_, ref, _ := strings.Cut(uses.Value, "@")
+			out = append(out, codeqlUse{
+				at:      fmt.Sprintf("%s: %s step %d (%s)", file, where, i+1, strings.TrimSpace(uses.Value+" "+uses.LineComment)),
+				version: ref + " " + strings.TrimSpace(uses.LineComment),
+			})
+		}
+	}
+	root := doc.Content[0]
+	if jobs := mappingValue(root, "jobs"); jobs != nil && jobs.Kind == yaml.MappingNode {
+		for j := 0; j+1 < len(jobs.Content); j += 2 {
+			add(fmt.Sprintf("job %q", jobs.Content[j].Value), mappingValue(jobs.Content[j+1], "steps"))
+		}
+	}
+	add("runs", mappingValue(mappingValue(root, "runs"), "steps"))
+	return out, nil
+}
+
+// codeqlVersionMismatches lists every github/codeql-action step, in every file
+// walkRepo visits, whose ref or trailing version comment differs from the
+// first such step: the sub-actions refuse to run next to a different version
+// of each other, and upload-sarif follows the same release.
+func codeqlVersionMismatches(repo string) ([]string, error) {
+	var first *codeqlUse
+	var out []string
+	_, err := walkRepo(repo, func(file string, data []byte, _ actionFile) ([]string, error) {
+		uses, err := codeqlUses(file, data)
+		for _, u := range uses {
+			if first == nil {
+				first = &u
+				continue
+			}
+			if u.version != first.version {
+				out = append(out, fmt.Sprintf("%s differs from %s", u.at, first.at))
+			}
+		}
+		return nil, err
+	})
+	return out, err
+}
+
+// TestCodeQLStepsShareOneVersion keeps every github/codeql-action step on one
+// version, across all workflows and the local actions they use: init writes a
+// configuration that autobuild and analyze reject from any other version, so
+// a bump of one step alone fails.
+func TestCodeQLStepsShareOneVersion(t *testing.T) {
+	offenders, err := codeqlVersionMismatches(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range offenders {
+		t.Error(o)
+	}
+}
+
+func TestCodeQLVersionMismatches(t *testing.T) {
+	const (
+		v390 = "6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0"
+		v391 = "9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1"
+		wf   = ".github/workflows/codeql.yml"
+	)
+	workflow := func(init, autobuild, analyze string) string {
+		return `
+jobs:
+  analyze:
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@` + init + `
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@` + autobuild + `
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@` + analyze + `
+`
+	}
+	sarif := func(version string) string {
+		return `
+jobs:
+  scan:
+    steps:
+      - uses: github/codeql-action/upload-sarif@` + version + `
+`
+	}
+	tests := []struct {
+		name  string
+		files map[string]string
+		want  []string
+	}{
+		{"all on one version", map[string]string{wf: workflow(v391, v391, v391)}, nil},
+		{"init bumped alone (#308)", map[string]string{wf: workflow(v391, v390, v390)}, []string{
+			wf + `: job "analyze" step 3 (github/codeql-action/autobuild@` + v390 + `) differs from ` + wf + `: job "analyze" step 2 (github/codeql-action/init@` + v391 + `)`,
+			wf + `: job "analyze" step 4 (github/codeql-action/analyze@` + v390 + `) differs from ` + wf + `: job "analyze" step 2 (github/codeql-action/init@` + v391 + `)`,
+		}},
+		{"analyze bumped alone (#310)", map[string]string{wf: workflow(v390, v390, v391)}, []string{
+			wf + `: job "analyze" step 4 (github/codeql-action/analyze@` + v391 + `) differs from ` + wf + `: job "analyze" step 2 (github/codeql-action/init@` + v390 + `)`,
+		}},
+		{"same ref, different comment", map[string]string{wf: workflow(v391, v391, "9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.0")}, []string{
+			wf + `: job "analyze" step 4 (github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.0) differs from ` + wf + `: job "analyze" step 2 (github/codeql-action/init@` + v391 + `)`,
+		}},
+		{"across jobs", map[string]string{wf: `
+jobs:
+  a:
+    steps:
+      - uses: github/codeql-action/init@` + v391 + `
+  b:
+    steps:
+      - uses: github/codeql-action/upload-sarif@` + v390 + `
+`}, []string{
+			wf + `: job "b" step 1 (github/codeql-action/upload-sarif@` + v390 + `) differs from ` + wf + `: job "a" step 1 (github/codeql-action/init@` + v391 + `)`,
+		}},
+		{".yaml workflow", map[string]string{".github/workflows/codeql.yaml": workflow(v391, v391, v390)}, []string{
+			`.github/workflows/codeql.yaml: job "analyze" step 4 (github/codeql-action/analyze@` + v390 + `) differs from .github/workflows/codeql.yaml: job "analyze" step 2 (github/codeql-action/init@` + v391 + `)`,
+		}},
+		{"composite action", map[string]string{
+			".github/workflows/ci.yml": `
+jobs:
+  build:
+    steps:
+      - run: go test ./...
+`,
+			".github/actions/codeql/action.yml": `
+runs:
+  using: composite
+  steps:
+    - uses: github/codeql-action/init@` + v391 + `
+    - uses: github/codeql-action/analyze@` + v390 + `
+`,
+		}, []string{
+			`.github/actions/codeql/action.yml: runs step 2 (github/codeql-action/analyze@` + v390 + `) differs from .github/actions/codeql/action.yml: runs step 1 (github/codeql-action/init@` + v391 + `)`,
+		}},
+		{"local action used by a workflow", map[string]string{
+			wf: workflow(v391, v391, v391),
+			".github/workflows/scan.yml": `
+jobs:
+  scan:
+    steps:
+      - uses: ./nested
+`,
+			"nested/action.yaml": `
+runs:
+  using: composite
+  steps:
+    - uses: github/codeql-action/upload-sarif@` + v390 + `
+`,
+		}, []string{
+			`nested/action.yaml: runs step 1 (github/codeql-action/upload-sarif@` + v390 + `) differs from ` + wf + `: job "analyze" step 2 (github/codeql-action/init@` + v391 + `)`,
+		}},
+		{"two files", map[string]string{
+			wf:                                  workflow(v391, v391, v391),
+			".github/workflows/govulncheck.yml": sarif(v390),
+		}, []string{
+			`.github/workflows/govulncheck.yml: job "scan" step 1 (github/codeql-action/upload-sarif@` + v390 + `) differs from ` + wf + `: job "analyze" step 2 (github/codeql-action/init@` + v391 + `)`,
+		}},
+		{"two files on one version", map[string]string{
+			wf:                                  workflow(v391, v391, v391),
+			".github/workflows/govulncheck.yml": sarif(v391),
+		}, nil},
+		{"no codeql steps", map[string]string{wf: `
+jobs:
+  test:
+    steps:
+      - run: go test ./...
+`}, nil},
+		{"empty file", map[string]string{wf: ``}, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := codeqlVersionMismatches(writeRepo(t, tt.files))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Join(got, "\n") != strings.Join(tt.want, "\n") {
+				t.Errorf("codeqlVersionMismatches() =\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(tt.want, "\n"))
+			}
+		})
+	}
+	if _, err := codeqlVersionMismatches(writeRepo(t, map[string]string{wf: "jobs: ["})); err == nil {
+		t.Error("codeqlVersionMismatches() succeeded on invalid YAML, want error")
+	}
+	if _, err := codeqlVersionMismatches(t.TempDir()); err == nil {
+		t.Error("codeqlVersionMismatches() succeeded without workflow files, want error")
+	}
+}
+
+// TestCheckSHA256 covers the guard aur.yml runs on each checksum read from
+// checksums.txt before it reaches GITHUB_OUTPUT and PKGBUILD.
+func TestCheckSHA256(t *testing.T) {
+	script := filepath.Join("..", "..", "script", "check-sha256.sh")
+	valid := strings.Repeat("0123456789abcdef", 4)
+
+	t.Run("accepts a sha256", func(t *testing.T) {
+		out, err := exec.Command(script, valid).CombinedOutput()
+		if err != nil {
+			t.Errorf("check-sha256.sh %q: %v\n%s", valid, err, out)
+		}
+	})
+
+	for _, sum := range []string{"", valid[:63], valid + "0", strings.ToUpper(valid), valid[:63] + "g", valid[:62] + "')", valid + "\n", valid + "\n" + valid} {
+		t.Run("rejects "+sum, func(t *testing.T) {
+			out, err := exec.Command(script, sum).CombinedOutput()
+			if err == nil {
+				t.Fatalf("check-sha256.sh %q succeeded, want failure", sum)
+			}
+			if !strings.Contains(string(out), "::error::not a sha256 checksum") {
+				t.Errorf("check-sha256.sh %q: output %q does not name the error", sum, out)
+			}
+		})
+	}
+
+	// Two matching lines in checksums.txt yield a value with a newline, which
+	// must not reach the runner log as a line of its own.
+	for _, tc := range []struct{ sum, printed string }{
+		{valid + "\n", `"` + valid + `%0A"`},
+		{valid + "\n" + valid, `"` + valid + `%0A` + valid + `"`},
+		{valid + "\n\n" + valid, `"` + valid + `%0A%0A` + valid + `"`},
+		{valid + "\n::add-mask::x", `"` + valid + `%0A::add-mask::x"`},
+		{valid + "\r", `"` + valid + `%0D"`},
+		{valid + "%0A", `"` + valid + `%250A"`},
+	} {
+		t.Run("escapes "+tc.sum, func(t *testing.T) {
+			out, err := exec.Command(script, tc.sum).CombinedOutput()
+			if err == nil {
+				t.Fatalf("check-sha256.sh %q succeeded, want failure", tc.sum)
+			}
+			want := "::error::not a sha256 checksum: " + tc.printed + "\n"
+			if string(out) != want {
+				t.Errorf("check-sha256.sh %q: output %q, want %q", tc.sum, out, want)
+			}
+		})
+	}
+}
+
+// TestSelectChecksum covers the script aur.yml uses to read each archive's
+// checksum from checksums.txt: only a line whose name equals the asset name
+// counts, and anything but exactly one such line fails.
+func TestSelectChecksum(t *testing.T) {
+	script := filepath.Join("..", "..", "script", "select-checksum.sh")
+	amd := "copia-cli_1.2.3_linux_amd64.tar.gz"
+	arm := "copia-cli_1.2.3_linux_arm64.tar.gz"
+	sumA := strings.Repeat("a", 64)
+	sumB := strings.Repeat("b", 64)
+	sumC := strings.Repeat("c", 64)
+	goreleaser := sumC + "  copia-cli_1.2.3_darwin_amd64.tar.gz\n" +
+		sumA + "  " + amd + "\n" +
+		sumB + "  " + arm + "\n"
+
+	run := func(t *testing.T, checksums, asset string) (string, error) {
+		t.Helper()
+		file := filepath.Join(t.TempDir(), "checksums.txt")
+		if err := os.WriteFile(file, []byte(checksums), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		out, err := exec.Command(script, file, asset).CombinedOutput()
+		return string(out), err
+	}
+
+	for _, tc := range []struct{ asset, want string }{{amd, sumA}, {arm, sumB}} {
+		t.Run("selects "+tc.asset, func(t *testing.T) {
+			out, err := run(t, goreleaser, tc.asset)
+			if err != nil {
+				t.Fatalf("select-checksum.sh %s: %v\n%s", tc.asset, err, out)
+			}
+			if out != tc.want+"\n" {
+				t.Errorf("select-checksum.sh %s: output %q, want %q", tc.asset, out, tc.want+"\n")
+			}
+		})
+	}
+
+	for _, tc := range []struct{ name, checksums string }{
+		{"a missing line", sumB + "  " + arm + "\n"},
+		{"a duplicated line", goreleaser + sumA + "  " + amd + "\n"},
+		{"a line naming both archives", sumC + "  " + amd + "." + arm + "\n" + sumB + "  " + arm + "\n"},
+		{"a superset name", sumC + "  " + amd + ".sbom.json\n" + sumB + "  " + arm + "\n"},
+		{"another version", sumC + "  copia-cli_1.2.4_linux_amd64.tar.gz\n" + sumB + "  " + arm + "\n"},
+		{"a regex match", sumC + "  copia-cli_1.2.3_linux_amd64xtarxgz\n"},
+		{"an empty file", ""},
+	} {
+		t.Run("rejects "+tc.name, func(t *testing.T) {
+			out, err := run(t, tc.checksums, amd)
+			if err == nil {
+				t.Fatalf("select-checksum.sh succeeded with output %q, want failure", out)
+			}
+			want := "::error::expected exactly one checksum line for \"" + amd + "\"\n"
+			if out != want {
+				t.Errorf("select-checksum.sh: output %q, want %q", out, want)
+			}
+		})
+	}
+}
+
+// TestChecksumsAreSelectedByName keeps aur.yml from reading a checksum any
+// other way than through script/select-checksum.sh with the exact asset name.
+func TestChecksumsAreSelectedByName(t *testing.T) {
+	run := stepRun(t, "aur.yml", "Get checksums")
+	for v, arch := range map[string]string{"SHA_X86": "amd64", "SHA_ARM": "arm64"} {
+		want := v + `="$(script/select-checksum.sh checksums.txt "copia-cli_${VERSION}_linux_` + arch + `.tar.gz")"`
+		if !strings.Contains(run, want) {
+			t.Errorf("aur.yml: Get checksums does not set %s with %s", v, want)
+		}
+	}
+	for _, line := range strings.Split(run, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "gh release download") {
+			continue
+		}
+		if strings.Contains(line, "checksums.txt") && !strings.Contains(line, "script/select-checksum.sh checksums.txt ") {
+			t.Errorf("aur.yml: Get checksums reads checksums.txt outside script/select-checksum.sh: %s", line)
+		}
+	}
+}
+
+// TestChecksumsAreChecked keeps the checksums out of PKGBUILD and .SRCINFO
+// unless they passed script/check-sha256.sh.
+func TestChecksumsAreChecked(t *testing.T) {
+	run := stepRun(t, "aur.yml", "Get checksums")
+	for _, v := range []string{"SHA_X86", "SHA_ARM"} {
+		guard := strings.Index(run, `script/check-sha256.sh "$`+v+`"`)
+		output := strings.Index(run, `=$`+v+`" >> "$GITHUB_OUTPUT"`)
+		if guard < 0 {
+			t.Errorf("aur.yml: Get checksums does not run script/check-sha256.sh \"$%s\"", v)
+		} else if output < guard {
+			t.Errorf("aur.yml: Get checksums does not write $%s to GITHUB_OUTPUT after the guard", v)
+		}
+	}
+}
+
+// goOutputVar matches a shell variable written to GITHUB_OUTPUT, as in
+// echo "current=$CURRENT" >> "$GITHUB_OUTPUT".
+var goOutputVar = regexp.MustCompile(`=\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?" >> "\$GITHUB_OUTPUT"`)
+
+// uncheckedGoVersions lists every shell variable the run block writes to
+// GITHUB_OUTPUT without running script/check-go-version.sh on it before the
+// first write to GITHUB_OUTPUT.
+func uncheckedGoVersions(run string) []string {
+	first := strings.Index(run, `>> "$GITHUB_OUTPUT"`)
+	var unchecked []string
+	seen := map[string]bool{}
+	for _, m := range goOutputVar.FindAllStringSubmatch(run, -1) {
+		v := m[1]
+		if seen[v] {
+			continue
+		}
+		seen[v] = true
+		guard := strings.Index(run, `script/check-go-version.sh "$`+v+`"`)
+		if guard < 0 || guard > first {
+			unchecked = append(unchecked, v)
+		}
+	}
+	return unchecked
+}
+
+// TestGoVersionsAreChecked keeps both versions bump-go.yml writes to
+// GITHUB_OUTPUT, the one from go.dev and the one from go.mod, out of the
+// branch name and the PR unless they passed script/check-go-version.sh.
+func TestGoVersionsAreChecked(t *testing.T) {
+	run := stepRun(t, "bump-go.yml", "Check latest Go version")
+	if len(goOutputVar.FindAllString(run, -1)) == 0 {
+		t.Fatal("bump-go.yml: Check latest Go version writes no shell variable to GITHUB_OUTPUT")
+	}
+	for _, v := range uncheckedGoVersions(run) {
+		t.Errorf("bump-go.yml: Check latest Go version writes $%s to GITHUB_OUTPUT without running script/check-go-version.sh \"$%s\" first", v, v)
+	}
+
+	for _, tc := range []struct {
+		name, run string
+		want      []string
+	}{
+		{"both checked", `script/check-go-version.sh "$LATEST"
+script/check-go-version.sh "$CURRENT"
+echo "latest=$LATEST" >> "$GITHUB_OUTPUT"
+echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+`, nil},
+		{"current unchecked", `script/check-go-version.sh "$LATEST"
+echo "latest=$LATEST" >> "$GITHUB_OUTPUT"
+echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+`, []string{"CURRENT"}},
+		{"current checked after the first write", `script/check-go-version.sh "$LATEST"
+echo "latest=$LATEST" >> "$GITHUB_OUTPUT"
+script/check-go-version.sh "$CURRENT"
+echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+`, []string{"CURRENT"}},
+		{"braced variable unchecked", `script/check-go-version.sh "$LATEST"
+echo "latest=$LATEST" >> "$GITHUB_OUTPUT"
+echo "current=${CURRENT}" >> "$GITHUB_OUTPUT"
+`, []string{"CURRENT"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := uncheckedGoVersions(tc.run)
+			if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+				t.Errorf("uncheckedGoVersions: %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestAURKeyIsPrivate keeps the AUR SSH key from existing with the default
+// umask, even for the moment before chmod 600.
+func TestAURKeyIsPrivate(t *testing.T) {
+	run := stepRun(t, "aur.yml", "Publish to AUR")
+	want := `(umask 077; printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur)`
+	if !strings.Contains(run, want) {
+		t.Errorf("aur.yml: Publish to AUR does not write the key with %s", want)
+	}
+}
+
+// TestNoKeyscan keeps workflows from trusting whatever host key answers at run
+// time; pin the key in a committed known_hosts file instead.
+func TestNoKeyscan(t *testing.T) {
+	files, err := filepath.Glob(filepath.Join("..", "..", ".github", "workflows", "*.y*ml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) == 0 {
+		t.Fatal("no workflow files found")
+	}
+
+	for _, file := range files {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), "ssh-keyscan") {
+			t.Errorf("%s: contains ssh-keyscan; pin the host key in a committed known_hosts file", filepath.Base(file))
+		}
+	}
+}
+
+// aurEd25519Fingerprint is the AUR host key fingerprint published on
+// https://aur.archlinux.org (home page, "SSH fingerprints").
+const aurEd25519Fingerprint = "SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4"
+
+// TestAURHostKeyIsPinned makes aur.yml push only to the host whose key is in
+// .github/aur_known_hosts, and keeps that key the one AUR publishes.
+func TestAURHostKeyIsPinned(t *testing.T) {
+	run := stepRun(t, "aur.yml", "Publish to AUR")
+	for _, want := range []string{
+		`-o UserKnownHostsFile=$GITHUB_WORKSPACE/.github/aur_known_hosts`,
+		`-o StrictHostKeyChecking=yes`,
+	} {
+		if !strings.Contains(run, want) {
+			t.Errorf("aur.yml: Publish to AUR does not pass %s to ssh", want)
+		}
+	}
+
+	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "aur_known_hosts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keys int
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 3 || fields[0] != "aur.archlinux.org" || fields[1] != "ssh-ed25519" {
+			t.Errorf("aur_known_hosts: line %q is not \"aur.archlinux.org ssh-ed25519 <key>\"", line)
+			continue
+		}
+		blob, err := base64.StdEncoding.DecodeString(fields[2])
+		if err != nil {
+			t.Errorf("aur_known_hosts: key is not base64: %v", err)
+			continue
+		}
+		sum := sha256.Sum256(blob)
+		if got := "SHA256:" + base64.RawStdEncoding.EncodeToString(sum[:]); got != aurEd25519Fingerprint {
+			t.Errorf("aur_known_hosts: key fingerprint %s, want %s", got, aurEd25519Fingerprint)
+		}
+		keys++
+	}
+	if keys != 1 {
+		t.Errorf("aur_known_hosts: %d valid keys, want 1", keys)
+	}
+}
+
+// TestCheckGoVersion covers the guard bump-go.yml runs on the versions it reads
+// from go.dev and go.mod before writing them to GITHUB_OUTPUT.
+func TestCheckGoVersion(t *testing.T) {
+	script := filepath.Join("..", "..", "script", "check-go-version.sh")
+
+	for _, version := range []string{"1.27", "1.26.9", "10.0.12"} {
+		t.Run("accepts "+version, func(t *testing.T) {
+			out, err := exec.Command(script, version).CombinedOutput()
+			if err != nil {
+				t.Errorf("check-go-version.sh %q: %v\n%s", version, err, out)
+			}
+		})
+	}
+
+	for _, version := range []string{
+		"", "1.27; echo x", "go1.27", "1", "1.27rc1", "1.27.0.1", "1.27\n", "$(id)",
+		"01.27", "1.027", "1.27.00", "00000000000000000000000000000001.0", "1.10000",
+	} {
+		t.Run("rejects "+version, func(t *testing.T) {
+			out, err := exec.Command(script, version).CombinedOutput()
+			if err == nil {
+				t.Fatalf("check-go-version.sh %q succeeded, want failure", version)
+			}
+			if !strings.Contains(string(out), "::error::not a Go version") {
+				t.Errorf("check-go-version.sh %q: output %q does not name the error", version, out)
+			}
+		})
+	}
+
+	// The runner parses every log line as a possible workflow command, so a
+	// rejected value must not reach the log with a raw line break or %.
+	for _, tc := range []struct{ version, printed string }{
+		{"1.27\n", `"1.27%0A"`},
+		{"1.27\nx", `"1.27%0Ax"`},
+		{"1.27\n::add-mask::x", `"1.27%0A::add-mask::x"`},
+		{"1.27\r", `"1.27%0D"`},
+		{"1.27%0A", `"1.27%250A"`},
+	} {
+		t.Run("escapes "+tc.version, func(t *testing.T) {
+			out, err := exec.Command(script, tc.version).CombinedOutput()
+			if err == nil {
+				t.Fatalf("check-go-version.sh %q succeeded, want failure", tc.version)
+			}
+			want := "::error::not a Go version: " + tc.printed + "\n"
+			if string(out) != want {
+				t.Errorf("check-go-version.sh %q: output %q, want %q", tc.version, out, want)
+			}
+		})
+	}
+}
+
+// TestWorkflowEscape pins the encoding of script/lib/workflow-escape.sh for
+// values with more than one line break, CR or %.
+func TestWorkflowEscape(t *testing.T) {
+	lib := filepath.Join("..", "..", "script", "lib", "workflow-escape.sh")
+
+	for _, tc := range []struct{ in, want string }{
+		{"a\n", "a\n"},
+		{"a\n\nb\n", "a%0A%0Ab\n"},
+		{"a\nb\nc\n", "a%0Ab%0Ac\n"},
+		{"a\r\nb\r\nc\n", "a%0D%0Ab%0D%0Ac\n"},
+		{"a\rb\rc\n", "a%0Db%0Dc\n"},
+		{"a%%b\n", "a%25%25b\n"},
+		{"\n\n\n", "%0A%0A\n"},
+	} {
+		t.Run(fmt.Sprintf("%q", tc.in), func(t *testing.T) {
+			cmd := exec.Command("sh", "-c", `. "$1"; workflow_escape`, "sh", lib)
+			cmd.Stdin = strings.NewReader(tc.in)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("workflow_escape %q: %v\n%s", tc.in, err, out)
+			}
+			if string(out) != tc.want {
+				t.Errorf("workflow_escape %q: output %q, want %q", tc.in, out, tc.want)
+			}
+		})
+	}
+}
+
+// TestCheckScriptsShareEscape keeps the workflow-command encoding in one
+// place: every script/check-*.sh sources script/lib/workflow-escape.sh and
+// does not carry its own copy. It also runs each guard on a value with every
+// line break and a %, so a new guard is checked without a table of its own.
+func TestCheckScriptsShareEscape(t *testing.T) {
+	scripts, err := filepath.Glob(filepath.Join("..", "..", "script", "check-*.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(scripts) == 0 {
+		t.Fatal("no script/check-*.sh found")
+	}
+	for _, script := range scripts {
+		data, err := os.ReadFile(script)
+		if err != nil {
+			t.Fatal(err)
+		}
+		src := string(data)
+		name := filepath.Base(script)
+		if !strings.Contains(src, `. "$(dirname "$0")/lib/workflow-escape.sh"`) {
+			t.Errorf("%s does not source lib/workflow-escape.sh", name)
+		}
+		if !strings.Contains(src, "| workflow_escape >&2") {
+			t.Errorf("%s does not print its error through workflow_escape", name)
+		}
+		if strings.Contains(src, "%0A") {
+			t.Errorf("%s carries its own copy of the encoding", name)
+		}
+
+		value := "1\n::add-mask::x\r::add-mask::y\r\n::add-mask::z%0A\n"
+		out, err := exec.Command(script, value).CombinedOutput()
+		if err == nil {
+			t.Errorf("%s %q succeeded, want failure", name, value)
+		}
+		if !strings.HasPrefix(string(out), "::error::") || strings.Count(string(out), "\n") != 1 ||
+			!strings.HasSuffix(string(out), "\n") || strings.Contains(string(out), "\r") {
+			t.Errorf("%s %q: output %q, want one ::error:: line", name, value, out)
+		}
+	}
+}
+
+// TestCheckReleaseVersion covers the guard aur.yml and copr.yml run on the
+// version taken from the release tag before it reaches GITHUB_OUTPUT, PKGBUILD
+// and the RPM spec. Only X.Y.Z passes: makepkg rejects a pkgver and rpmbuild a
+// Version with a hyphen, so a pre-release version cannot be packaged.
+func TestCheckReleaseVersion(t *testing.T) {
+	script := filepath.Join("..", "..", "script", "check-release-version.sh")
+
+	for _, version := range []string{"1.2.3", "10.0.12"} {
+		t.Run("accepts "+version, func(t *testing.T) {
+			out, err := exec.Command(script, version).CombinedOutput()
+			if err != nil {
+				t.Errorf("check-release-version.sh %q: %v\n%s", version, err, out)
+			}
+		})
+	}
+
+	for _, version := range []string{"", "1.2.3/x", "1.2.3$(id)", "1.2.3'", "1.2.3\n", "1.2.3\nx", "v1.2.3", "1.2", "1.2.3-", "1.2.3-rc 1", "1.2.3-rc.1", "1.2.3-beta.1", "10.0.12-beta2"} {
+		t.Run("rejects "+version, func(t *testing.T) {
+			out, err := exec.Command(script, version).CombinedOutput()
+			if err == nil {
+				t.Fatalf("check-release-version.sh %q succeeded, want failure", version)
+			}
+			if !strings.Contains(string(out), "::error::not a release version") {
+				t.Errorf("check-release-version.sh %q: output %q does not name the error", version, out)
+			}
+		})
+	}
+
+	// The runner parses every log line as a possible workflow command, so a
+	// rejected value must not reach the log with a raw line break or %.
+	for _, tc := range []struct{ version, printed string }{
+		{"1.2.3\n", `"1.2.3%0A"`},
+		{"1.2.3\nx", `"1.2.3%0Ax"`},
+		{"1.2.3\n\nx", `"1.2.3%0A%0Ax"`},
+		{"1.2.3\n::add-mask::x", `"1.2.3%0A::add-mask::x"`},
+		{"1.2.3\r", `"1.2.3%0D"`},
+		{"1.2.3%0A", `"1.2.3%250A"`},
+	} {
+		t.Run("escapes "+tc.version, func(t *testing.T) {
+			out, err := exec.Command(script, tc.version).CombinedOutput()
+			if err == nil {
+				t.Fatalf("check-release-version.sh %q succeeded, want failure", tc.version)
+			}
+			want := "::error::not a release version: " + tc.printed + "\n"
+			if string(out) != want {
+				t.Errorf("check-release-version.sh %q: output %q, want %q", tc.version, out, want)
+			}
+		})
+	}
+}

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -24,10 +26,16 @@ type stub struct {
 	called  bool
 }
 
+// queryTokenParams are the query parameters Copia no longer accepts for auth.
+var queryTokenParams = []string{"token", "access_token"}
+
 // Registry is an http.RoundTripper that returns stubbed responses.
 type Registry struct {
 	mu    sync.Mutex
 	stubs []*stub
+
+	// Requests holds every request that reached the registry, in order.
+	Requests []*http.Request
 }
 
 // Register adds a matcher/responder pair.
@@ -39,9 +47,18 @@ func (r *Registry) Register(m Matcher, resp Responder) {
 
 // RoundTrip implements http.RoundTripper.
 func (r *Registry) RoundTrip(req *http.Request) (*http.Response, error) {
+	// Copia only accepts the Authorization header since 2026-05-01.
+	query := req.URL.Query()
+	for _, param := range queryTokenParams {
+		if query.Has(param) {
+			return nil, fmt.Errorf("httpmock: %s %s sends a token as query parameter %q; use the Authorization header", req.Method, req.URL.Path, param)
+		}
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	r.Requests = append(r.Requests, req)
 	for _, s := range r.stubs {
 		if s.matcher(req) {
 			s.called = true
@@ -71,6 +88,40 @@ func REST(method, pathSuffix string) Matcher {
 	}
 }
 
+// QueryMatcher returns a matcher like REST that also requires every listed
+// query parameter to have exactly the given values. Parameters not listed are
+// ignored.
+func QueryMatcher(method, pathSuffix string, query url.Values) Matcher {
+	rest := REST(method, pathSuffix)
+	return func(req *http.Request) bool {
+		if !rest(req) {
+			return false
+		}
+		actual := req.URL.Query()
+		for key, want := range query {
+			if !slices.Equal(actual[key], want) {
+				return false
+			}
+		}
+		return true
+	}
+}
+
+// WithHeader wraps a responder and sets a header on its response.
+func WithHeader(responder Responder, name, value string) Responder {
+	return func(req *http.Request) (*http.Response, error) {
+		resp, err := responder(req)
+		if err != nil {
+			return nil, err
+		}
+		if resp.Header == nil {
+			resp.Header = http.Header{}
+		}
+		resp.Header.Set(name, value)
+		return resp, nil
+	}
+}
+
 // StringResponse returns a responder that sends a fixed status and body.
 func StringResponse(status int, body string) Responder {
 	return func(req *http.Request) (*http.Response, error) {
@@ -80,4 +131,14 @@ func StringResponse(status int, body string) Responder {
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
 		}, nil
 	}
+}
+
+// ReplaceDefaultTransport routes http.DefaultTransport through rt for the
+// duration of the test, so commands whose client has no Transport (such as
+// cmdutil.NewHTTPClient) hit the registry. Tests that use it must not run in parallel.
+func ReplaceDefaultTransport(t *testing.T, rt http.RoundTripper) {
+	t.Helper()
+	orig := http.DefaultTransport
+	http.DefaultTransport = rt
+	t.Cleanup(func() { http.DefaultTransport = orig })
 }

@@ -3,7 +3,6 @@ package list
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"text/tabwriter"
 
@@ -22,6 +21,7 @@ type ListOptions struct {
 	Token      string
 	Org        string
 	Limit      int
+	Visibility string
 	JSON       cmdutil.JSONFlags
 }
 
@@ -44,7 +44,8 @@ repositories for a specific organization instead.`,
 		Aliases: []string{"ls"},
 		Example: `  $ copia-cli repo list
   $ copia-cli repo list --org my-org
-  $ copia-cli repo list --json fullName,description`,
+  $ copia-cli repo list --visibility private
+  $ copia-cli repo list --json full_name,description`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.IO = f.IOStreams
 			host, token, err := f.ResolveAuth()
@@ -53,16 +54,23 @@ repositories for a specific organization instead.`,
 			}
 			opts.Host = host
 			opts.Token = token
-			opts.HTTPClient = &http.Client{}
+			opts.HTTPClient = cmdutil.NewHTTPClient()
 			return ListRun(opts)
 		},
 	}
 
 	cmd.Flags().StringVarP(&opts.Org, "org", "o", "", "List repositories for an organization")
 	cmd.Flags().IntVarP(&opts.Limit, "limit", "L", 30, "Maximum number of repositories")
+	cmd.Flags().StringVar(&opts.Visibility, "visibility", "", "Filter by visibility: {public|private}")
 	cmdutil.AddJSONFlags(cmd, &opts.JSON, validJSONFields)
 
 	return cmd
+}
+
+func decodeRepos(body []byte) ([]repoEntry, error) {
+	var repos []repoEntry
+	err := json.Unmarshal(body, &repos)
+	return repos, err
 }
 
 func ListRun(opts *ListOptions) error {
@@ -70,40 +78,38 @@ func ListRun(opts *ListOptions) error {
 		return err
 	}
 
-	endpoint := "/api/v1/user/repos"
+	switch opts.Visibility {
+	case "", "public", "private":
+	default:
+		return fmt.Errorf("invalid visibility %q: valid values are {public|private}", opts.Visibility)
+	}
+
+	endpoint :="/api/v1/user/repos"
 	if opts.Org != "" {
 		endpoint = fmt.Sprintf("/api/v1/orgs/%s/repos", opts.Org)
 	}
 
-	url := fmt.Sprintf("https://%s%s?limit=%d", opts.Host, endpoint, opts.Limit)
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "token "+opts.Token)
-
-	resp, err := opts.HTTPClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("connecting to %s: %w", opts.Host, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("API error (HTTP %d)", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-
 	var repos []repoEntry
-	if err := json.Unmarshal(body, &repos); err != nil {
-		return fmt.Errorf("parsing response: %w", err)
+	var err error
+	if opts.Visibility == "" {
+		repos, err = cmdutil.FetchPages(opts.HTTPClient, "https://"+opts.Host+endpoint, opts.Token, opts.Limit, decodeRepos)
+	} else {
+		// The list endpoints take no visibility filter; drop the others per page.
+		private := opts.Visibility == "private"
+		repos, err = cmdutil.FetchFilteredPages(opts.HTTPClient, "https://"+opts.Host+endpoint, opts.Token, opts.Limit, decodeRepos,
+			func(r repoEntry) bool { return r.Private == private })
 	}
+	if err != nil {
+		return err
+	}
+
+	if err := opts.IO.StartPager(); err != nil {
+		_, _ = fmt.Fprintf(opts.IO.ErrOut, "failed to start pager: %v\n", err)
+	}
+	defer opts.IO.StopPager()
 
 	if opts.JSON.IsJSON() {
-		return cmdutil.PrintJSON(opts.IO.Out, repos)
+		return opts.JSON.Print(opts.IO.Out, repos)
 	}
 
 	w := tabwriter.NewWriter(opts.IO.Out, 0, 0, 2, ' ', 0)
