@@ -1,16 +1,10 @@
 # Authentication
 
+> To sign in as a user, read the [Authentication guide](https://qubernetic.github.io/copia-cli/getting-started/authentication/) on the documentation site. It covers creating a token, `auth login`, where the token is kept, several accounts, `auth status` and `auth setup-git`. This page holds the developer details behind it.
+
 Copia requires authentication for **all** API calls. There is no anonymous access.
 
 ## Token-Based Auth (Recommended)
-
-### Generate a Token
-
-1. Log in to Copia web UI
-2. Go to **Settings > Applications**
-3. Under "Manage Access Tokens", enter a name (e.g., `copia-cli`)
-4. Click **Generate Token**
-5. Copy the token immediately — it is shown only once
 
 ### Use the Token
 
@@ -163,11 +157,7 @@ For `get` it reads git's `key=value` lines from standard input. When `protocol` 
 
 ## Auth Precedence
 
-The host comes from `--host`, then `COPIA_HOST`, then the config's default host (`default_host`, or the alphabetically first host). The token comes from:
-
-1. `--token` flag (per-command)
-2. `COPIA_TOKEN` environment variable, only when the host came from `COPIA_HOST`, or from `--host` with `COPIA_HOST` unset or naming the same host
-3. The stored token of the active account of the active host: the config file (`~/.config/copia/config.yml`) first, then the OS keyring
+The order in which copia-cli picks the host and the token is on the user page: [Auth precedence](https://qubernetic.github.io/copia-cli/getting-started/authentication/#auth-precedence). The host's default is `default_host`, or the alphabetically first host when that is unset or names no configured host. The rest of this section is how the code applies that order.
 
 `COPIA_TOKEN` is bound to the host you name, so it never goes to a host the config picks: `auth logout`, `auth switch`, `auth login` and the alphabetical fallback all move the default host. When `COPIA_TOKEN` is set but the host comes from the config, the commands use the stored token and print once on standard error:
 
