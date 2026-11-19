@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - The COPR project moved from `cbiro/copia-cli` to `@qubernetic/copia-cli`, a project of the `qubernetic` group, to match the GitHub organization. Releases are built there from now on; `cbiro/copia-cli` gets no new builds. Fedora and RHEL users switch with `sudo dnf copr remove cbiro/copia-cli` and `sudo dnf copr enable @qubernetic/copia-cli`, as the Linux install guide shows (#499)
+- The Windows install guide shows how to upgrade with WinGet (`winget upgrade --id Qubernetic.copia-cli`), and that a new terminal window may be needed when the upgrade moves the command (#517)
 
 ### Fixed
 
