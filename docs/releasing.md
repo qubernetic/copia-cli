@@ -40,7 +40,7 @@
 7. Review and publish the draft release on GitHub. Publishing triggers:
 
    - [WinGet](.github/workflows/winget.yml) — updates `Qubernetic.copia-cli` in winget-pkgs
-   - [COPR](.github/workflows/copr.yml) — builds and publishes RPM to Fedora COPR
+   - [COPR](.github/workflows/copr.yml) — builds and publishes the RPM to the `@qubernetic/copia-cli` COPR project
    - [AUR](.github/workflows/aur.yml) — updates `copia-cli-bin` on AUR
    - [Snap](.github/workflows/snap.yml) — builds and publishes to the Snap Store
 
