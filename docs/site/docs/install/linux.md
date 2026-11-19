@@ -25,7 +25,7 @@ sudo dpkg -i copia-cli_<version>_linux_amd64.deb
 ### Fedora/RHEL (COPR)
 
 ```bash
-sudo dnf copr enable cbiro/copia-cli
+sudo dnf copr enable @qubernetic/copia-cli
 sudo dnf install copia-cli
 ```
 
@@ -33,6 +33,13 @@ To upgrade:
 
 ```bash
 sudo dnf upgrade copia-cli
+```
+
+The COPR project moved from `cbiro/copia-cli` to `@qubernetic/copia-cli`. If you enabled the old one, switch to the new one before you upgrade:
+
+```bash
+sudo dnf copr remove cbiro/copia-cli
+sudo dnf copr enable @qubernetic/copia-cli
 ```
 
 Alternatively, download the `.rpm` package for your architecture from the [latest release](https://github.com/qubernetic/copia-cli/releases/latest) and install it, with your file's name in place of the example:
