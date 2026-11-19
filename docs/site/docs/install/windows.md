@@ -8,6 +8,15 @@
 winget install Qubernetic.copia-cli
 ```
 
+To upgrade:
+
+```powershell
+winget upgrade --id Qubernetic.copia-cli
+```
+
+!!! note
+    An upgrade can move the `copia-cli` command to another directory on your `PATH`. If `copia-cli` is not found after the upgrade, **open a new terminal window**.
+
 ### Precompiled binaries
 
 [Copia CLI releases](https://github.com/qubernetic/copia-cli/releases/latest) contain precompiled `.zip` archives for `amd64`, `arm64`, and `386` architectures.
