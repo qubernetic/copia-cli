@@ -54,4 +54,4 @@ jobs:
 
       - name: Submit to COPR
         run: |
-          copr-cli build copia-cli rpmbuild/copia-cli-*.src.rpm
+          copr-cli build @qubernetic/copia-cli rpmbuild/copia-cli-*.src.rpm
