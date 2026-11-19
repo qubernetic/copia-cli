@@ -21,7 +21,7 @@ The examples use the organization `my-org` and the repository `my-repo` on `app.
 === "Fedora/RHEL"
 
     ```bash
-    sudo dnf copr enable cbiro/copia-cli
+    sudo dnf copr enable @qubernetic/copia-cli
     sudo dnf install copia-cli
     ```
 
