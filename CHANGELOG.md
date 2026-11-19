@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The COPR project moved from `cbiro/copia-cli` to `@qubernetic/copia-cli`, a project of the `qubernetic` group, to match the GitHub organization. Releases are built there from now on; `cbiro/copia-cli` gets no new builds. Fedora and RHEL users switch with `sudo dnf copr remove cbiro/copia-cli` and `sudo dnf copr enable @qubernetic/copia-cli`, as the Linux install guide shows (#499)
+
 ### Fixed
 
 - The theme switch in the documentation site's header keeps its half-filled dot and its centred label after a click. MkDocs Material's `display: block` for the checked option's label no longer overrides it: the brand theme submodule `docs/site/brand` moves from v0.1.0 to v0.3.1, which fixes the switch (qubernetic/brand#15) and changes no other theme file (#518)
